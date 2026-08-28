@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gogrepoc-gui"
+name = "gogstash"
 version = "0.1.0"
-description = "A desktop GUI for gogrepoc, a GOG.com game backup/download tool"
+description = "A desktop GUI for downloading and backing up your GOG.com game library"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -19,10 +19,11 @@ dependencies = [
     "requests",
     "html5lib",
     "psutil",
+    "PySide6",
 ]
 
 [project.urls]
-Homepage = "https://github.com/piyushpuranik/gogrepoc-gui"
+Homepage = "https://github.com/preppie22/gogstash"
 
 [project.optional-dependencies]
 dev = [

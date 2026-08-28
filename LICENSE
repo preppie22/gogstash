@@ -22,7 +22,7 @@ SOFTWARE.
 
 ---
 
-This project vendors gogrepoc.py (src/gogrepoc_gui/vendor/gogrepoc.py) from
-https://github.com/kalanyr/gogrepoc, authored by eddie3 and kalaynr. That file
-retains its own in-file notices, including a BSD-licensed snippet from the
-Django Software Foundation embedded in the `slugify` function's docstring.
+This project is inspired by gogrepoc (https://github.com/kalanyr/gogrepoc,
+GPLv3+, authored by eddie3 and kalaynr) but does not use or derive from its
+source code. It is an independent reimplementation built against GOG's
+publicly documented API (https://gogapidocs.readthedocs.io/en/latest/).
