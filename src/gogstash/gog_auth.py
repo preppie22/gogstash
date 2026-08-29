@@ -2,6 +2,7 @@ import platformdirs
 import json
 from pathlib import Path
 import requests
+import time
 from enum import StrEnum
 
 # These are public and obtained from https://gogapidocs.readthedocs.io/en/latest/auth.html
@@ -24,7 +25,7 @@ def build_auth_uri() -> str:
         'layout': 'client2'
     }).prepare().url
 
-def fetch_token(code: str, type: GrantType = GrantType.AUTHORIZE, refresh_token: str = None) -> dict:
+def fetch_token(code: str = None, type: GrantType = GrantType.AUTHORIZE, refresh_token: str = None) -> dict:
     parameters = {
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
@@ -36,8 +37,24 @@ def fetch_token(code: str, type: GrantType = GrantType.AUTHORIZE, refresh_token:
     else:
         parameters['refresh_token'] = refresh_token
 
+    start_time = time.time()
     response = requests.get(TOKEN_URL, params=parameters)
-    return response.json()
+    token_json = response.json()
+    token_json["expiry"] = start_time+token_json["expires_in"]
+    return token_json
+
+def is_token_expired(token: dict) -> bool:
+    return time.time() >= token["expiry"]
+
+def get_valid_token() -> dict | None:
+    token = _load_token()
+    if not token:
+        return None
+    if is_token_expired(token):
+        new_token = fetch_token(type=GrantType.REFRESH, refresh_token=token["refresh_token"])
+        save_token(new_token)
+        return new_token
+    return token
 
 def _token_path_helper() -> Path:
     config_dir = platformdirs.user_config_dir(appname='gogstash')
@@ -49,7 +66,7 @@ def save_token(token: dict) -> None:
     with open(save_file, 'w') as f:
         json.dump(token, f)
 
-def load_token() -> dict:
+def _load_token() -> dict:
     save_file = _token_path_helper()
     token_dict = None
     try:
@@ -61,5 +78,5 @@ def load_token() -> dict:
 
 if __name__ == "__main__":
     print(build_auth_uri())
-    save_token({"foo": "bar"})
-    print(load_token())
+    # save_token({"foo": "bar"})
+    print(_load_token())

@@ -9,7 +9,7 @@ from gogstash.login_window import LoginWindow
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("gogrepo GUI")
+        self.setWindowTitle("GogStash")
         self.resize(800, 600)
         self.status_label = QLabel()
         self.error_message = QErrorMessage()
@@ -34,7 +34,7 @@ class MainWindow(QMainWindow):
         self._update_login_status()
 
     def _update_login_status(self):
-        token = gog_auth.load_token()
+        token = gog_auth.get_valid_token()
         if token:
             self.status_label.setText("Logged in")
         else:
@@ -46,7 +46,7 @@ class MainWindow(QMainWindow):
             self._update_login_status()
 
     def fetch_games(self):
-        token = gog_auth.load_token()
+        token = gog_auth.get_valid_token()
         if not token:
             self.error_message.showMessage("You are not logged in to GOG!")
             return

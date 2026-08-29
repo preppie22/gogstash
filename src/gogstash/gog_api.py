@@ -1,10 +1,9 @@
-import platformdirs
-import json
-from pathlib import Path
 import requests
-from enum import Enum
 
 from PySide6.QtCore import QThread, Signal
+
+LIBRARY_URL = "https://embed.gog.com/account/getFilteredProducts"
+PRODUCT_URL = "https://api.gog.com/products"
 
 class LibraryFetchThread(QThread):
     succeeded = Signal(dict)
@@ -21,24 +20,34 @@ class LibraryFetchThread(QThread):
         except Exception as e:
             self.failed.emit(str(e))
 
-LIBRARY_URL = "https://embed.gog.com/account/getFilteredProducts"
-
 def get_library(access_token: str, page: int = 1) -> dict:
     response = requests.get(
         LIBRARY_URL, 
-        headers={
-            "Authorization": f"Bearer {access_token}"
-        }, 
+        headers={"Authorization": f"Bearer {access_token}"}, 
         params={
-            "media_type": 1,
             "page": page
         })
     return response.json()
 
+def get_downloadable(access_token: str, product_ids: list) -> list[dict]:
+    batches = []
+    product_info = []
+    while product_ids:
+        chunk, product_ids = product_ids[:50], product_ids[50:]
+        response = requests.get(
+            PRODUCT_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={
+                'ids': ','.join(str(pid) for pid in chunk),
+                'expand': 'downloads'
+            }
+        )
+    return product_info
+
 if __name__ == "__main__":
     from gogstash import gog_auth
 
-    token = gog_auth.load_token()
+    token = gog_auth.get_valid_token()
     result = get_library(token["access_token"])
     print(f"Total Games: {result['totalProducts']}")
     print(f"Products per Page: {result['productsPerPage']}")
