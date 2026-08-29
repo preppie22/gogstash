@@ -7,8 +7,7 @@ Inspired by [gogrepoc](https://github.com/kalanyr/gogrepoc) (GPLv3+) — full
 credit to its authors for the idea — but this project is an independent
 reimplementation built directly against
 [GOG's publicly documented API](https://gogapidocs.readthedocs.io/en/latest/),
-not a fork or derivative of gogrepoc's source. That's what lets it be MIT
-licensed.
+not a fork or derivative of gogrepoc's source.
 
 > **Status:** early scaffolding — the GUI itself hasn't been built yet.
 

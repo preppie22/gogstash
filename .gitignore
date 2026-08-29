@@ -28,17 +28,15 @@ htmlcov/
 AppDir/
 appimage-build/
 
-# gogrepoc runtime state (auth tokens, manifests, logs — never commit these)
-gog-token.dat
-gog-manifest.dat
-gog-resume-manifest.dat
-gog-config.dat
-gogrepo.log
+# runtime state (auth tokens, manifests, logs — never commit these)
 !md5_xmls/
 !orphaned/
 !downloading/
 !provisional/
 !images/
+
+# Local reference material
+/reference/
 
 # OS cruft
 .DS_Store
