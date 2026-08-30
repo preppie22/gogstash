@@ -1,11 +1,11 @@
 import sqlite3
 import platformdirs
 from pathlib import Path
+import datetime
 
-
-def _db_path_helper() -> Path:
-    config_dir = platformdirs.user_config_dir(appname='gogstash')
-    return Path(config_dir) / "goglibrary.db"
+def _db_path_helper(filename: str = "goglibrary.db") -> Path:
+    config_dir = platformdirs.user_config_path(appname='gogstash')
+    return config_dir / filename
 
 def _create_db(force: bool = False) -> None:
     db_path = _db_path_helper()
@@ -198,4 +198,20 @@ def get_downloadables(product_id: tuple[int] = ()) -> list[dict]:
     } for p in query_result]
     return downloadables
 
+def get_cache_size() -> int:
+    db_file = _db_path_helper()
+    if not db_file.exists():
+        return 0
+    else:
+        return db_file.stat().st_size
 
+def clear_cache() -> None:
+    db_file = _db_path_helper()
+    if not db_file.exists():
+        return
+    timestamp = datetime.datetime.now()
+    backup_filename = f"{timestamp.strftime('%Y-%m-%dT%H%M%S')}_{db_file.name}.bak"
+    db_file.rename(_db_path_helper(backup_filename))
+
+if __name__ == "__main__":
+    clear_cache()

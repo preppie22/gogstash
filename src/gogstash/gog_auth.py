@@ -57,8 +57,8 @@ def get_valid_token() -> dict | None:
     return token
 
 def _token_path_helper() -> Path:
-    config_dir = platformdirs.user_config_dir(appname='gogstash')
-    return Path(config_dir) / "token.json"
+    config_dir = platformdirs.user_config_path(appname='gogstash')
+    return config_dir / "token.json"
 
 def save_token(token: dict) -> None:
     save_file = _token_path_helper()

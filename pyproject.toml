@@ -7,7 +7,7 @@ name = "gogstash"
 version = "0.1.0"
 description = "A desktop GUI for downloading and backing up your GOG.com game library"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { file = "LICENSE" }
 authors = [{ name = "Piyush Puranik", email = "piyushpuranik@gmail.com" }]
 classifiers = [
