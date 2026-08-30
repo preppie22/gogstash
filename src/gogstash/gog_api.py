@@ -14,15 +14,38 @@ class LibraryFetchThread(QThread):
         super().__init__(parent)
         self.access_token = access_token
 
-    def run(self):
+    def run(self, product_id: tuple[int] = ()):
         try:
-            
-            result = get_library(self.access_token)
-            self.succeeded.emit(result)
+            product_listing = library_db.get_product_listing(product_id)
+            if not (product_listing or product_id):
+                library_db.update_products(fetch_library(self.access_token))
+                product_listing = library_db.get_product_listing()
+                all_product_ids = [p['product_id'] for p in product_listing]
+                library_db.update_downloadables(fetch_downloadables(self.access_token, all_product_ids))
+                product_listing = library_db.get_product_listing()
+            self.succeeded.emit(product_listing)
         except Exception as e:
             self.failed.emit(str(e))
 
-def get_library(access_token: str) -> list[dict]:
+class DownloadablesFetchThread(QThread):
+    succeeded = Signal(list)
+    failed = Signal(str)
+
+    def __init__(self, access_token, parent=None):
+        super().__init__(parent)
+        self.access_token = access_token
+
+    def run(self, product_id: tuple[int] = ()):
+        try:
+            downloadables = library_db.get_downloadables(product_id)
+            if not downloadables:
+                self.failed.emit("Product does not exist")
+                return
+            self.succeeded.emit(downloadables)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+def fetch_library(access_token: str) -> list[dict]:
     products = []
     response = requests.get(
         LIBRARY_URL, 
@@ -43,7 +66,7 @@ def get_library(access_token: str) -> list[dict]:
         products.extend(response.json().get('products'))
     return products
 
-def get_downloadable(access_token: str, product_ids: list) -> list[dict]:
+def fetch_downloadables(access_token: str, product_ids: list) -> list[dict]:
     batches = []
     product_info = []
     while product_ids:
@@ -63,7 +86,7 @@ if __name__ == "__main__":
     from gogstash import gog_auth
 
     token = gog_auth.get_valid_token()
-    result = get_library(token["access_token"])
+    result = fetch_library(token["access_token"])
     print(f"Total Games: {result['totalProducts']}")
     print(f"Products per Page: {result['productsPerPage']}")
     print(f"Total pages: {result['totalPages']}")
