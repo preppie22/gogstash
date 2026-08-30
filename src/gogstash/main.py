@@ -1,6 +1,7 @@
 import sys
+import humanize
 
-from PySide6.QtWidgets import QApplication, QWidget, QMainWindow, QLabel, QPushButton, QVBoxLayout, QDialog, QListWidget, QErrorMessage
+from PySide6.QtWidgets import QApplication, QWidget, QMainWindow, QLabel, QPushButton, QVBoxLayout, QDialog, QListWidget, QErrorMessage, QTableWidget, QTableWidgetItem
 
 from gogstash import gog_auth
 from gogstash.gog_api import LibraryFetchThread
@@ -20,7 +21,9 @@ class MainWindow(QMainWindow):
         self.fetch_games_button = QPushButton("Fetch Games")
         self.fetch_games_button.clicked.connect(self.fetch_games)
 
-        self.games_list = QListWidget()
+        self.games_list = QTableWidget()
+        self.games_list.setColumnCount(3)
+        self.games_list.setHorizontalHeaderLabels(['Title', 'Download Size', 'Fetched'])
 
         self.window_layout = QVBoxLayout()
         self.window_layout.addWidget(self.games_list)
@@ -56,10 +59,13 @@ class MainWindow(QMainWindow):
         self.fetch_thread.start()
 
     def on_games_loaded(self, result):
-        self.games_list.clear()
-        for game in result["products"]:
-            self.games_list.addItem(game["title"])
-            
+        self.games_list.setRowCount(0)
+        for game in result:
+            row_idx = self.games_list.rowCount()
+            self.games_list.insertRow(row_idx)
+            self.games_list.setItem(row_idx, 0, QTableWidgetItem(game['title']))
+            self.games_list.setItem(row_idx, 1, QTableWidgetItem(humanize.naturalsize(game['download_size'])))
+            self.games_list.setItem(row_idx, 2, QTableWidgetItem(str(game['fetched'])))
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

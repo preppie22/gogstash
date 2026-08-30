@@ -21,6 +21,7 @@ dependencies = [
     "psutil",
     "PySide6",
     "platformdirs",
+    "humanize",
 ]
 
 [project.urls]

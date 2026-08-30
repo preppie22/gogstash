@@ -3,13 +3,10 @@
 A desktop GUI, built with PySide6, for downloading and keeping local backups
 of your GOG.com game library up to date.
 
-Inspired by [gogrepoc](https://github.com/kalanyr/gogrepoc) (GPLv3+) — full
-credit to its authors for the idea — but this project is an independent
-reimplementation built directly against
-[GOG's publicly documented API](https://gogapidocs.readthedocs.io/en/latest/),
-not a fork or derivative of gogrepoc's source.
-
-> **Status:** early scaffolding — the GUI itself hasn't been built yet.
+> **Status:** in progress — login and library fetching work end-to-end
+> (OAuth2 login via embedded browser, GOG library + downloadables synced to a
+> local SQLite cache, and a table view in the GUI showing title, download
+> size, and fetch status). Actual file downloads aren't implemented yet.
 
 ## Goals
 
@@ -37,6 +34,11 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```
+
+## AI Disclaimer
+
+AI (Claude) was used to assist in testing, debugging, and planning this
+project. All code has been written by the author of the project.
 
 ## License
 
