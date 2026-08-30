@@ -1,12 +1,13 @@
 import requests
 
+from gogstash import library_db
 from PySide6.QtCore import QThread, Signal
 
 LIBRARY_URL = "https://embed.gog.com/account/getFilteredProducts"
 PRODUCT_URL = "https://api.gog.com/products"
 
 class LibraryFetchThread(QThread):
-    succeeded = Signal(dict)
+    succeeded = Signal(list)
     failed = Signal(str)
 
     def __init__(self, access_token, parent=None):
@@ -15,19 +16,32 @@ class LibraryFetchThread(QThread):
 
     def run(self):
         try:
+            
             result = get_library(self.access_token)
             self.succeeded.emit(result)
         except Exception as e:
             self.failed.emit(str(e))
 
-def get_library(access_token: str, page: int = 1) -> dict:
+def get_library(access_token: str) -> list[dict]:
+    products = []
     response = requests.get(
         LIBRARY_URL, 
         headers={"Authorization": f"Bearer {access_token}"}, 
         params={
-            "page": page
+            "page": 1
+    })
+    response_json = response.json()
+    total_pages = response_json.get('totalPages')
+    products.extend(response_json.get('products'))
+    for i in range(2, total_pages+1):
+        response = requests.get(
+            LIBRARY_URL, 
+            headers={"Authorization": f"Bearer {access_token}"}, 
+            params={
+                "page": i
         })
-    return response.json()
+        products.extend(response.json().get('products'))
+    return products
 
 def get_downloadable(access_token: str, product_ids: list) -> list[dict]:
     batches = []
