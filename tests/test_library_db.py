@@ -48,6 +48,35 @@ FAKE_DOWNLOADABLE = {
 }
 
 
+FAKE_PRODUCT_2 = {
+    "id": 222,
+    "title": "Second Fake Game",
+    "slug": "second-fake-game",
+    "isMovie": False,
+    "url": "/en/game/second_fake_game",
+    "image": "//images.example.com/second_fake_game",
+    "worksOn": {"Windows": True, "Linux": True, "Mac": False},
+}
+
+FAKE_DOWNLOADABLE_2 = {
+    "id": 222,
+    "downloads": {
+        "installers": [
+            {
+                "id": "installer_windows_en_2",
+                "name": "Second Fake Game",
+                "os": "windows",
+                "language": "en",
+                "total_size": 3000,
+                "files": [
+                    {"id": "file3", "size": 3000, "downlink": "https://example.com/file3"},
+                ],
+            }
+        ],
+    },
+}
+
+
 @pytest.fixture(autouse=True)
 def db():
     library_db._create_db(force=True)
@@ -58,6 +87,15 @@ def query_all(table):
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         return [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
+
+
+def insert_fetched_file(product_id, group_id, file_id, size):
+    db_path = library_db._db_path_helper()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO fetched_files VALUES (?, ?, ?, ?, ?)",
+            (product_id, file_id, group_id, size, "2026-01-01T00:00:00"),
+        )
 
 
 def test_create_db_creates_all_tables():
@@ -205,3 +243,103 @@ def test_update_downloadables_handles_missing_categories_gracefully():
 
     assert query_all("download_group") == []
     assert query_all("download_file") == []
+
+
+def test_get_product_listing_returns_empty_list_when_db_missing():
+    library_db._db_path_helper().unlink()
+    assert library_db.get_product_listing() == []
+
+
+def test_get_product_listing_with_no_downloads_or_fetched_files():
+    library_db.update_products([FAKE_PRODUCT])
+
+    listing = library_db.get_product_listing()
+
+    assert listing == [
+        {
+            "product_id": 111,
+            "title": "Fake Game",
+            "download_size": 0,
+            "fetched_size": 0,
+            "fetched": 0,
+        }
+    ]
+
+
+def test_get_product_listing_sums_download_size_across_groups():
+    library_db.update_products([FAKE_PRODUCT])
+    library_db.update_downloadables([FAKE_DOWNLOADABLE])  # groups: 2000 + 500
+
+    listing = library_db.get_product_listing()
+
+    assert listing[0]["download_size"] == 2500
+    assert listing[0]["fetched"] == 0
+    assert listing[0]["fetched_size"] == 0
+
+
+def test_get_product_listing_reflects_fetched_files():
+    library_db.update_products([FAKE_PRODUCT])
+    library_db.update_downloadables([FAKE_DOWNLOADABLE])
+    insert_fetched_file(111, "installer_windows_en", "file1", 1000)
+
+    listing = library_db.get_product_listing()
+
+    assert listing[0]["fetched"] == 1
+    assert listing[0]["fetched_size"] == 1000
+
+
+def test_get_product_listing_join_does_not_fan_out_sums():
+    # Regression test: product 111 has TWO download_group rows (installer +
+    # bonus_content, totaling 2500) and will get TWO fetched_files rows below.
+    # A naive `LEFT JOIN download_group ... LEFT JOIN fetched_files ...` in a
+    # single query would cross-multiply these (2x2=4 rows) before SUM(), so
+    # both totals would come back doubled if that regression is reintroduced.
+    library_db.update_products([FAKE_PRODUCT])
+    library_db.update_downloadables([FAKE_DOWNLOADABLE])
+    insert_fetched_file(111, "installer_windows_en", "file1", 100)
+    insert_fetched_file(111, "installer_windows_en", "file2", 100)
+
+    listing = library_db.get_product_listing()
+
+    assert listing[0]["download_size"] == 2500
+    assert listing[0]["fetched_size"] == 200
+
+
+def test_get_product_listing_filters_by_product_id():
+    library_db.update_products([FAKE_PRODUCT, FAKE_PRODUCT_2])
+
+    listing = library_db.get_product_listing((222,))
+
+    assert len(listing) == 1
+    assert listing[0]["product_id"] == 222
+    assert listing[0]["title"] == "Second Fake Game"
+
+
+def test_get_downloadables_returns_empty_list_when_db_missing():
+    library_db._db_path_helper().unlink()
+    assert library_db.get_downloadables() == []
+
+
+def test_get_downloadables_returns_files_with_category():
+    library_db.update_products([FAKE_PRODUCT])
+    library_db.update_downloadables([FAKE_DOWNLOADABLE])
+
+    downloadables = library_db.get_downloadables()
+
+    assert len(downloadables) == 3
+    by_file_id = {d["file_id"]: d for d in downloadables}
+    assert by_file_id["file1"]["category"] == "installers"
+    assert by_file_id["file1"]["group_id"] == "installer_windows_en"
+    assert by_file_id["file1"]["downlink"] == "https://example.com/file1"
+    assert by_file_id["bonus1"]["category"] == "bonus_content"
+
+
+def test_get_downloadables_filters_by_product_id():
+    library_db.update_products([FAKE_PRODUCT, FAKE_PRODUCT_2])
+    library_db.update_downloadables([FAKE_DOWNLOADABLE, FAKE_DOWNLOADABLE_2])
+
+    downloadables = library_db.get_downloadables((222,))
+
+    assert len(downloadables) == 1
+    assert downloadables[0]["product_id"] == 222
+    assert downloadables[0]["file_id"] == "file3"

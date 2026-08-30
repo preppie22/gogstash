@@ -129,7 +129,7 @@ def update_downloadables(downloadables: list[dict]) -> None:
 def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
     db_path = _db_path_helper()
     if not db_path.exists():
-        raise FileNotFoundError
+        return []
     query_result = None
     with sqlite3.connect(db_path) as conn:
         where_block = ""
@@ -167,7 +167,7 @@ def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
 def get_downloadables(product_id: tuple[int] = ()) -> list[dict]:
     db_path = _db_path_helper()
     if not db_path.exists():
-        raise FileNotFoundError
+        return []
     query_result = None
     with sqlite3.connect(db_path) as conn:
         where_block = ""
