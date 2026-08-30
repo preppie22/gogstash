@@ -40,3 +40,6 @@ appimage-build/
 
 # OS cruft
 .DS_Store
+
+# LLM Tooling
+.claude/
