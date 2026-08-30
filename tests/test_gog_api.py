@@ -10,16 +10,35 @@ def make_response(json_data):
 
 
 @patch("gogstash.gog_api.requests.get")
-def test_get_library_calls_correct_url_headers_and_params(mock_get):
-    mock_get.return_value = make_response({"totalProducts": 5, "products": []})
+def test_get_library_single_page(mock_get):
+    mock_get.return_value = make_response(
+        {"totalProducts": 2, "totalPages": 1, "products": [{"id": 1}, {"id": 2}]}
+    )
 
-    result = gog_api.get_library("mytoken", page=2)
+    result = gog_api.get_library("mytoken")
 
+    assert mock_get.call_count == 1
     args, kwargs = mock_get.call_args
     assert args[0] == gog_api.LIBRARY_URL
     assert kwargs["headers"] == {"Authorization": "Bearer mytoken"}
-    assert kwargs["params"] == {"page": 2}
-    assert result == {"totalProducts": 5, "products": []}
+    assert kwargs["params"] == {"page": 1}
+    assert result == [{"id": 1}, {"id": 2}]
+
+
+@patch("gogstash.gog_api.requests.get")
+def test_get_library_fetches_every_page_and_flattens_results(mock_get):
+    mock_get.side_effect = [
+        make_response({"totalPages": 3, "products": [{"id": 1}]}),
+        make_response({"totalPages": 3, "products": [{"id": 2}]}),
+        make_response({"totalPages": 3, "products": [{"id": 3}]}),
+    ]
+
+    result = gog_api.get_library("mytoken")
+
+    assert mock_get.call_count == 3
+    sent_pages = [call.kwargs["params"]["page"] for call in mock_get.call_args_list]
+    assert sent_pages == [1, 2, 3]
+    assert result == [{"id": 1}, {"id": 2}, {"id": 3}]
 
 
 @patch("gogstash.gog_api.requests.get")
@@ -68,7 +87,7 @@ def test_get_downloadable_empty_input_makes_no_requests():
 
 @patch("gogstash.gog_api.get_library")
 def test_library_fetch_thread_emits_succeeded_with_result(mock_get_library):
-    mock_get_library.return_value = {"products": []}
+    mock_get_library.return_value = [{"id": 1}, {"id": 2}]
     thread = gog_api.LibraryFetchThread("token")
     received = []
     thread.succeeded.connect(lambda result: received.append(result))
@@ -76,7 +95,7 @@ def test_library_fetch_thread_emits_succeeded_with_result(mock_get_library):
 
     thread.run()
 
-    assert received == [{"products": []}]
+    assert received == [[{"id": 1}, {"id": 2}]]
 
 
 @patch("gogstash.gog_api.get_library")

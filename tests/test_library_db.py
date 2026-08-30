@@ -10,6 +10,8 @@ FAKE_PRODUCT = {
     "title": "Fake Game",
     "slug": "fake-game",
     "isMovie": False,
+    "url": "/en/game/fake_game",
+    "image": "//images.example.com/fake_game",
     "worksOn": {"Windows": True, "Linux": False, "Mac": True},
 }
 
@@ -77,6 +79,8 @@ def test_create_db_is_idempotent_without_force():
             "title": "Fake Game",
             "slug": "fake-game",
             "product_type": "game",
+            "product_url": "https://www.gog.com/en/game/fake_game",
+            "image_uri": "//images.example.com/fake_game",
             "windows": 1,
             "linux": 0,
             "osx": 1,
@@ -93,6 +97,8 @@ def test_update_products_inserts_row():
             "title": "Fake Game",
             "slug": "fake-game",
             "product_type": "game",
+            "product_url": "https://www.gog.com/en/game/fake_game",
+            "image_uri": "//images.example.com/fake_game",
             "windows": 1,
             "linux": 0,
             "osx": 1,
@@ -115,11 +121,25 @@ def test_update_products_does_not_overwrite_existing():
     assert rows[0]["title"] == "Fake Game"
 
 
-def test_update_downloadables_missing_db_raises():
+def test_update_downloadables_creates_db_if_missing():
     db_path = library_db._db_path_helper()
     db_path.unlink()
-    with pytest.raises(FileNotFoundError):
-        library_db.update_downloadables([FAKE_DOWNLOADABLE])
+
+    library_db.update_downloadables([FAKE_DOWNLOADABLE])
+
+    assert db_path.exists()
+    groups = query_all("download_group")
+    assert {row["group_id"] for row in groups} == {"installer_windows_en", "6093"}
+
+
+def test_update_products_creates_db_if_missing():
+    db_path = library_db._db_path_helper()
+    db_path.unlink()
+
+    library_db.update_products([FAKE_PRODUCT])
+
+    assert db_path.exists()
+    assert query_all("product")[0]["product_id"] == 111
 
 
 def test_update_downloadables_inserts_groups_and_files():
@@ -131,13 +151,13 @@ def test_update_downloadables_inserts_groups_and_files():
     assert group_ids == {"installer_windows_en", "6093"}
 
     installer_group = next(r for r in groups if r["group_id"] == "installer_windows_en")
-    assert installer_group["group_type"] == "installers"
+    assert installer_group["category"] == "installers"
     assert installer_group["name"] == "Fake Game"
     assert installer_group["os"] == "windows"
     assert installer_group["total_size"] == 2000
 
     bonus_group = next(r for r in groups if r["group_id"] == "6093")
-    assert bonus_group["group_type"] == "bonus_content"
+    assert bonus_group["category"] == "bonus_content"
     assert bonus_group["content_type"] == "manuals"
     assert bonus_group["name"] == "manual (33 pages)"
 
