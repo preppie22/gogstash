@@ -60,7 +60,6 @@ class MainWindow(QMainWindow):
         for game in result["products"]:
             self.games_list.addItem(game["title"])
             
-        
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

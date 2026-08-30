@@ -42,6 +42,7 @@ def get_downloadable(access_token: str, product_ids: list) -> list[dict]:
                 'expand': 'downloads'
             }
         )
+        product_info.extend(response.json())
     return product_info
 
 if __name__ == "__main__":

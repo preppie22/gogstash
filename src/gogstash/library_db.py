@@ -27,6 +27,8 @@ def _create_db(force: bool = False) -> None:
                 product_id BIGINT,
                 group_id TEXT,
                 name TEXT,
+                group_type TEXT,
+                content_type TEXT,
                 os TEXT,
                 language TEXT,
                 total_size BIGINT,
@@ -72,5 +74,50 @@ def update_products(products: list[dict]) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.executemany("INSERT OR IGNORE INTO product VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
 
-    
-
+def update_downloadables(downloadables: list[dict]) -> None:
+    db_path = _db_path_helper()
+    if not db_path.exists():
+        raise FileNotFoundError
+    group_rows = []
+    file_rows = []
+    groups = ['installers', 'patches', 'language_packs', 'bonus_content']
+    for content in downloadables:
+        downloads: dict = content.get('downloads', [])
+        for category in groups:
+            group = downloads.get(category, [])
+            for items in group:
+                group_rows.append((
+                    content.get('id'),
+                    items.get('id'),
+                    items.get('name'),
+                    category,
+                    items.get('type'),
+                    items.get('os'),
+                    items.get('language'),
+                    items.get('total_size')
+                ))
+                for file in items.get('files', []):
+                    file_rows.append((
+                        content.get('id'),
+                        file.get('id'),
+                        items.get('id'),
+                        file.get('size'),
+                        file.get('downlink')
+                    ))
+    with sqlite3.connect(db_path) as conn:
+        conn.executemany("""
+            INSERT INTO download_group VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(product_id, group_id) DO UPDATE SET
+                    name=excluded.name,
+                    group_type=excluded.group_type,
+                    content_type=excluded.content_type,
+                    os=excluded.os,
+                    language=excluded.language,
+                    total_size=excluded.total_size
+        """, group_rows)
+        conn.executemany("""
+            INSERT INTO download_file VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(product_id, group_id, file_id) DO UPDATE SET
+                    size=excluded.size,
+                    downlink=excluded.downlink
+        """, file_rows)
