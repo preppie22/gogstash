@@ -10,9 +10,10 @@ def _user_data_helper() -> str:
 DEFAULT_SETTINGS = {
     'download_path': _user_data_helper(),
     'download_concurrency': 2,
-    'platform_filter': 'All',
+    'platform_filter': ['Linux','Windows','MacOS'],
     'verify_downloads': True,
-    'bonus_content': True,
+    'installers': True,
+    'bonus_content': False,
     'patches': True,
     'theme': 'System'
 }
@@ -51,9 +52,20 @@ def update_setting(key: str, value: Any) -> None:
     settings[key] = value
     _write_settings(settings)
 
+def update_settings(settings: dict) -> None:
+    current_settings = _read_settings()
+    for item in settings.items():
+        if item[0] not in DEFAULT_SETTINGS:
+            raise KeyError(item[0])
+        current_settings[item[0]] = item[1] 
+    _write_settings(current_settings)
+
 def read_setting(key: str) -> Any:
     settings = _read_settings()
     return settings.get(key)
+
+def read_settings() -> dict:
+    return _read_settings()
 
 def set_default(key: str) -> None:
     settings = _read_settings()

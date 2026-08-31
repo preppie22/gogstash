@@ -1,6 +1,11 @@
+import os
+
 import platformdirs
 import pytest
-from PySide6.QtCore import QCoreApplication
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtWidgets import QApplication
 
 
 @pytest.fixture(autouse=True)
@@ -16,7 +21,8 @@ def isolated_config_dir(tmp_path, monkeypatch):
 
 @pytest.fixture(scope="session", autouse=True)
 def qapp():
-    """Some code under test (QThread subclasses) needs a Qt application instance
-    to exist, even when we never start a real event loop."""
-    app = QCoreApplication.instance() or QCoreApplication([])
+    """Some code under test (QThread subclasses, QDialog subclasses) needs a real
+    QApplication instance to exist, even when we never start a real event loop.
+    QT_QPA_PLATFORM=offscreen lets this run without a real display (CI, sandboxes)."""
+    app = QApplication.instance() or QApplication([])
     yield app
