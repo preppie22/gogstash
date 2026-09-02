@@ -18,9 +18,10 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QStatusBar
 )
-# from PySide6.QtCore import (
-#     Qt
-# )
+from PySide6.QtCore import (
+    Qt
+)
+from PySide6.QtGui import QStyleHints
 from gogstash import settings
 from gogstash import library_db
 
@@ -108,6 +109,13 @@ class SettingsDialog(QDialog):
         self.adjustSize()
         self.load_settings()
 
+    @staticmethod
+    def set_color_theme() -> None:
+        theme = settings.read_setting('theme')
+        if theme == 'System': QApplication.instance().styleHints().setColorScheme(Qt.ColorScheme.Unknown)
+        elif theme == 'Light': QApplication.instance().styleHints().setColorScheme(Qt.ColorScheme.Light)
+        elif theme == 'Dark': QApplication.instance().styleHints().setColorScheme(Qt.ColorScheme.Dark)
+
     def load_settings(self, values: dict = None):
         if values:
             form_settings = values
@@ -143,6 +151,7 @@ class SettingsDialog(QDialog):
                 'theme': self.theme_select.currentText()
             }
             settings.update_settings(form_settings)
+            self.set_color_theme()
             self.status_bar.showMessage("Settings Saved!", 2000)
         if role == QDialogButtonBox.ButtonRole.DestructiveRole:
             self.load_settings()
