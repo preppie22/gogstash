@@ -45,6 +45,9 @@ class DownloadablesFetchThread(QThread):
         except Exception as e:
             self.failed.emit(str(e))
 
+def load_library() -> list[dict]:
+    return library_db.get_product_listing(())
+
 def fetch_library(access_token: str) -> list[dict]:
     products = []
     response = requests.get(

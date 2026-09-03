@@ -21,9 +21,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import (
     Qt
 )
-from PySide6.QtGui import QStyleHints
 from gogstash import settings
 from gogstash import library_db
+from gogstash import gog_auth
 
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
@@ -36,8 +36,6 @@ class SettingsDialog(QDialog):
         self.setLayout(self.parent_layout)
         self.parent_layout.addLayout(self.window_layout)
         self.parent_layout.addStretch()
-        self.status_bar = QStatusBar()
-        self.parent_layout.addWidget(self.status_bar)
 
         # Download Path
         self.download_edit = QHBoxLayout()
@@ -95,13 +93,14 @@ class SettingsDialog(QDialog):
         self.clear_cache_button.clicked.connect(self.onclick_clear_cache)
         self.cache_groupbox_layout.addWidget(self.current_cache_label)
         self.cache_groupbox_layout.addWidget(self.clear_cache_button)
-        self.window_layout.addWidget(self.cache_groupbox)
+        self.window_layout.addRow(self.cache_groupbox)
 
         # Settings Buttons
         self.settings_form_buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save|
             QDialogButtonBox.StandardButton.Discard|
-            QDialogButtonBox.StandardButton.RestoreDefaults
+            QDialogButtonBox.StandardButton.RestoreDefaults|
+            QDialogButtonBox.StandardButton.Close
         )
         self.settings_form_buttons.clicked.connect(self.settings_buttons_handler)
         self.window_layout.addWidget(self.settings_form_buttons)
@@ -152,11 +151,13 @@ class SettingsDialog(QDialog):
             }
             settings.update_settings(form_settings)
             self.set_color_theme()
-            self.status_bar.showMessage("Settings Saved!", 2000)
+            self.accept()
         if role == QDialogButtonBox.ButtonRole.DestructiveRole:
             self.load_settings()
         if role == QDialogButtonBox.ButtonRole.ResetRole:
             self.load_settings(settings.DEFAULT_SETTINGS)
+        if role == QDialogButtonBox.ButtonRole.RejectRole:
+            self.reject()
 
     def onclick_browse_download_path(self):
         current_directory = settings.read_setting('download_path')
@@ -166,6 +167,7 @@ class SettingsDialog(QDialog):
 
     def onclick_clear_cache(self):
         library_db.clear_cache()
+
         
 if __name__ == "__main__":
     app = QApplication(sys.argv)

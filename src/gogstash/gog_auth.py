@@ -66,6 +66,10 @@ def save_token(token: dict) -> None:
     with open(save_file, 'w') as f:
         json.dump(token, f)
 
+def clear_token() -> None:
+    token_file = _token_path_helper()
+    token_file.unlink(missing_ok=True)
+
 def _load_token() -> dict:
     save_file = _token_path_helper()
     token_dict = None
