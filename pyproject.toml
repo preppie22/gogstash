@@ -30,6 +30,7 @@ Homepage = "https://github.com/preppie22/gogstash"
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "pytest-testdox",
 ]
 
 [tool.setuptools.packages.find]
@@ -37,6 +38,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--testdox"
 
 [tool.setuptools.package-data]
 gogstash = ["resources/icons/*.svg"]

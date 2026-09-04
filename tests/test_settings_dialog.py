@@ -48,7 +48,7 @@ def test_installers_checkbox_is_always_checked_and_disabled():
     assert installers.isEnabled() is False
 
 
-def test_save_persists_edited_values_and_shows_confirmation():
+def test_save_persists_edited_values():
     dialog = SettingsDialog()
     dialog.download_edit_path.setText("/new/path")
     dialog.download_concurrency_edit.setValue(7)
@@ -70,13 +70,12 @@ def test_save_persists_edited_values_and_shows_confirmation():
     assert saved["platform_filter"] == ["Windows"]
     assert saved["bonus_content"] is True
     assert saved["patches"] is False
-    assert dialog.status_bar.currentMessage() == "Settings Saved!"
 
 
-def test_save_does_not_close_the_dialog():
+def test_save_closes_the_dialog():
     dialog = SettingsDialog()
     click(dialog, QDialogButtonBox.StandardButton.Save)
-    assert dialog.result() != dialog.DialogCode.Accepted  # accept() was never called
+    assert dialog.result() == dialog.DialogCode.Accepted  # accept() was called
 
 
 def test_discard_reverts_unsaved_edits_without_touching_disk():

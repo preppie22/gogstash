@@ -209,8 +209,9 @@ def clear_cache() -> None:
     db_file = _db_path_helper()
     if not db_file.exists():
         return
-    timestamp = datetime.datetime.now()
-    backup_filename = f"{timestamp.strftime('%Y-%m-%dT%H%M%S')}_{db_file.name}.bak"
+    backup_filename = f"{db_file.name}.bak"
+    backup_file = _db_path_helper(backup_filename)
+    backup_file.unlink(missing_ok=True)
     db_file.rename(_db_path_helper(backup_filename))
 
 if __name__ == "__main__":

@@ -343,3 +343,52 @@ def test_get_downloadables_filters_by_product_id():
     assert len(downloadables) == 1
     assert downloadables[0]["product_id"] == 222
     assert downloadables[0]["file_id"] == "file3"
+
+
+def test_get_cache_size_returns_zero_when_db_missing():
+    library_db._db_path_helper().unlink()
+    assert library_db.get_cache_size() == 0
+
+
+def test_get_cache_size_matches_db_file_size_on_disk():
+    db_path = library_db._db_path_helper()
+    assert library_db.get_cache_size() == db_path.stat().st_size
+
+
+def test_clear_cache_is_noop_when_db_missing():
+    db_path = library_db._db_path_helper()
+    db_path.unlink()
+
+    library_db.clear_cache()  # should not raise
+
+    assert not db_path.exists()
+    assert not library_db._db_path_helper(f"{db_path.name}.bak").exists()
+
+
+def test_clear_cache_renames_active_db_to_backup():
+    db_path = library_db._db_path_helper()
+    library_db.update_products([FAKE_PRODUCT])
+    backup_path = library_db._db_path_helper(f"{db_path.name}.bak")
+
+    library_db.clear_cache()
+
+    assert not db_path.exists()
+    assert backup_path.exists()
+
+
+def test_clear_cache_keeps_only_the_most_recently_cleared_backup():
+    db_path = library_db._db_path_helper()
+    backup_path = library_db._db_path_helper(f"{db_path.name}.bak")
+
+    library_db.update_products([FAKE_PRODUCT])
+    library_db.clear_cache()
+    with sqlite3.connect(backup_path) as conn:
+        assert conn.execute("SELECT product_id FROM product").fetchall() == [(111,)]
+
+    library_db._create_db(force=True)
+    library_db.update_products([FAKE_PRODUCT_2])
+    library_db.clear_cache()  # a second clear should replace, not sit alongside, the first backup
+
+    assert len(list(db_path.parent.glob(f"{db_path.name}*.bak"))) == 1
+    with sqlite3.connect(backup_path) as conn:
+        assert conn.execute("SELECT product_id FROM product").fetchall() == [(222,)]
