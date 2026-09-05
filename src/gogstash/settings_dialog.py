@@ -30,12 +30,8 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Settings")
 
-        self.parent_layout = QVBoxLayout()
         self.window_layout = QFormLayout()
-
-        self.setLayout(self.parent_layout)
-        self.parent_layout.addLayout(self.window_layout)
-        self.parent_layout.addStretch()
+        self.setLayout(self.window_layout)
 
         # Download Path
         self.download_edit = QHBoxLayout()
