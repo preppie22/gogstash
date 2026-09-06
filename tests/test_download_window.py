@@ -1,7 +1,7 @@
 from unittest.mock import patch
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QIcon, QPixmap
+from PySide6.QtGui import QIcon, QPixmap
 
 from gogstash.download_window import DownloadWindow, PROGRESS_ROLE
 
@@ -69,27 +69,26 @@ def test_set_progress_updates_progress_role_data():
     assert window.game_queue_table.item(0, 0).data(PROGRESS_ROLE) == 42
 
 
-@patch("gogstash.download_window.color_icon")
-def test_color_scheme_refresh_recolors_buttons_black_for_light_scheme(mock_color_icon):
-    mock_color_icon.return_value = _non_null_icon()
+@patch("gogstash.download_window.get_icon")
+def test_color_scheme_refresh_reloads_each_button_from_its_own_icon_file(mock_get_icon):
+    mock_get_icon.return_value = _non_null_icon()
     window = DownloadWindow()
-    mock_color_icon.reset_mock()
+    mock_get_icon.reset_mock()
 
     window._color_scheme_refresh(Qt.ColorScheme.Light)
 
-    assert mock_color_icon.call_count == 3  # clear_queue, start_pause, stop buttons
-    for call in mock_color_icon.call_args_list:
-        assert call.args[1] == QColor(Qt.GlobalColor.black)
+    called_files = {call.args[0] for call in mock_get_icon.call_args_list}
+    assert called_files == {"trash.svg", "start_download.svg", "stop.svg"}
 
 
-@patch("gogstash.download_window.color_icon")
-def test_color_scheme_refresh_recolors_buttons_white_for_dark_scheme(mock_color_icon):
-    mock_color_icon.return_value = _non_null_icon()
+@patch("gogstash.download_window.get_icon")
+def test_color_scheme_refresh_sets_the_reloaded_icon_on_each_button(mock_get_icon):
+    mock_get_icon.return_value = _non_null_icon()
     window = DownloadWindow()
-    mock_color_icon.reset_mock()
+    mock_get_icon.reset_mock()
+    mock_get_icon.return_value = _non_null_icon()  # a fresh, distinct icon to detect the swap
 
     window._color_scheme_refresh(Qt.ColorScheme.Dark)
 
-    assert mock_color_icon.call_count == 3
-    for call in mock_color_icon.call_args_list:
-        assert call.args[1] == QColor(Qt.GlobalColor.white)
+    for button in window.dialog_buttons.buttons():
+        assert button.icon().cacheKey() == mock_get_icon.return_value.cacheKey()

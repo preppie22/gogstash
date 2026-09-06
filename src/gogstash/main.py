@@ -117,20 +117,15 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(self.central_widget)
         self._update_login_status()
-        self._color_scheme_refresh(QApplication.instance().styleHints().colorScheme())
+        self._color_scheme_refresh()
         self.on_games_loaded(load_library())
 
-    def _color_scheme_refresh(self, scheme: Qt.ColorScheme) -> None:
+    def _color_scheme_refresh(self) -> None:
         self.set_download_badge(self._queue_count)
         for button in self.main_toolbar.actions():
             if button is self.downloads_window_button: continue
-            current_icon = button.icon()
-            if not current_icon: continue
+            if not button.icon(): continue
             button.setIcon(get_icon(button.property('iconFile')))
-            # if scheme == Qt.ColorScheme.Light:
-            #     button.setIcon(color_icon(current_icon, QColor(Qt.GlobalColor.black)))
-            # else:
-            #     button.setIcon(color_icon(current_icon, QColor(Qt.GlobalColor.white)))
     
     def _update_login_status(self):
         token = gog_auth.get_valid_token()

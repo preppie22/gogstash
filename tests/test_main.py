@@ -2,7 +2,7 @@ import time
 from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QIcon, QPixmap
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import QDialog
 
 from gogstash import gog_auth
@@ -182,20 +182,20 @@ def test_set_download_badge_stores_the_new_count():
 
 
 @patch("gogstash.main.badge_icon")
-@patch("gogstash.main.color_icon")
-def test_set_download_badge_composes_colored_icon_then_badges_it(mock_color_icon, mock_badge_icon):
-    mock_color_icon.return_value = _non_null_icon()  # needed to survive construction below
+@patch("gogstash.main.get_icon")
+def test_set_download_badge_composes_the_download_icon_then_badges_it(mock_get_icon, mock_badge_icon):
+    mock_get_icon.return_value = _non_null_icon()  # needed to survive construction below
     mock_badge_icon.return_value = _non_null_icon()
     window = MainWindow()
-    mock_color_icon.reset_mock()
+    mock_get_icon.reset_mock()
     mock_badge_icon.reset_mock()
-    mock_color_icon.return_value = "COLORED_ICON_SENTINEL"
+    mock_get_icon.return_value = "DOWNLOAD_ICON_SENTINEL"
     mock_badge_icon.return_value = QIcon()
 
     window.set_download_badge(3)
 
-    mock_color_icon.assert_called_once()
-    mock_badge_icon.assert_called_once_with("COLORED_ICON_SENTINEL", 3)
+    mock_get_icon.assert_called_once_with("download.svg")
+    mock_badge_icon.assert_called_once_with("DOWNLOAD_ICON_SENTINEL", 3)
     assert window.downloads_window_button.icon().cacheKey() == mock_badge_icon.return_value.cacheKey()
 
 
@@ -208,32 +208,31 @@ def test_color_scheme_refresh_always_recomputes_the_download_badge():
     window.set_download_badge.assert_called_once_with(window._queue_count)
 
 
-@patch("gogstash.main.color_icon")
-def test_color_scheme_refresh_skips_the_downloads_toolbar_action(mock_color_icon):
-    # Regression: the badged download-queue icon must not be run back through
-    # color_icon's SourceIn recolor, which would flatten the badge's own colors.
-    mock_color_icon.side_effect = lambda *args, **kwargs: _non_null_icon()  # distinct icon per call
+@patch("gogstash.main.get_icon")
+def test_color_scheme_refresh_skips_the_downloads_toolbar_action(mock_get_icon):
+    # Regression: the badged download-queue icon must not be reloaded plain via
+    # get_icon here, which would wipe out the badge drawn by set_download_badge.
+    mock_get_icon.side_effect = lambda *args, **kwargs: _non_null_icon()  # distinct icon per call
     window = MainWindow()
     window.set_download_badge = MagicMock()
     downloads_icon = window.downloads_window_button.icon()
-    mock_color_icon.reset_mock()
+    mock_get_icon.reset_mock()
 
     window._color_scheme_refresh(Qt.ColorScheme.Dark)
 
-    called_icons = [call.args[0] for call in mock_color_icon.call_args_list]
-    assert not any(icon.cacheKey() == downloads_icon.cacheKey() for icon in called_icons)
+    called_icons = [call.args[0] for call in mock_get_icon.call_args_list]
+    assert "download.svg" not in called_icons
     assert len(called_icons) == 4  # login, logout, fetch_games, settings
-    assert all(not icon.isNull() for icon in called_icons)  # separator/spacer skipped
 
 
-@patch("gogstash.main.color_icon")
-def test_color_scheme_refresh_uses_black_for_light_scheme(mock_color_icon):
-    mock_color_icon.return_value = _non_null_icon()
+@patch("gogstash.main.get_icon")
+def test_color_scheme_refresh_reloads_each_toolbar_action_from_its_own_icon_file(mock_get_icon):
+    mock_get_icon.return_value = _non_null_icon()
     window = MainWindow()
     window.set_download_badge = MagicMock()
-    mock_color_icon.reset_mock()
+    mock_get_icon.reset_mock()
 
     window._color_scheme_refresh(Qt.ColorScheme.Light)
 
-    for call in mock_color_icon.call_args_list:
-        assert call.args[1] == QColor(Qt.GlobalColor.black)
+    called_files = {call.args[0] for call in mock_get_icon.call_args_list}
+    assert called_files == {"login.svg", "logout.svg", "fetch.svg", "settings.svg"}

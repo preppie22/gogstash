@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QTableWidget,
-    QTableView,
     QTableWidgetItem,
     QAbstractItemView,
     QHeaderView,
@@ -96,23 +95,22 @@ class DownloadWindow(QDialog):
 
         self.setLayout(self.window_layout)
         QApplication.instance().styleHints().colorSchemeChanged.connect(self._color_scheme_refresh)
-        self._color_scheme_refresh(QApplication.instance().styleHints().colorScheme())
+        self._color_scheme_refresh()
 
-    def _color_scheme_refresh(self, scheme: Qt.ColorScheme) -> None:
+    def _color_scheme_refresh(self) -> None:
         for button in self.dialog_buttons.buttons():
-            current_icon = button.icon()
-            if not current_icon: continue
+            if not button.icon(): continue
             button.setIcon(get_icon(button.property('iconFile')))
-            # if scheme == Qt.ColorScheme.Light:
-            #     button.setIcon(color_icon(current_icon, QColor(Qt.GlobalColor.black)))
-            # else:
-            #     button.setIcon(color_icon(current_icon, QColor(Qt.GlobalColor.white)))
 
-    def add_to_queue(self, title: str) -> int:
+
+    def add_to_queue(self, title: str, size: str = None) -> int:
         row_idx = self.game_queue_table.rowCount()
         self.game_queue_table.insertRow(row_idx)
         self.game_queue_table.setItem(row_idx, 0, QTableWidgetItem(title))
-        self.game_queue_table.setItem(row_idx, 1, QTableWidgetItem('N/A'))
+        if size:
+            self.game_queue_table.setItem(row_idx, 1, QTableWidgetItem(size))
+        else:
+            self.game_queue_table.setItem(row_idx, 1, QTableWidgetItem('N/A'))
         self.set_progress(row_idx, 0)
         self.game_queue_table.selectRow(row_idx)
         self.queue_changed.emit(row_idx + 1)
