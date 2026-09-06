@@ -31,7 +31,7 @@ from PySide6.QtGui import (
     QKeySequence,
     QIcon
 )
-from gogstash.icon_utils import get_icon, color_icon
+from gogstash.icon_utils import get_icon
 
 PROGRESS_ROLE = Qt.ItemDataRole.UserRole + 1
 LIGHT_FILL_COLOR = QColor("#4CAF50")
@@ -79,11 +79,14 @@ class DownloadWindow(QDialog):
         self.window_layout.addWidget(self.game_queue_table)
 
         self.clear_queue_button = QPushButton("Clear Queue")
-        self.clear_queue_button.setIcon(QIcon(get_icon('trash.svg')))
+        self.clear_queue_button.setIcon(get_icon('trash.svg'))
+        self.clear_queue_button.setProperty('iconFile', 'trash.svg')
         self.start_pause_button = QPushButton("Start Downloads")
-        self.start_pause_button.setIcon(QIcon(get_icon('start_rocket.svg')))
+        self.start_pause_button.setIcon(get_icon('start_download.svg'))
+        self.start_pause_button.setProperty('iconFile', 'start_download.svg')
         self.stop_button = QPushButton("Stop Downloads")
-        self.stop_button.setIcon(QIcon(get_icon('stop.svg')))
+        self.stop_button.setIcon(get_icon('stop.svg'))
+        self.stop_button.setProperty('iconFile', 'stop.svg')
 
         self.dialog_buttons = QDialogButtonBox()
         self.dialog_buttons.addButton(self.start_pause_button, QDialogButtonBox.ButtonRole.ActionRole)
@@ -99,10 +102,11 @@ class DownloadWindow(QDialog):
         for button in self.dialog_buttons.buttons():
             current_icon = button.icon()
             if not current_icon: continue
-            if scheme == Qt.ColorScheme.Light:
-                button.setIcon(color_icon(current_icon, QColor(Qt.GlobalColor.black)))
-            else:
-                button.setIcon(color_icon(current_icon, QColor(Qt.GlobalColor.white)))
+            button.setIcon(get_icon(button.property('iconFile')))
+            # if scheme == Qt.ColorScheme.Light:
+            #     button.setIcon(color_icon(current_icon, QColor(Qt.GlobalColor.black)))
+            # else:
+            #     button.setIcon(color_icon(current_icon, QColor(Qt.GlobalColor.white)))
 
     def add_to_queue(self, title: str) -> int:
         row_idx = self.game_queue_table.rowCount()
