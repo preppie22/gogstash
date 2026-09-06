@@ -98,9 +98,14 @@ class MainWindow(QMainWindow):
 
         self.button_layout = QVBoxLayout()
         self.button_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
         self.queue_download_button = QPushButton("Add to Download Queue")
         self.queue_download_button.clicked.connect(self.onclick_queue_download)
         self.button_layout.addWidget(self.queue_download_button)
+
+        self.open_download_queue_button = QPushButton("Show Download Queue")
+        self.open_download_queue_button.clicked.connect(self.open_downloads)
+        self.button_layout.addWidget(self.open_download_queue_button)
 
         self.central_layout.addWidget(self.games_list)
         self.central_layout.addLayout(self.button_layout)

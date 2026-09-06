@@ -11,7 +11,6 @@ from PySide6.QtCore import (
     QRect,
 )
 
-
 def get_icon(icon_file: str) -> str:
     resources.files('gogstash')
     return str(resources.files('gogstash') / 'icons' / icon_file)
