@@ -1,10 +1,18 @@
 import time
 from unittest.mock import MagicMock, patch
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import QDialog
 
 from gogstash import gog_auth
 from gogstash.main import MainWindow
+
+
+def _non_null_icon():
+    # A plain QIcon() is null, and _color_scheme_refresh's "skip icon-less
+    # entries" guard would then treat every recolored button as icon-less too.
+    return QIcon(QPixmap(4, 4))
 
 
 FAKE_GAME = {"title": "Fake Game", "download_size": 2048, "fetched": 1}
@@ -118,3 +126,114 @@ def test_on_games_loaded_replaces_previous_rows_not_appends():
 
     assert window.games_list.rowCount() == 1
     assert window.games_list.item(0, 0).text() == "Second Fake Game"
+
+
+def test_open_downloads_shows_the_persistent_download_window():
+    window = MainWindow()
+    window.download_window.show = MagicMock()
+
+    window.open_downloads()
+
+    window.download_window.show.assert_called_once()
+
+
+def test_open_downloads_does_not_create_a_new_window_each_time():
+    # Regression: open_downloads() used to construct a fresh DownloadWindow on
+    # every call, silently discarding whatever was already queued.
+    window = MainWindow()
+    first_instance = window.download_window
+
+    window.open_downloads()
+    window.open_downloads()
+
+    assert window.download_window is first_instance
+
+
+def test_onclick_queue_download_adds_selected_game_title_once():
+    # Regression: games_list has 3 columns per row under SelectRows, so
+    # selectedItems() returns 3 items per selected row; only the title
+    # column (0) should trigger a queue add, not once per column.
+    window = MainWindow()
+    window.on_games_loaded([FAKE_GAME])  # selects row 0
+    window.download_window.add_to_queue = MagicMock()
+
+    window.onclick_queue_download()
+
+    window.download_window.add_to_queue.assert_called_once_with("Fake Game")
+
+
+def test_onclick_queue_download_does_nothing_without_a_selection():
+    window = MainWindow()
+    window.on_games_loaded([FAKE_GAME])
+    window.games_list.clearSelection()
+    window.download_window.add_to_queue = MagicMock()
+
+    window.onclick_queue_download()
+
+    window.download_window.add_to_queue.assert_not_called()
+
+
+def test_set_download_badge_stores_the_new_count():
+    window = MainWindow()
+
+    window.set_download_badge(7)
+
+    assert window._queue_count == 7
+
+
+@patch("gogstash.main.badge_icon")
+@patch("gogstash.main.color_icon")
+def test_set_download_badge_composes_colored_icon_then_badges_it(mock_color_icon, mock_badge_icon):
+    mock_color_icon.return_value = _non_null_icon()  # needed to survive construction below
+    mock_badge_icon.return_value = _non_null_icon()
+    window = MainWindow()
+    mock_color_icon.reset_mock()
+    mock_badge_icon.reset_mock()
+    mock_color_icon.return_value = "COLORED_ICON_SENTINEL"
+    mock_badge_icon.return_value = QIcon()
+
+    window.set_download_badge(3)
+
+    mock_color_icon.assert_called_once()
+    mock_badge_icon.assert_called_once_with("COLORED_ICON_SENTINEL", 3)
+    assert window.downloads_window_button.icon().cacheKey() == mock_badge_icon.return_value.cacheKey()
+
+
+def test_color_scheme_refresh_always_recomputes_the_download_badge():
+    window = MainWindow()
+    window.set_download_badge = MagicMock()
+
+    window._color_scheme_refresh(Qt.ColorScheme.Dark)
+
+    window.set_download_badge.assert_called_once_with(window._queue_count)
+
+
+@patch("gogstash.main.color_icon")
+def test_color_scheme_refresh_skips_the_downloads_toolbar_action(mock_color_icon):
+    # Regression: the badged download-queue icon must not be run back through
+    # color_icon's SourceIn recolor, which would flatten the badge's own colors.
+    mock_color_icon.side_effect = lambda *args, **kwargs: _non_null_icon()  # distinct icon per call
+    window = MainWindow()
+    window.set_download_badge = MagicMock()
+    downloads_icon = window.downloads_window_button.icon()
+    mock_color_icon.reset_mock()
+
+    window._color_scheme_refresh(Qt.ColorScheme.Dark)
+
+    called_icons = [call.args[0] for call in mock_color_icon.call_args_list]
+    assert not any(icon.cacheKey() == downloads_icon.cacheKey() for icon in called_icons)
+    assert len(called_icons) == 4  # login, logout, fetch_games, settings
+    assert all(not icon.isNull() for icon in called_icons)  # separator/spacer skipped
+
+
+@patch("gogstash.main.color_icon")
+def test_color_scheme_refresh_uses_black_for_light_scheme(mock_color_icon):
+    mock_color_icon.return_value = _non_null_icon()
+    window = MainWindow()
+    window.set_download_badge = MagicMock()
+    mock_color_icon.reset_mock()
+
+    window._color_scheme_refresh(Qt.ColorScheme.Light)
+
+    for call in mock_color_icon.call_args_list:
+        assert call.args[1] == QColor(Qt.GlobalColor.black)

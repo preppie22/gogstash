@@ -1,5 +1,6 @@
 import sys
 from random import randint
+from importlib import resources
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -20,14 +21,17 @@ from PySide6.QtCore import (
     Qt,
     QModelIndex,
     QRect,
-    QTimer
+    QTimer,
+    Signal
 )
 from PySide6.QtGui import (
     QPainter,
     QColor,
     QShortcut,
-    QKeySequence
+    QKeySequence,
+    QIcon
 )
+from gogstash.icon_utils import get_icon, color_icon
 
 PROGRESS_ROLE = Qt.ItemDataRole.UserRole + 1
 LIGHT_FILL_COLOR = QColor("#4CAF50")
@@ -53,9 +57,12 @@ class RowItemDelegate(QStyledItemDelegate):
         )
 
 class DownloadWindow(QDialog):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Downloads")
+    queue_changed = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Download Queue")
+        self.setMinimumHeight(400)
 
         self.window_layout = QVBoxLayout()
 
@@ -72,16 +79,30 @@ class DownloadWindow(QDialog):
         self.window_layout.addWidget(self.game_queue_table)
 
         self.clear_queue_button = QPushButton("Clear Queue")
-        self.pause_button = QPushButton("Pause Downloads")
+        self.clear_queue_button.setIcon(QIcon(get_icon('trash.svg')))
+        self.start_pause_button = QPushButton("Start Downloads")
+        self.start_pause_button.setIcon(QIcon(get_icon('start_rocket.svg')))
         self.stop_button = QPushButton("Stop Downloads")
+        self.stop_button.setIcon(QIcon(get_icon('stop.svg')))
 
         self.dialog_buttons = QDialogButtonBox()
-        self.dialog_buttons.addButton(self.pause_button, QDialogButtonBox.ButtonRole.ActionRole)
+        self.dialog_buttons.addButton(self.start_pause_button, QDialogButtonBox.ButtonRole.ActionRole)
         self.dialog_buttons.addButton(self.stop_button, QDialogButtonBox.ButtonRole.ActionRole)
         self.dialog_buttons.addButton(self.clear_queue_button, QDialogButtonBox.ButtonRole.ResetRole)
         self.window_layout.addWidget(self.dialog_buttons)
 
         self.setLayout(self.window_layout)
+        QApplication.instance().styleHints().colorSchemeChanged.connect(self._color_scheme_refresh)
+        self._color_scheme_refresh(QApplication.instance().styleHints().colorScheme())
+
+    def _color_scheme_refresh(self, scheme: Qt.ColorScheme) -> None:
+        for button in self.dialog_buttons.buttons():
+            current_icon = button.icon()
+            if not current_icon: continue
+            if scheme == Qt.ColorScheme.Light:
+                button.setIcon(color_icon(current_icon, QColor(Qt.GlobalColor.black)))
+            else:
+                button.setIcon(color_icon(current_icon, QColor(Qt.GlobalColor.white)))
 
     def add_to_queue(self, title: str) -> int:
         row_idx = self.game_queue_table.rowCount()
@@ -90,13 +111,13 @@ class DownloadWindow(QDialog):
         self.game_queue_table.setItem(row_idx, 1, QTableWidgetItem('N/A'))
         self.set_progress(row_idx, 0)
         self.game_queue_table.selectRow(row_idx)
+        self.queue_changed.emit(row_idx + 1)
         return row_idx
 
     def set_progress(self, row, percent = 0):
         item = self.game_queue_table.item(row, 0)
         item.setData(PROGRESS_ROLE, percent)
-
-        
+     
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

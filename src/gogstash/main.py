@@ -1,6 +1,5 @@
 import sys
 import humanize
-from importlib import resources
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -13,13 +12,15 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
     QLabel,
-    QSizePolicy
+    QSizePolicy,
+    QHBoxLayout,
+    QVBoxLayout,
+    QPushButton
 )
 from PySide6.QtGui import (
     QAction,
     QIcon,
     QColor,
-    QPainter,
 )
 from PySide6.QtCore import Qt, QSize
 
@@ -27,12 +28,17 @@ from gogstash import gog_auth
 from gogstash.gog_api import LibraryFetchThread, load_library
 from gogstash.login_window import LoginWindow
 from gogstash.settings_dialog import SettingsDialog
+from gogstash.download_window import DownloadWindow
+from gogstash.icon_utils import get_icon, color_icon, badge_icon
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("GogStash")
         self.resize(800, 600)
+        self.download_window = DownloadWindow(self)
+        self.download_window.queue_changed.connect(self.set_download_badge)
+        self._queue_count = 0
 
         self.logged_in_indicator = QLabel()
         self.logged_in_indicator.setFixedSize(QSize(10,10))
@@ -43,34 +49,41 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(self.logged_in_indicator)
         self.statusBar().addWidget(self.status_text)
         self.main_toolbar = self.addToolBar("Main")
-        # self.main_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         self.main_toolbar.setMovable(False)
         
         self.error_message = QErrorMessage()
 
-        self.login_button = QAction("Login", self, icon=QIcon(self._get_icon('login.svg')))
+        self.login_button = QAction("Login", self, icon=QIcon(get_icon('login.svg')))
         self.login_button.triggered.connect(self.open_login_window)
         self.main_toolbar.addAction(self.login_button)
 
-        self.logout_button = QAction("Logout", self, icon=QIcon(self._get_icon('logout.svg')))
+        self.logout_button = QAction("Logout", self, icon=QIcon(get_icon('logout.svg')))
         self.logout_button.triggered.connect(self.logout)
         self.main_toolbar.addAction(self.logout_button)
         self.main_toolbar.addSeparator()
 
-        self.fetch_games_button = QAction("Refresh Games List", self, icon=QIcon(self._get_icon('fetch.svg')))
+        self.fetch_games_button = QAction("Refresh Games List", self, icon=QIcon(get_icon('fetch.svg')))
         self.fetch_games_button.triggered.connect(self.fetch_games)
         self.main_toolbar.addAction(self.fetch_games_button)
         # self.main_toolbar.addSeparator()
+
+        self.downloads_window_button = QAction("Show Download Queue", self, icon=QIcon(get_icon('download.svg')))
+        self.downloads_window_button.triggered.connect(self.open_downloads)
+        self.main_toolbar.addAction(self.downloads_window_button)
 
         self.spacer = QWidget()
         self.spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.main_toolbar.addWidget(self.spacer)
 
-        self.settings_button = QAction("Settings", self, icon=QIcon(self._get_icon('settings.svg')))
+        self.settings_button = QAction("Settings", self, icon=QIcon(get_icon('settings.svg')))
         self.settings_button.triggered.connect(self.open_settings)
         self.main_toolbar.addAction(self.settings_button)
         QApplication.instance().styleHints().colorSchemeChanged.connect(self._color_scheme_refresh)
         SettingsDialog.set_color_theme()
+
+        self.central_widget = QWidget()
+        self.central_layout = QHBoxLayout()
+        self.central_widget.setLayout(self.central_layout)
 
         self.games_list = QTableWidget()
         self.games_list.setColumnCount(3)
@@ -83,31 +96,30 @@ class MainWindow(QMainWindow):
         self.games_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.games_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
 
-        self.setCentralWidget(self.games_list)
+        self.button_layout = QVBoxLayout()
+        self.button_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.queue_download_button = QPushButton("Add to Download Queue")
+        self.queue_download_button.clicked.connect(self.onclick_queue_download)
+        self.button_layout.addWidget(self.queue_download_button)
+
+        self.central_layout.addWidget(self.games_list)
+        self.central_layout.addLayout(self.button_layout)
+
+        self.setCentralWidget(self.central_widget)
         self._update_login_status()
         self._color_scheme_refresh(QApplication.instance().styleHints().colorScheme())
         self.on_games_loaded(load_library())
 
-    @staticmethod
-    def _get_icon(icon_file: str) -> str:
-        resources.files('gogstash')
-        return str(resources.files('gogstash') / 'icons' / icon_file)
-
-    @staticmethod
-    def _color_icon(icon: QIcon, color: QColor) -> QIcon:
-        base = icon.pixmap(QSize(24, 24))
-        with QPainter(base) as painter:
-            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-            painter.fillRect(base.rect(), color)
-        return QIcon(base)
-
     def _color_scheme_refresh(self, scheme: Qt.ColorScheme) -> None:
+        self.set_download_badge(self._queue_count)
         for button in self.main_toolbar.actions():
+            if button is self.downloads_window_button: continue
             current_icon = button.icon()
+            if not current_icon: continue
             if scheme == Qt.ColorScheme.Light:
-                button.setIcon(self._color_icon(current_icon, QColor(Qt.GlobalColor.black)))
+                button.setIcon(color_icon(current_icon, QColor(Qt.GlobalColor.black)))
             else:
-                button.setIcon(self._color_icon(current_icon, QColor(Qt.GlobalColor.white)))
+                button.setIcon(color_icon(current_icon, QColor(Qt.GlobalColor.white)))
     
     def _update_login_status(self):
         token = gog_auth.get_valid_token()
@@ -117,6 +129,19 @@ class MainWindow(QMainWindow):
         else:
             self.status_text.setText("Not logged in")
             self.logged_in_indicator.setStyleSheet("background-color: red; border-radius: 5")
+
+    def set_download_badge(self, count: int):
+        self._queue_count = count
+        base_icon = QIcon(get_icon('download.svg'))
+        color_scheme = QApplication.instance().styleHints().colorScheme()
+        scheme_color = None
+        if color_scheme == Qt.ColorScheme.Light:
+            scheme_color = QColor(Qt.GlobalColor.black)
+        else:
+            scheme_color = QColor(Qt.GlobalColor.white)
+        colored_icon = color_icon(base_icon, scheme_color)
+        badged_icon = badge_icon(colored_icon, count)
+        self.downloads_window_button.setIcon(badged_icon)
 
     def logout(self):
         gog_auth.clear_token()
@@ -131,6 +156,9 @@ class MainWindow(QMainWindow):
         settings_dialog = SettingsDialog(self)
         settings_dialog.exec()
 
+    def open_downloads(self):
+        self.download_window.show()
+
     def fetch_games(self):
         token = gog_auth.get_valid_token()
         if not token:
@@ -140,6 +168,12 @@ class MainWindow(QMainWindow):
         self.fetch_thread.succeeded.connect(self.on_games_loaded)
         self.fetch_thread.failed.connect(lambda msg: self.error_message.showMessage(msg))
         self.fetch_thread.start()
+
+    def onclick_queue_download(self):
+        selection = self.games_list.selectedItems()
+        for item in selection:
+            if item.column() == 0:
+                self.download_window.add_to_queue(item.text())
 
     def on_games_loaded(self, result):
         self.games_list.setRowCount(0)
