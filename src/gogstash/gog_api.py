@@ -1,4 +1,5 @@
 import requests
+from typing import Callable
 
 from gogstash import library_db
 from PySide6.QtCore import QThread, Signal
@@ -9,23 +10,28 @@ PRODUCT_URL = "https://api.gog.com/products"
 class LibraryFetchThread(QThread):
     succeeded = Signal(list)
     failed = Signal(str)
-
-    def __init__(self, access_token, parent=None):
+    progress = Signal(int)
+    
+    def __init__(self, access_token, force: bool = False, parent=None):
         super().__init__(parent)
         self.access_token = access_token
+        self.force = force
 
     def run(self, product_id: tuple[int] = ()):
         try:
             product_listing = library_db.get_product_listing(product_id)
-            if not (product_listing or product_id):
+            if not (product_listing or product_id) or self.force:
                 library_db.update_products(fetch_library(self.access_token))
                 product_listing = library_db.get_product_listing()
                 all_product_ids = [p['product_id'] for p in product_listing]
-                library_db.update_downloadables(fetch_downloadables(self.access_token, all_product_ids))
+                library_db.update_downloadables(fetch_downloadables(self.access_token, all_product_ids, self.update_progress))
                 product_listing = library_db.get_product_listing()
             self.succeeded.emit(product_listing)
         except Exception as e:
             self.failed.emit(str(e))
+
+    def update_progress(self, percentage: int):
+        self.progress.emit(percentage)
 
 class DownloadablesFetchThread(QThread):
     succeeded = Signal(list)
@@ -69,9 +75,10 @@ def fetch_library(access_token: str) -> list[dict]:
         products.extend(response.json().get('products'))
     return products
 
-def fetch_downloadables(access_token: str, product_ids: list) -> list[dict]:
+def fetch_downloadables(access_token: str, product_ids: list, progress_callback: Callable[[int], None] = None) -> list[dict]:
     batches = []
     product_info = []
+    total = len(product_ids)
     while product_ids:
         chunk, product_ids = product_ids[:50], product_ids[50:]
         response = requests.get(
@@ -83,6 +90,8 @@ def fetch_downloadables(access_token: str, product_ids: list) -> list[dict]:
             }
         )
         product_info.extend(response.json())
+        if progress_callback:
+            progress_callback(len(product_info) * 100 / total)
     return product_info
 
 if __name__ == "__main__":

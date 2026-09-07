@@ -127,7 +127,7 @@ def test_library_fetch_thread_bootstraps_when_db_empty(mock_fetch_library, mock_
     thread.run()
 
     mock_fetch_library.assert_called_once_with("token")
-    mock_fetch_downloadables.assert_called_once_with("token", [111])
+    mock_fetch_downloadables.assert_called_once_with("token", [111], thread.update_progress)
     assert len(received) == 1
     assert received[0] == [
         {"product_id": 111, "title": "Fake Game", "download_size": 2000, "fetched_size": 0, "fetched": 0}

@@ -1,6 +1,7 @@
 import time
 from unittest.mock import MagicMock, patch
 
+import humanize
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import QDialog
@@ -15,8 +16,8 @@ def _non_null_icon():
     return QIcon(QPixmap(4, 4))
 
 
-FAKE_GAME = {"title": "Fake Game", "download_size": 2048, "fetched": 1}
-FAKE_GAME_2 = {"title": "Second Fake Game", "download_size": 4096, "fetched": 0}
+FAKE_GAME = {"product_id": 111, "title": "Fake Game", "download_size": 2048, "fetched": 1}
+FAKE_GAME_2 = {"product_id": 222, "title": "Second Fake Game", "download_size": 4096, "fetched": 0}
 
 
 def test_not_logged_in_shows_red_indicator_and_status_text():
@@ -102,7 +103,7 @@ def test_fetch_games_starts_thread_with_access_token_when_logged_in(mock_thread_
 
     window.fetch_games()
 
-    mock_thread_cls.assert_called_once_with("mytoken")
+    mock_thread_cls.assert_called_once_with("mytoken", force=True)
     mock_thread_instance = mock_thread_cls.return_value
     mock_thread_instance.succeeded.connect.assert_called_once_with(window.on_games_loaded)
     mock_thread_instance.start.assert_called_once()
@@ -151,15 +152,25 @@ def test_open_downloads_does_not_create_a_new_window_each_time():
 
 def test_onclick_queue_download_adds_selected_game_title_once():
     # Regression: games_list has 3 columns per row under SelectRows, so
-    # selectedItems() returns 3 items per selected row; only the title
-    # column (0) should trigger a queue add, not once per column.
+    # selectedItems() returns 3 items per selected row; only once all three
+    # columns have been seen for a row should it trigger a single queue add.
     window = MainWindow()
     window.on_games_loaded([FAKE_GAME])  # selects row 0
-    window.download_window.add_to_queue = MagicMock()
+    captured_calls = []
+    # onclick_queue_download reuses and clears the same dict after each call,
+    # so the mock must snapshot a copy at call time rather than keep the
+    # reference -- asserting on the mock's own call_args would see it emptied.
+    window.download_window.add_to_queue = MagicMock(
+        side_effect=lambda row_data: captured_calls.append(dict(row_data))
+    )
 
     window.onclick_queue_download()
 
-    window.download_window.add_to_queue.assert_called_once_with("Fake Game")
+    assert captured_calls == [{
+        "product_id": FAKE_GAME["product_id"],
+        "title": "Fake Game",
+        "size": humanize.naturalsize(FAKE_GAME["download_size"]),
+    }]
 
 
 def test_onclick_queue_download_does_nothing_without_a_selection():
@@ -203,7 +214,7 @@ def test_color_scheme_refresh_always_recomputes_the_download_badge():
     window = MainWindow()
     window.set_download_badge = MagicMock()
 
-    window._color_scheme_refresh(Qt.ColorScheme.Dark)
+    window._color_scheme_refresh()
 
     window.set_download_badge.assert_called_once_with(window._queue_count)
 
@@ -218,7 +229,7 @@ def test_color_scheme_refresh_skips_the_downloads_toolbar_action(mock_get_icon):
     downloads_icon = window.downloads_window_button.icon()
     mock_get_icon.reset_mock()
 
-    window._color_scheme_refresh(Qt.ColorScheme.Dark)
+    window._color_scheme_refresh()
 
     called_icons = [call.args[0] for call in mock_get_icon.call_args_list]
     assert "download.svg" not in called_icons
@@ -232,7 +243,7 @@ def test_color_scheme_refresh_reloads_each_toolbar_action_from_its_own_icon_file
     window.set_download_badge = MagicMock()
     mock_get_icon.reset_mock()
 
-    window._color_scheme_refresh(Qt.ColorScheme.Light)
+    window._color_scheme_refresh()
 
     called_files = {call.args[0] for call in mock_get_icon.call_args_list}
     assert called_files == {"login.svg", "logout.svg", "fetch.svg", "settings.svg"}

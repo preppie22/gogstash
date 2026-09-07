@@ -15,7 +15,8 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QHBoxLayout,
     QVBoxLayout,
-    QPushButton
+    QPushButton,
+    QProgressBar
 )
 from PySide6.QtGui import (
     QAction,
@@ -28,8 +29,9 @@ from gogstash import gog_auth
 from gogstash.gog_api import LibraryFetchThread, load_library
 from gogstash.login_window import LoginWindow
 from gogstash.settings_dialog import SettingsDialog
-from gogstash.download_window import DownloadWindow
+from gogstash.download_window import DownloadWindow, UserRole
 from gogstash.icon_utils import get_icon, badge_icon
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -44,10 +46,13 @@ class MainWindow(QMainWindow):
         self.logged_in_indicator.setFixedSize(QSize(10,10))
         self.logged_in_indicator.setStyleSheet("background-color: red; border-radius: 5")
         self.status_text = QLabel()
+        self.status_progress = QProgressBar()
+        self.status_progress.setVisible(False)
         self.statusBar()
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().addWidget(self.logged_in_indicator)
         self.statusBar().addWidget(self.status_text)
+        self.statusBar().addWidget(self.status_progress)
         self.main_toolbar = self.addToolBar("Main")
         self.main_toolbar.setMovable(False)
         
@@ -163,23 +168,52 @@ class MainWindow(QMainWindow):
         if not token:
             self.error_message.showMessage("You are not logged in to GOG!")
             return
-        self.fetch_thread = LibraryFetchThread(token["access_token"])
+        self.fetch_thread = LibraryFetchThread(token["access_token"], force=True)
         self.fetch_thread.succeeded.connect(self.on_games_loaded)
-        self.fetch_thread.failed.connect(lambda msg: self.error_message.showMessage(msg))
+        self.fetch_thread.failed.connect(self.fetch_failed_handler)
+        self.fetch_thread.progress.connect(self.update_fetch_progress)
+        self.fetch_games_button.setDisabled(True)
+        self.status_text.setText("Fetching games list...")
         self.fetch_thread.start()
 
     def onclick_queue_download(self):
-        selection = self.games_list.selectedItems()
-        for item in selection:
+        selection_data = self.games_list.selectedItems()
+        row_data = {}
+        for item in selection_data:
             if item.column() == 0:
-                self.download_window.add_to_queue(item.text())
+                row_data['product_id'] = item.data(UserRole.PRODUCT_ID_ROLE.value)
+                row_data['title'] = item.text()
+            elif item.column() == 1:
+                row_data['size'] = item.text()
+            elif item.column() == 2:
+                self.download_window.add_to_queue(row_data.copy())
+                row_data.clear()
+
+    def update_fetch_progress(self, progress: int):
+        if not self.status_progress.isVisible():
+            self.status_progress.setVisible(True)
+        self.status_text.setText(f"Fetching metadata ")
+        self.status_progress.setValue(int(progress))
+        return
+
+    def fetch_failed_handler(self, error_message: str):
+        self.error_message.showMessage(error_message)
+        self._update_login_status()
+        self.status_progress.setVisible(False)
+        self.fetch_games_button.setDisabled(False)
 
     def on_games_loaded(self, result):
+        self._update_login_status()
+        self.status_progress.setVisible(False)
+        self.fetch_games_button.setDisabled(False)
         self.games_list.setRowCount(0)
+        result = sorted(result, key=(lambda n: n['title']))
         for game in result:
             row_idx = self.games_list.rowCount()
+            first_column = QTableWidgetItem(game['title'])
+            first_column.setData(UserRole.PRODUCT_ID_ROLE.value, game['product_id'])
             self.games_list.insertRow(row_idx)
-            self.games_list.setItem(row_idx, 0, QTableWidgetItem(game['title']))
+            self.games_list.setItem(row_idx, 0, first_column)
             self.games_list.setItem(row_idx, 1, QTableWidgetItem(humanize.naturalsize(game['download_size'])))
             self.games_list.setItem(row_idx, 2, QTableWidgetItem(str(game['fetched'])))
         self.games_list.selectRow(0)

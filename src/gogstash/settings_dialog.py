@@ -21,6 +21,10 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import (
     Qt
 )
+from PySide6.QtGui import (
+    QPalette,
+    QColor
+)
 from gogstash import settings
 from gogstash import library_db
 from gogstash import gog_auth
@@ -44,6 +48,9 @@ class SettingsDialog(QDialog):
 
         # Download Concurrency
         self.download_concurrency_edit = QSpinBox()
+        self.download_concurrency_edit.setMinimum(1)
+        self.download_concurrency_edit.setMaximum(999)
+        self.download_concurrency_edit.valueChanged.connect(self.on_concurrency_changed)
         self.window_layout.addRow("Download Concurrency", self.download_concurrency_edit)
 
         # Platform Filter
@@ -102,6 +109,7 @@ class SettingsDialog(QDialog):
         self.window_layout.addWidget(self.settings_form_buttons)
 
         self.adjustSize()
+        self.on_concurrency_changed(self.download_concurrency_edit.value())
         self.load_settings()
 
     @staticmethod
@@ -163,6 +171,19 @@ class SettingsDialog(QDialog):
 
     def onclick_clear_cache(self):
         library_db.clear_cache()
+
+    def on_concurrency_changed(self, value: int):
+        color_palette = QPalette(self.download_concurrency_edit.parentWidget().palette())
+        if value >= 5:
+            color_palette.setColor(QPalette.ColorRole.Base, QColor(255, 0, 0, 60))
+            color_palette.setColor(QPalette.ColorRole.Button, QColor(255, 0, 0, 60))
+            self.download_concurrency_edit.setPalette(color_palette)
+            self.download_concurrency_edit.setToolTip("WARNING: High concurrency may increase risk of throttling or GOG flagging your account")
+        else:
+            self.download_concurrency_edit.setPalette(color_palette)
+            self.download_concurrency_edit.setStyleSheet("")
+            self.download_concurrency_edit.setToolTip("")
+
 
         
 if __name__ == "__main__":

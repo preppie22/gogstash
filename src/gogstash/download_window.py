@@ -1,6 +1,7 @@
 import sys
 from random import randint
 from importlib import resources
+from enum import Enum
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -32,16 +33,20 @@ from PySide6.QtGui import (
 )
 from gogstash.icon_utils import get_icon
 
-PROGRESS_ROLE = Qt.ItemDataRole.UserRole + 1
+
 LIGHT_FILL_COLOR = QColor("#4CAF50")
 DARK_FILL_COLOR = QColor("#1B5E20")
+
+class UserRole(Enum):
+    PROGRESS_ROLE = Qt.ItemDataRole.UserRole + 1
+    PRODUCT_ID_ROLE = Qt.ItemDataRole.UserRole + 2
 
 class RowItemDelegate(QStyledItemDelegate):
     def __init__(self):
         super().__init__()
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
-        progress = index.sibling(index.row(), 0).data(PROGRESS_ROLE) or 0
+        progress = index.sibling(index.row(), 0).data(UserRole.PROGRESS_ROLE.value) or 0
         fill_width = int(option.rect.width() * progress / 100)
         scheme = QApplication.instance().styleHints().colorScheme()
         fill_color = LIGHT_FILL_COLOR if scheme == Qt.ColorScheme.Light else DARK_FILL_COLOR
@@ -103,14 +108,13 @@ class DownloadWindow(QDialog):
             button.setIcon(get_icon(button.property('iconFile')))
 
 
-    def add_to_queue(self, title: str, size: str = None) -> int:
+    def add_to_queue(self, row_data: dict) -> int:
         row_idx = self.game_queue_table.rowCount()
         self.game_queue_table.insertRow(row_idx)
-        self.game_queue_table.setItem(row_idx, 0, QTableWidgetItem(title))
-        if size:
-            self.game_queue_table.setItem(row_idx, 1, QTableWidgetItem(size))
-        else:
-            self.game_queue_table.setItem(row_idx, 1, QTableWidgetItem('N/A'))
+        first_column = QTableWidgetItem(row_data['title'])
+        first_column.setData(UserRole.PRODUCT_ID_ROLE.value, row_data['product_id'])
+        self.game_queue_table.setItem(row_idx, 0, first_column)
+        self.game_queue_table.setItem(row_idx, 1, QTableWidgetItem(row_data['size']))
         self.set_progress(row_idx, 0)
         self.game_queue_table.selectRow(row_idx)
         self.queue_changed.emit(row_idx + 1)
@@ -118,7 +122,7 @@ class DownloadWindow(QDialog):
 
     def set_progress(self, row, percent = 0):
         item = self.game_queue_table.item(row, 0)
-        item.setData(PROGRESS_ROLE, percent)
+        item.setData(UserRole.PROGRESS_ROLE.value, percent)
      
 
 if __name__ == "__main__":
