@@ -99,6 +99,7 @@ def resolve_downlink(access_token: str, downlink: str) -> dict:
         downlink,
         headers={"Authorization": f"Bearer {access_token}"}
     )
+    response.raise_for_status()
     return response.json()
 
 if __name__ == "__main__":

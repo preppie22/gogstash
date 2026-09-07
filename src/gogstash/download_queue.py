@@ -5,8 +5,58 @@ from pathlib import Path
 import urllib
 import requests
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import (
+    QThread,
+    QObject,
+    Signal
+)
+class DownloadScheduler(QObject):
+    game_succeeded = Signal(int, list)
+    game_failed = Signal(int, str, list)
+    progress_updated = Signal(int, int, int)
+    finished = Signal()
 
+    def __init__(self, access_token, product_queue: list[dict], concurrency: int = 1, parent=None):
+        super().__init__(parent)
+        if concurrency < 1:
+            raise ValueError("Concurrency must be more than 0")
+        self.tokens = concurrency
+        self.download_queue = []
+        self.active_queue = []
+        for product in product_queue:
+            queue_item = {
+                'row_idx': product['idx'],
+                'worker': DownloadWorkerThread(access_token, product['product_id']),
+            }
+            self.download_queue.append(queue_item)
+
+    def dispatch(self):
+        while self.tokens > 0 and self.download_queue:
+            task = self.download_queue.pop(0)
+            task['worker'].succeeded.connect(lambda fetched_list, t=task: self._handle_success(t, fetched_list))
+            task['worker'].failed.connect(lambda msg, fetched_list, t=task: self._handle_failure(t, msg, fetched_list))
+            task['worker'].progress.connect(lambda fetched_size, total_size, t=task: self._report_progress(t, fetched_size, total_size))
+            self.active_queue.append(task)
+            self.tokens = self.tokens - 1
+            task['worker'].start()
+        if not self.download_queue and not self.active_queue:
+            self.finished.emit()
+
+    def _handle_success(self, job: dict, fetched_list: list) -> None:
+        self.game_succeeded.emit(job['row_idx'], fetched_list)
+        self.active_queue.remove(job)
+        self.tokens = self.tokens + 1
+        self.dispatch()
+
+    def _handle_failure(self, job: dict, msg: str, fetched_list: list) -> None:
+        self.game_failed.emit(job['row_idx'], msg, fetched_list)
+        self.active_queue.remove(job)
+        self.tokens = self.tokens + 1
+        self.dispatch()
+
+    def _report_progress(self, job: dict, fetched: int, total: int) -> None:
+        self.progress_updated.emit(job['row_idx'], fetched, total)
+    
 class DownloadWorkerThread(QThread):
     succeeded = Signal(list)
     failed = Signal(str, list)
@@ -77,6 +127,7 @@ class DownloadWorkerThread(QThread):
 
     def update_progress(self):
         self.progress.emit(self.fetched_size, self.total_size)
+
 
 
 def _platform_helper(platforms: list[str]) -> list[str]:
