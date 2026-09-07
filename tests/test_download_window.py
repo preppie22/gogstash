@@ -16,14 +16,16 @@ def _row(title="Some Game", size="2 GB", product_id=42):
     return {"title": title, "size": size, "product_id": product_id}
 
 
-def test_add_to_queue_inserts_row_with_title_and_size():
+@patch("gogstash.download_window.estimate_download_size")
+def test_add_to_queue_inserts_row_with_title_and_size(mock_estimate):
+    mock_estimate.return_value = 2_000_000_000  # 2.0 GB
     window = DownloadWindow()
 
-    window.add_to_queue(_row(title="Some Game", size="2 GB"))
+    window.add_to_queue(_row(title="Some Game"))
 
     assert window.game_queue_table.rowCount() == 1
     assert window.game_queue_table.item(0, 0).text() == "Some Game"
-    assert window.game_queue_table.item(0, 1).text() == "2 GB"
+    assert window.game_queue_table.item(0, 1).text() == "0 / 2.0 GB"
 
 
 def test_add_to_queue_stores_the_product_id_on_the_title_item():

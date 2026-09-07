@@ -89,12 +89,12 @@ def query_all(table):
         return [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
 
 
-def insert_fetched_file(product_id, group_id, file_id, size):
+def insert_fetched_file(product_id, group_id, file_id, size, checksum=None):
     db_path = library_db._db_path_helper()
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO fetched_files VALUES (?, ?, ?, ?, ?)",
-            (product_id, file_id, group_id, size, "2026-01-01T00:00:00"),
+            "INSERT INTO fetched_files VALUES (?, ?, ?, ?, ?, ?)",
+            (product_id, file_id, group_id, size, checksum, "2026-01-01T00:00:00"),
         )
 
 
@@ -259,6 +259,7 @@ def test_get_product_listing_with_no_downloads_or_fetched_files():
         {
             "product_id": 111,
             "title": "Fake Game",
+            "slug": "fake-game",
             "download_size": 0,
             "fetched_size": 0,
             "fetched": 0,

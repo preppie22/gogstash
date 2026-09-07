@@ -94,6 +94,13 @@ def fetch_downloadables(access_token: str, product_ids: list, progress_callback:
             progress_callback(len(product_info) * 100 / total)
     return product_info
 
+def resolve_downlink(access_token: str, downlink: str) -> dict:
+    response = requests.get(
+        downlink,
+        headers={"Authorization": f"Bearer {access_token}"}
+    )
+    return response.json()
+
 if __name__ == "__main__":
     from gogstash import gog_auth
 

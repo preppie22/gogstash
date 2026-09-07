@@ -1,6 +1,18 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from gogstash import download_queue, library_db, settings
+
+FAKE_PRODUCT = {
+    "id": 111,
+    "title": "Fake Game",
+    "slug": "fake-game",
+    "isMovie": False,
+    "url": "/en/game/fake_game",
+    "image": "//images.example.com/fake_game",
+    "worksOn": {"Windows": True, "Linux": False, "Mac": True},
+}
 
 FAKE_DOWNLOADABLE = {
     "id": 111,
@@ -142,3 +154,61 @@ def test_platform_helper_maps_settings_labels_to_gog_os_values():
     ]
     assert download_queue._platform_helper(["Linux"]) == ["linux"]
     assert download_queue._platform_helper([]) == []
+
+
+def make_streamed_response(chunks):
+    response = MagicMock()
+    response.iter_content.return_value = chunks
+    return response
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, tmp_path):
+    library_db.update_products([FAKE_PRODUCT])
+    settings.update_setting("download_path", str(tmp_path))
+    settings.update_setting("patches", False)  # isolate to the single installer file
+    mock_resolve.return_value = {
+        "downlink": "https://cdn.example.com/setup_fake_game.exe",
+        "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
+    }
+    mock_get.return_value = make_streamed_response([b"abcd", b"efgh"])
+
+    thread = download_queue.DownloadWorkerThread("token", 111)
+    succeeded = []
+    failed = []
+    thread.succeeded.connect(lambda result: succeeded.append(result))
+    thread.failed.connect(lambda msg: failed.append(msg))
+
+    thread.run()
+
+    mock_resolve.assert_called_once_with("token", "https://example.com/file1")
+    assert failed == []
+    assert succeeded == [[("setup_fake_game.exe", 8)]]
+    written = tmp_path / "fake-game" / "installer_windows_en" / "setup_fake_game.exe"
+    assert written.read_bytes() == b"abcdefgh"
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_failure_does_not_also_emit_succeeded(mock_resolve, mock_get, tmp_path):
+    library_db.update_products([FAKE_PRODUCT])
+    settings.update_setting("download_path", str(tmp_path))
+    mock_resolve.return_value = {
+        "downlink": "https://cdn.example.com/setup_fake_game.exe",
+        "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
+    }
+    broken_response = MagicMock()
+    broken_response.iter_content.side_effect = RuntimeError("connection reset")
+    mock_get.return_value = broken_response
+
+    thread = download_queue.DownloadWorkerThread("token", 111)
+    succeeded = []
+    failed = []
+    thread.succeeded.connect(lambda result: succeeded.append(result))
+    thread.failed.connect(lambda msg: failed.append(msg))
+
+    thread.run()
+
+    assert failed == ["connection reset"]
+    assert succeeded == []  # regression: succeeded must not also fire after failed

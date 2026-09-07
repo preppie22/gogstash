@@ -16,10 +16,11 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QLabel,
     QDialogButtonBox,
-    QStatusBar
+    QMessageBox
 )
 from PySide6.QtCore import (
-    Qt
+    Qt,
+    Signal
 )
 from PySide6.QtGui import (
     QPalette,
@@ -30,6 +31,8 @@ from gogstash import library_db
 from gogstash import gog_auth
 
 class SettingsDialog(QDialog):
+    cache_cleared = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
@@ -71,6 +74,7 @@ class SettingsDialog(QDialog):
 
         # Verify Downloads
         self.verify_downloads_check = QCheckBox()
+        self.verify_downloads_check.setToolTip("Verify files with checksums (slower)")
         self.window_layout.addRow("Verify Downloads", self.verify_downloads_check)
 
         # Download Filters
@@ -170,7 +174,18 @@ class SettingsDialog(QDialog):
             self.download_edit_path.setText(folder_selection)
 
     def onclick_clear_cache(self):
-        library_db.clear_cache()
+        confirmation = QMessageBox()
+        confirmation.setIcon(QMessageBox.Icon.Question)
+        confirmation.setWindowTitle("Clear Cache")
+        confirmation.setText("Cache rebuild can take a long time for large libraries.")
+        confirmation.setInformativeText("Are you sure you want to clear cache?")
+        confirmation.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        confirmation.setDefaultButton(QMessageBox.StandardButton.No)
+        confirmation.setEscapeButton(QMessageBox.StandardButton.No)
+        response = confirmation.exec()
+        if response == QMessageBox.StandardButton.Yes:
+            library_db.clear_cache()
+            self.cache_cleared.emit()
 
     def on_concurrency_changed(self, value: int):
         color_palette = QPalette(self.download_concurrency_edit.parentWidget().palette())

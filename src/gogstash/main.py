@@ -97,7 +97,7 @@ class MainWindow(QMainWindow):
 
         self.games_list = QTableWidget()
         self.games_list.setColumnCount(3)
-        self.games_list.setHorizontalHeaderLabels(['Title', 'Download Size', 'Fetched'])
+        self.games_list.setHorizontalHeaderLabels(['Title', 'Total Size', 'Fetched'])
         self.games_list.setAlternatingRowColors(True)
         self.games_list.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.games_list.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -159,6 +159,7 @@ class MainWindow(QMainWindow):
     def open_settings(self):
         settings_dialog = SettingsDialog(self)
         settings_dialog.exec()
+        self.on_games_loaded(load_library())
 
     def open_downloads(self):
         self.download_window.show()

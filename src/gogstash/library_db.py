@@ -1,7 +1,6 @@
 import sqlite3
 import platformdirs
 from pathlib import Path
-import datetime
 
 def _db_path_helper(filename: str = "goglibrary.db") -> Path:
     config_dir = platformdirs.user_config_path(appname='gogstash')
@@ -51,6 +50,7 @@ def _create_db(force: bool = False) -> None:
                 file_id TEXT,
                 group_id TEXT,
                 size BIGINT,
+                checksum TEXT,
                 timestamp DATETIME,
                 PRIMARY KEY (product_id, group_id, file_id),
                 FOREIGN KEY (product_id, group_id) REFERENCES download_group(product_id, group_id)
@@ -139,6 +139,7 @@ def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
             SELECT
                 p.product_id,
                 p.title,
+                p.slug,
                 COALESCE(dg.download_size, 0) as download_size,
                 COALESCE(ff.fetched_size, 0) as fetched_size,
                 CASE WHEN ff.fetched_size IS NOT NULL THEN 1 ELSE 0 END AS fetched
@@ -158,9 +159,10 @@ def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
     products = [{
         'product_id': p[0],
         'title': p[1],
-        'download_size': p[2],
-        'fetched': p[4],
-        'fetched_size': p[3]
+        'slug': p[2],
+        'download_size': p[3],
+        'fetched_size': p[4],
+        'fetched': p[5]
     } for p in query_result]
     return products
 
@@ -215,6 +217,7 @@ def clear_cache() -> None:
     backup_file = _db_path_helper(backup_filename)
     backup_file.unlink(missing_ok=True)
     db_file.rename(_db_path_helper(backup_filename))
+
 
 if __name__ == "__main__":
     clear_cache()

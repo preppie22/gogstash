@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QDialogButtonBox
+from PySide6.QtWidgets import QDialogButtonBox, QMessageBox
 
 from gogstash import library_db, settings
 from gogstash.settings_dialog import SettingsDialog
@@ -148,7 +148,9 @@ def test_browse_does_not_clear_path_when_dialog_is_cancelled(mock_get_dir):
     assert dialog.download_edit_path.text() == "/existing/path"
 
 
-def test_clear_cache_button_removes_the_active_db_file():
+@patch("gogstash.settings_dialog.QMessageBox.exec")
+def test_clear_cache_button_removes_the_active_db_file_when_confirmed(mock_exec):
+    mock_exec.return_value = QMessageBox.StandardButton.Yes
     library_db.update_products([])  # creates an (empty) db file
     db_path = library_db._db_path_helper()
     assert db_path.exists()
@@ -157,3 +159,16 @@ def test_clear_cache_button_removes_the_active_db_file():
     dialog.clear_cache_button.click()
 
     assert not db_path.exists()
+
+
+@patch("gogstash.settings_dialog.QMessageBox.exec")
+def test_clear_cache_button_keeps_db_file_when_cancelled(mock_exec):
+    mock_exec.return_value = QMessageBox.StandardButton.No
+    library_db.update_products([])  # creates an (empty) db file
+    db_path = library_db._db_path_helper()
+    assert db_path.exists()
+    dialog = SettingsDialog()
+
+    dialog.clear_cache_button.click()
+
+    assert db_path.exists()

@@ -2,6 +2,7 @@ import sys
 from random import randint
 from importlib import resources
 from enum import Enum
+import humanize
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -32,6 +33,7 @@ from PySide6.QtGui import (
     QIcon
 )
 from gogstash.icon_utils import get_icon
+from gogstash.download_queue import estimate_download_size
 
 
 LIGHT_FILL_COLOR = QColor("#4CAF50")
@@ -40,6 +42,7 @@ DARK_FILL_COLOR = QColor("#1B5E20")
 class UserRole(Enum):
     PROGRESS_ROLE = Qt.ItemDataRole.UserRole + 1
     PRODUCT_ID_ROLE = Qt.ItemDataRole.UserRole + 2
+    CUSTOM_DATA = Qt.ItemDataRole.UserRole + 3
 
 class RowItemDelegate(QStyledItemDelegate):
     def __init__(self):
@@ -72,7 +75,7 @@ class DownloadWindow(QDialog):
 
         self.game_queue_table = QTableWidget()
         self.game_queue_table.setColumnCount(2)
-        self.game_queue_table.setHorizontalHeaderLabels(['Product', 'Size'])
+        self.game_queue_table.setHorizontalHeaderLabels(['Product', 'Progress'])
         self.game_queue_table.setAlternatingRowColors(True)
         self.game_queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.game_queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -111,14 +114,19 @@ class DownloadWindow(QDialog):
     def add_to_queue(self, row_data: dict) -> int:
         row_idx = self.game_queue_table.rowCount()
         self.game_queue_table.insertRow(row_idx)
-        first_column = QTableWidgetItem(row_data['title'])
-        first_column.setData(UserRole.PRODUCT_ID_ROLE.value, row_data['product_id'])
-        self.game_queue_table.setItem(row_idx, 0, first_column)
-        self.game_queue_table.setItem(row_idx, 1, QTableWidgetItem(row_data['size']))
+        estimated_size = estimate_download_size(row_data['product_id'])
+        column_data = []
+        column_data.append(QTableWidgetItem(row_data['title']))
+        column_data[0].setData(UserRole.PRODUCT_ID_ROLE.value, row_data['product_id'])
+        column_data.append(QTableWidgetItem(f"0 / {humanize.naturalsize(estimated_size)}"))
+        column_data[1].setData(UserRole.CUSTOM_DATA.value, estimated_size)
+        for i in range(len(column_data)):
+            self.game_queue_table.setItem(row_idx, i, column_data[i])
         self.set_progress(row_idx, 0)
         self.game_queue_table.selectRow(row_idx)
         self.queue_changed.emit(row_idx + 1)
         return row_idx
+
 
     def set_progress(self, row, percent = 0):
         item = self.game_queue_table.item(row, 0)

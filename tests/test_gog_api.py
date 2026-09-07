@@ -114,6 +114,25 @@ def test_get_downloadable_empty_input_makes_no_requests():
         assert result == []
 
 
+@patch("gogstash.gog_api.requests.get")
+def test_resolve_downlink_returns_cdn_url_and_checksum(mock_get):
+    mock_get.return_value = make_response({
+        "downlink": "https://gog-cdn.example.com/secure/offline/111/setup_fake_game.exe",
+        "checksum": "https://gog-cdn.example.com/secure/offline/111/setup_fake_game.exe.xml",
+    })
+
+    result = gog_api.resolve_downlink("mytoken", "https://api.gog.com/products/111/downlink/installer/file1")
+
+    assert mock_get.call_count == 1
+    args, kwargs = mock_get.call_args
+    assert args[0] == "https://api.gog.com/products/111/downlink/installer/file1"
+    assert kwargs["headers"] == {"Authorization": "Bearer mytoken"}
+    assert result == {
+        "downlink": "https://gog-cdn.example.com/secure/offline/111/setup_fake_game.exe",
+        "checksum": "https://gog-cdn.example.com/secure/offline/111/setup_fake_game.exe.xml",
+    }
+
+
 @patch("gogstash.gog_api.fetch_downloadables")
 @patch("gogstash.gog_api.fetch_library")
 def test_library_fetch_thread_bootstraps_when_db_empty(mock_fetch_library, mock_fetch_downloadables):
@@ -130,7 +149,7 @@ def test_library_fetch_thread_bootstraps_when_db_empty(mock_fetch_library, mock_
     mock_fetch_downloadables.assert_called_once_with("token", [111], thread.update_progress)
     assert len(received) == 1
     assert received[0] == [
-        {"product_id": 111, "title": "Fake Game", "download_size": 2000, "fetched_size": 0, "fetched": 0}
+        {"product_id": 111, "title": "Fake Game", "slug": "fake-game", "download_size": 2000, "fetched_size": 0, "fetched": 0}
     ]
 
 
