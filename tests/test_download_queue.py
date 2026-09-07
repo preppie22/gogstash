@@ -172,7 +172,12 @@ def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, tmp_pa
         "downlink": "https://cdn.example.com/setup_fake_game.exe",
         "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
     }
-    mock_get.return_value = make_streamed_response([b"abcd", b"efgh"])
+    # file1's declared size in FAKE_DOWNLOADABLE is 1000 bytes -- the streamed
+    # content must add up to exactly that or the new size-verification check
+    # (part_path size vs file['size']) will treat this as a failed download.
+    chunk_a = b"a" * 400
+    chunk_b = b"b" * 600
+    mock_get.return_value = make_streamed_response([chunk_a, chunk_b])
 
     thread = download_queue.DownloadWorkerThread("token", 111)
     succeeded = []
@@ -184,9 +189,9 @@ def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, tmp_pa
 
     mock_resolve.assert_called_once_with("token", "https://example.com/file1")
     assert failed == []
-    assert succeeded == [[("setup_fake_game.exe", 8)]]
+    assert succeeded == [[("setup_fake_game.exe", 1000)]]
     written = tmp_path / "fake-game" / "installer_windows_en" / "setup_fake_game.exe"
-    assert written.read_bytes() == b"abcdefgh"
+    assert written.read_bytes() == chunk_a + chunk_b
 
 
 @patch("gogstash.download_queue.requests.get")

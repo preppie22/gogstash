@@ -34,22 +34,41 @@ class DownloadWorkerThread(QThread):
             return
         self.total_size = self.total_size + sum(file['size'] for file in self.file_queue)
         for file in self.file_queue:
-            resolved = gog_api.resolve_downlink(self.access_token, file['downlink'])
-            cdn_link = resolved['downlink']
-            filename = urllib.parse.urlparse(cdn_link).path.rsplit('/',-1)[-1]
-            filename = urllib.parse.unquote(filename)
-            save_path: Path = download_path / file['directory'] / filename
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-            download_response = requests.get(cdn_link, stream=True)
             try:
-                with open(save_path, 'wb') as fp:
+                resolved = gog_api.resolve_downlink(self.access_token, file['downlink'])
+                cdn_link = resolved['downlink']
+                download_response = requests.get(cdn_link, stream=True)
+                download_response.raise_for_status()
+                filename = urllib.parse.urlparse(cdn_link).path.rsplit('/',-1)[-1]
+                filename = urllib.parse.unquote(filename)
+            except Exception as e:
+                self.fetched_list.append((f"{file['file']}: {str(e)}", -1))
+                continue
+            try:
+                part_path: Path = download_path / file['directory'] / (filename+'.part')
+                save_path: Path = download_path / file['directory'] / filename
+                save_path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                self.fetched_list.append((f"{file['file']}: {str(e)}", -1))
+                self.failed.emit(str(e), self.fetched_list)
+                break
+            try:
+                with open(part_path, 'wb') as fp:
                     for chunk in download_response.iter_content(chunk_size=1024*1024):
                         bytes_written = fp.write(chunk)
                         self.fetched_size = self.fetched_size + bytes_written
                         self.update_progress()
-                self.fetched_list.append((save_path.name, save_path.stat().st_size))
+                if file['size'] == part_path.stat().st_size:
+                    part_path.rename(save_path)
+                    self.fetched_list.append((save_path.name, save_path.stat().st_size))
+                else:
+                    part_path.unlink()
+                    self.fetched_list.append((save_path.name, -1))
+            except requests.exceptions.RequestException as e:
+                self.fetched_list.append((f"{save_path.name}: {str(e)}", -1))
+                continue
             except Exception as e:
-                self.fetched_list.append((save_path.name, -1))
+                self.fetched_list.append((f"{save_path.name}: {str(e)}", -1))
                 self.failed.emit(str(e), self.fetched_list)
                 break
         else:
