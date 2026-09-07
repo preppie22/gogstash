@@ -180,6 +180,7 @@ def get_downloadables(product_id: tuple[int] = ()) -> list[dict]:
                 df.group_id,
                 df.file_id,
                 df.size,
+                dg.os,
                 df.downlink
             FROM download_file df
             LEFT JOIN download_group dg ON
@@ -194,7 +195,8 @@ def get_downloadables(product_id: tuple[int] = ()) -> list[dict]:
         'group_id': p[2],
         'file_id': p[3],
         'file_size': p[4],
-        'downlink': p[5]
+        'os': p[5],
+        'downlink': p[6]
     } for p in query_result]
     return downloadables
 
