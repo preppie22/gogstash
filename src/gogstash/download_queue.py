@@ -90,13 +90,14 @@ class DownloadWorkerThread(QThread):
             try:
                 resolved = gog_api.resolve_downlink(self.access_token, file['downlink'])
                 cdn_link = resolved['downlink']
-                checksum_link = resolved['checksum']
                 download_response = requests.get(cdn_link, stream=True)
                 download_response.raise_for_status()
-                checksum_response = requests.get(checksum_link)
-                checksum_response.raise_for_status()
-                checksum_xml = ET.fromstring(checksum_response.text)
-                checksum = checksum_xml.attrib['md5']
+                if file['directory'] != 'bonus_content':
+                    checksum_link = resolved['checksum']
+                    checksum_response = requests.get(checksum_link)
+                    checksum_response.raise_for_status()
+                    checksum_xml = ET.fromstring(checksum_response.text)
+                    checksum = checksum_xml.attrib['md5']
                 filename = urllib.parse.urlparse(cdn_link).path.rsplit('/',-1)[-1]
                 filename = urllib.parse.unquote(filename)
             except Exception as e:
@@ -118,9 +119,17 @@ class DownloadWorkerThread(QThread):
                     for chunk in download_response.iter_content(chunk_size=1024*1024):
                         bytes_written = fp.write(chunk)
                         self.fetched_size = self.fetched_size + bytes_written
-                        file_hash.update(chunk)
+                        if file['directory'] != 'bonus_content':
+                            file_hash.update(chunk)
                         self.update_progress()
-                if file_hash.hexdigest() == checksum:
+                verified = False
+                if file['directory'] == 'bonus_content':
+                    if part_path.stat().st_size == content_length:
+                        verified = True
+                else:
+                    if file_hash.hexdigest() == checksum:
+                        verified = True
+                if verified:
                     part_path.rename(save_path)
                     self.fetched_list.append((save_path.name, save_path.stat().st_size))
                 else:
