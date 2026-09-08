@@ -1,3 +1,4 @@
+import hashlib
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -35,7 +36,7 @@ FAKE_DOWNLOADABLE = {
                 "name": "manual (33 pages)",
                 "type": "manuals",
                 "total_size": 500,
-                # "os" intentionally omitted -- GOG's real bonus_content entries
+                # "os" intentionally omitted. GOG's real bonus_content entries
                 # don't carry a platform, so this comes back as None, not "".
                 "files": [
                     {"id": "bonus1", "size": 500, "downlink": "https://example.com/bonus1"},
@@ -98,8 +99,8 @@ def test_bonus_content_excluded_by_default():
 
 
 def test_bonus_content_included_when_enabled_even_with_no_os():
-    # Regression: bonus_content entries have no "os" key (None, not ""), and
-    # the platform filter must not treat that as "wrong platform".
+    # Regression: bonus_content entries have no "os" key at all (None, not "").
+    # Don't let the platform filter mistake that for "wrong platform".
     settings.update_setting("bonus_content", True)
 
     result = download_queue.generate_download_list((111,))
@@ -162,28 +163,40 @@ def make_streamed_response(chunks):
     return response
 
 
+def make_checksum_response(md5: str):
+    response = MagicMock()
+    response.text = f'<file md5="{md5}"/>'
+    return response
+
+
+@patch("gogstash.download_queue.get_valid_token")
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
-def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, tmp_path):
+def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, mock_get_valid_token, tmp_path):
     library_db.update_products([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)  # isolate to the single installer file
+    mock_get_valid_token.return_value = {"access_token": "token"}
     mock_resolve.return_value = {
         "downlink": "https://cdn.example.com/setup_fake_game.exe",
         "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
     }
-    # file1's declared size in FAKE_DOWNLOADABLE is 1000 bytes -- the streamed
+    # file1's declared size in FAKE_DOWNLOADABLE is 1000 bytes, the streamed
     # content must add up to exactly that or the new size-verification check
     # (part_path size vs file['size']) will treat this as a failed download.
     chunk_a = b"a" * 400
     chunk_b = b"b" * 600
-    mock_get.return_value = make_streamed_response([chunk_a, chunk_b])
+    checksum = hashlib.md5(chunk_a + chunk_b).hexdigest()
+    mock_get.side_effect = [
+        make_streamed_response([chunk_a, chunk_b]),  # the real download
+        make_checksum_response(checksum),  # the .xml sidekick that verifies it
+    ]
 
-    thread = download_queue.DownloadWorkerThread("token", 111)
+    thread = download_queue.DownloadWorkerThread(111)
     succeeded = []
     failed = []
     thread.succeeded.connect(lambda result: succeeded.append(result))
-    thread.failed.connect(lambda msg: failed.append(msg))
+    thread.failed.connect(lambda msg, fetched: failed.append(msg))
 
     thread.run()
 
@@ -194,26 +207,81 @@ def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, tmp_pa
     assert written.read_bytes() == chunk_a + chunk_b
 
 
+@patch("gogstash.download_queue.get_valid_token")
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
-def test_download_worker_failure_does_not_also_emit_succeeded(mock_resolve, mock_get, tmp_path):
+def test_download_worker_failure_does_not_also_emit_succeeded(mock_resolve, mock_get, mock_get_valid_token, tmp_path):
     library_db.update_products([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
+    settings.update_setting("patches", False)  # isolate to the single installer file
+    mock_get_valid_token.return_value = {"access_token": "token"}
     mock_resolve.return_value = {
         "downlink": "https://cdn.example.com/setup_fake_game.exe",
         "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
     }
+    # The checksum fetch succeeds fine, the actual download is the one that
+    # faceplants once we start reading it. Needs a real dict for .headers
+    # though, since a bare MagicMock().headers.get(...) is truthy and would
+    # trip up int(cl) before we ever get to the good stuff.
     broken_response = MagicMock()
+    broken_response.headers = {}
     broken_response.iter_content.side_effect = RuntimeError("connection reset")
-    mock_get.return_value = broken_response
+    mock_get.side_effect = [broken_response, make_checksum_response("irrelevant")]
 
-    thread = download_queue.DownloadWorkerThread("token", 111)
+    thread = download_queue.DownloadWorkerThread(111)
     succeeded = []
     failed = []
     thread.succeeded.connect(lambda result: succeeded.append(result))
-    thread.failed.connect(lambda msg: failed.append(msg))
+    thread.failed.connect(lambda msg, fetched: failed.append(msg))
 
     thread.run()
 
     assert failed == ["connection reset"]
     assert succeeded == []  # regression: succeeded must not also fire after failed
+
+
+@patch("gogstash.download_queue.get_valid_token")
+def test_download_worker_fails_immediately_when_no_valid_token(mock_get_valid_token, tmp_path):
+    # Regression: no token, no refresh_token, no soup for you. get_valid_token()
+    # returning None used to send us straight into `None['access_token']`
+    # like nothing happened. Should just report the auth failure and bail.
+    library_db.update_products([FAKE_PRODUCT])
+    settings.update_setting("download_path", str(tmp_path))
+    settings.update_setting("patches", False)
+    mock_get_valid_token.return_value = None
+
+    thread = download_queue.DownloadWorkerThread(111)
+    succeeded = []
+    failed = []
+    thread.succeeded.connect(lambda result: succeeded.append(result))
+    thread.failed.connect(lambda msg, fetched: failed.append(msg))
+
+    thread.run()
+
+    assert failed == ["Authentication failed. Login again."]
+    assert succeeded == []
+
+
+@patch("gogstash.download_queue.get_valid_token")
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_requests_a_fresh_token_per_file(mock_resolve, mock_get, mock_get_valid_token, tmp_path):
+    # Regression: we used to grab one token at thread creation and ride it
+    # for the entire download, expiry be damned. Now every file gets its own
+    # fresh get_valid_token() call. The actual download is set up to eat dirt
+    # immediately, we only care how many times we went back for a token.
+    library_db.update_products([FAKE_PRODUCT])
+    settings.update_setting("download_path", str(tmp_path))
+    settings.update_setting("patches", False)
+    settings.update_setting("bonus_content", True)  # installer + bonus, two files, easy math
+    mock_get_valid_token.return_value = {"access_token": "token"}
+    mock_resolve.return_value = {
+        "downlink": "https://cdn.example.com/file.bin",
+        "checksum": "https://cdn.example.com/file.bin.xml",
+    }
+    mock_get.side_effect = RuntimeError("network boom")
+
+    thread = download_queue.DownloadWorkerThread(111)
+    thread.run()
+
+    assert mock_get_valid_token.call_count == 2

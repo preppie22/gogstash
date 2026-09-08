@@ -152,14 +152,14 @@ def test_open_downloads_does_not_create_a_new_window_each_time():
 
 def test_onclick_queue_download_adds_selected_game_title_once():
     # Regression: games_list has 3 columns per row under SelectRows, so
-    # selectedItems() returns 3 items per selected row; only once all three
-    # columns have been seen for a row should it trigger a single queue add.
+    # selectedItems() hands back 3 items for a single selected row. Naively
+    # wiring that up would queue the same game 3 times instead of once.
     window = MainWindow()
     window.on_games_loaded([FAKE_GAME])  # selects row 0
     captured_calls = []
-    # onclick_queue_download reuses and clears the same dict after each call,
-    # so the mock must snapshot a copy at call time rather than keep the
-    # reference -- asserting on the mock's own call_args would see it emptied.
+    # onclick_queue_download reuses and clears the same dict every call, so if
+    # we just hang onto the reference we'll catch it after it's been wiped.
+    # Snapshot a copy at call time instead, or this test lies to you.
     window.download_window.add_to_queue = MagicMock(
         side_effect=lambda row_data: captured_calls.append(dict(row_data))
     )
@@ -221,8 +221,8 @@ def test_color_scheme_refresh_always_recomputes_the_download_badge():
 
 @patch("gogstash.main.get_icon")
 def test_color_scheme_refresh_skips_the_downloads_toolbar_action(mock_get_icon):
-    # Regression: the badged download-queue icon must not be reloaded plain via
-    # get_icon here, which would wipe out the badge drawn by set_download_badge.
+    # Regression: reloading the download-queue icon plain via get_icon here
+    # would wipe out the badge that set_download_badge drew on it.
     mock_get_icon.side_effect = lambda *args, **kwargs: _non_null_icon()  # distinct icon per call
     window = MainWindow()
     window.set_download_badge = MagicMock()

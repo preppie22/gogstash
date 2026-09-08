@@ -62,8 +62,8 @@ def test_get_icon_loads_from_the_light_folder_for_light_scheme(mock_app_cls, moc
 
 
 def test_badge_icon_returns_the_same_icon_unchanged_when_count_is_zero():
-    # Regression: badge_icon used to take an unused `color` argument and always
-    # draw a badge even for an empty queue; count == 0 should be a no-op.
+    # Regression: badge_icon used to take an unused `color` argument and
+    # would draw a badge even for an empty queue. count == 0 should be a no-op.
     icon = _solid_icon(QColor("blue"))
 
     result = badge_icon(icon, 0)

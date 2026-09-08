@@ -225,7 +225,7 @@ def test_update_downloadables_upsert_updates_existing_rows_not_duplicates():
     groups = query_all("download_group")
     files = query_all("download_file")
 
-    assert len(groups) == 2  # still 2 groups, not 4 -- upsert, not duplicate insert
+    assert len(groups) == 2  # still 2, not 4: upsert not duplicate, we're not that sloppy
     assert len(files) == 3  # still 3 files, not 6
 
     installer_group = next(r for r in groups if r["group_id"] == "installer_windows_en")
@@ -290,11 +290,11 @@ def test_get_product_listing_reflects_fetched_files():
 
 
 def test_get_product_listing_join_does_not_fan_out_sums():
-    # Regression test: product 111 has TWO download_group rows (installer +
-    # bonus_content, totaling 2500) and will get TWO fetched_files rows below.
-    # A naive `LEFT JOIN download_group ... LEFT JOIN fetched_files ...` in a
-    # single query would cross-multiply these (2x2=4 rows) before SUM(), so
-    # both totals would come back doubled if that regression is reintroduced.
+    # Regression: product 111 has TWO download_group rows (installer +
+    # bonus_content, totaling 2500) and gets TWO fetched_files rows below.
+    # A naive `LEFT JOIN download_group ... LEFT JOIN fetched_files ...` in
+    # one query cross-multiplies these into 4 rows before SUM() runs, so
+    # both totals would silently come back doubled if this regresses.
     library_db.update_products([FAKE_PRODUCT])
     library_db.update_downloadables([FAKE_DOWNLOADABLE])
     insert_fetched_file(111, "installer_windows_en", "file1", 100)

@@ -3,12 +3,12 @@ import platformdirs
 import json
 from typing import Any
 
-def _user_data_helper() -> str:
-    data_dir = platformdirs.user_data_dir(appname='gogstash')
-    return data_dir
+def _download_dir_helper() -> str:
+    download_dir = platformdirs.user_downloads_path() / 'GogStash'
+    return str(download_dir)
 
 DEFAULT_SETTINGS = {
-    'download_path': _user_data_helper(),
+    'download_path': _download_dir_helper(),
     'download_concurrency': 2,
     'platform_filter': ['Linux','Windows','MacOS'],
     'verify_downloads': True,

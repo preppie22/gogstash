@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QPixmap
 
 from gogstash.download_window import DownloadWindow, UserRole
+from gogstash.settings import update_setting
 
 
 def _non_null_icon():
@@ -107,3 +108,37 @@ def test_color_scheme_refresh_sets_the_reloaded_icon_on_each_button(mock_get_ico
 
     for button in window.dialog_buttons.buttons():
         assert button.icon().cacheKey() == mock_get_icon.return_value.cacheKey()
+
+
+@patch("gogstash.download_window.DownloadScheduler")
+@patch("gogstash.download_window.estimate_download_size")
+def test_start_downloads_builds_scheduler_from_queued_rows(mock_estimate, mock_scheduler_cls):
+    # Regression: token-fetching moved out to DownloadWorkerThread, so this
+    # window shouldn't be lugging a token around anymore. Just the queue
+    # and a concurrency number, nothing fancier.
+    mock_estimate.return_value = 0
+    update_setting("download_concurrency", 3)
+    window = DownloadWindow()
+    window.add_to_queue(_row(title="First Game", product_id=1))
+    window.add_to_queue(_row(title="Second Game", product_id=2))
+
+    window.start_downloads()
+
+    mock_scheduler_cls.assert_called_once_with(
+        [{"idx": 0, "product_id": 1}, {"idx": 1, "product_id": 2}], 3
+    )
+
+
+@patch("gogstash.download_window.DownloadScheduler")
+@patch("gogstash.download_window.estimate_download_size")
+def test_start_downloads_does_not_require_a_stored_token(mock_estimate, mock_scheduler_cls):
+    # Regression: this used to slam the brakes with ValueError("Invalid
+    # access token") the moment nothing was on disk. Not this window's
+    # problem anymore, the worker threads sort out their own tokens now.
+    mock_estimate.return_value = 0
+    window = DownloadWindow()
+    window.add_to_queue(_row())
+
+    window.start_downloads()  # if this blows up, we've regressed
+
+    mock_scheduler_cls.assert_called_once()
