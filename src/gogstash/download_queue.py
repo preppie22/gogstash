@@ -13,7 +13,7 @@ from PySide6.QtCore import (
 class DownloadScheduler(QObject):
     game_succeeded = Signal(int, list)
     game_failed = Signal(int, str, list)
-    progress_updated = Signal(int, int, int)
+    progress_updated = Signal(int, float, float)
     finished = Signal()
 
     def __init__(self, access_token, product_queue: list[dict], concurrency: int = 1, parent=None):
@@ -60,7 +60,7 @@ class DownloadScheduler(QObject):
 class DownloadWorkerThread(QThread):
     succeeded = Signal(list)
     failed = Signal(str, list)
-    progress = Signal(int, int)
+    progress = Signal(float, float)
 
     def __init__(self, access_token, product_id: int, parent=None):
         super().__init__(parent)
@@ -112,24 +112,37 @@ class DownloadWorkerThread(QThread):
                     part_path.rename(save_path)
                     self.fetched_list.append((save_path.name, save_path.stat().st_size))
                 else:
-                    part_path.unlink()
-                    self.fetched_list.append((save_path.name, -1))
+                    # part_path.unlink()
+                    failed_path: Path = download_path / file['directory'] / (filename+'.fail')
+                    actual_size = part_path.stat().st_size
+                    part_path.rename(failed_path)
+                    self.fetched_list.append((save_path.name, -1, file['size'], actual_size))
             except requests.exceptions.RequestException as e:
-                self.fetched_list.append((f"{save_path.name}: {str(e)}", -1))
+                self.fetched_list.append((f"{save_path.name}: {str(e)}", -1, file['size'], _safe_size(part_path)))
                 continue
             except Exception as e:
-                self.fetched_list.append((f"{save_path.name}: {str(e)}", -1))
+                self.fetched_list.append((f"{save_path.name}: {str(e)}", -1, file['size'], _safe_size(part_path)))
                 self.failed.emit(str(e), self.fetched_list)
                 break
         else:
-            self.succeeded.emit(self.fetched_list)
+            for item in self.fetched_list:
+                if item[1] > -1:
+                    self.succeeded.emit(self.fetched_list)
+                    break
+            else:
+                self.failed.emit("All files failed to download", self.fetched_list)
 
 
     def update_progress(self):
         self.progress.emit(self.fetched_size, self.total_size)
 
 
-
+def _safe_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+    
 def _platform_helper(platforms: list[str]) -> list[str]:
     platform_filter = []
     if 'Linux' in platforms:

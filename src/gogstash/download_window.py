@@ -1,6 +1,7 @@
 import sys
 from random import randint
 from importlib import resources
+import platformdirs
 from enum import Enum
 import humanize
 
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QStyledItemDelegate,
     QStyleOptionViewItem,
+    QProgressBar
 )
 from PySide6.QtCore import ( 
     Qt,
@@ -33,7 +35,9 @@ from PySide6.QtGui import (
     QIcon
 )
 from gogstash.icon_utils import get_icon
-from gogstash.download_queue import estimate_download_size
+from gogstash.download_queue import DownloadScheduler, estimate_download_size
+from gogstash.gog_auth import get_valid_token
+from gogstash.settings import read_setting
 
 
 LIGHT_FILL_COLOR = QColor("#4CAF50")
@@ -42,7 +46,8 @@ DARK_FILL_COLOR = QColor("#1B5E20")
 class UserRole(Enum):
     PROGRESS_ROLE = Qt.ItemDataRole.UserRole + 1
     PRODUCT_ID_ROLE = Qt.ItemDataRole.UserRole + 2
-    CUSTOM_DATA = Qt.ItemDataRole.UserRole + 3
+    TOTAL_SIZE = Qt.ItemDataRole.UserRole + 3
+    FETCHED_SIZE = Qt.ItemDataRole.UserRole + 4
 
 class RowItemDelegate(QStyledItemDelegate):
     def __init__(self):
@@ -71,6 +76,9 @@ class DownloadWindow(QDialog):
         self.setWindowTitle("Download Queue")
         self.setMinimumHeight(400)
 
+        self.log_file = platformdirs.user_config_path(appname='gogstash') / 'downloads.log'
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
+
         self.window_layout = QVBoxLayout()
 
         self.game_queue_table = QTableWidget()
@@ -89,11 +97,16 @@ class DownloadWindow(QDialog):
         self.clear_queue_button.setIcon(get_icon('trash.svg'))
         self.clear_queue_button.setProperty('iconFile', 'trash.svg')
         self.start_pause_button = QPushButton("Start Downloads")
+        self.start_pause_button.clicked.connect(self.start_downloads)
         self.start_pause_button.setIcon(get_icon('start_download.svg'))
         self.start_pause_button.setProperty('iconFile', 'start_download.svg')
         self.stop_button = QPushButton("Stop Downloads")
         self.stop_button.setIcon(get_icon('stop.svg'))
         self.stop_button.setProperty('iconFile', 'stop.svg')
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.window_layout.addWidget(self.progress_bar)
 
         self.dialog_buttons = QDialogButtonBox()
         self.dialog_buttons.addButton(self.start_pause_button, QDialogButtonBox.ButtonRole.ActionRole)
@@ -119,7 +132,8 @@ class DownloadWindow(QDialog):
         column_data.append(QTableWidgetItem(row_data['title']))
         column_data[0].setData(UserRole.PRODUCT_ID_ROLE.value, row_data['product_id'])
         column_data.append(QTableWidgetItem(f"0 / {humanize.naturalsize(estimated_size)}"))
-        column_data[1].setData(UserRole.CUSTOM_DATA.value, estimated_size)
+        column_data[1].setData(UserRole.TOTAL_SIZE.value, estimated_size)
+        column_data[1].setData(UserRole.FETCHED_SIZE.value, 0)
         for i in range(len(column_data)):
             self.game_queue_table.setItem(row_idx, i, column_data[i])
         self.set_progress(row_idx, 0)
@@ -127,6 +141,64 @@ class DownloadWindow(QDialog):
         self.queue_changed.emit(row_idx + 1)
         return row_idx
 
+    def start_downloads(self):
+        token = get_valid_token()
+        concurrency = read_setting('download_concurrency')
+        if not token:
+            raise ValueError("Invalid access token") 
+        product_queue = []
+        for idx in range(self.game_queue_table.rowCount()):
+            product_queue.append({
+                'idx': idx,
+                'product_id': self.game_queue_table.item(idx, 0).data(UserRole.PRODUCT_ID_ROLE.value)
+            })
+        self.scheduler = DownloadScheduler(token['access_token'], product_queue, concurrency)
+        self.scheduler.game_succeeded.connect(self._on_game_succeeded)
+        self.scheduler.game_failed.connect(self._on_game_failed)
+        self.scheduler.progress_updated.connect(self._on_progress)
+        self.scheduler.finished.connect(self._on_finished)
+        self.start_pause_button.setDisabled(True)
+        self.scheduler.dispatch()
+
+    def _on_progress(self, row_idx, fetched, total):
+        self.set_progress(row_idx, fetched*100/total)
+        self.game_queue_table.item(row_idx, 1).setText(f"{humanize.naturalsize(fetched)} / {humanize.naturalsize(total)}")
+        self.game_queue_table.item(row_idx, 1).setData(UserRole.FETCHED_SIZE.value, fetched)
+        self.game_queue_table.item(row_idx, 1).setData(UserRole.TOTAL_SIZE.value, total)
+        total_size = 0
+        fetched_size = 0
+        for idx in range(self.game_queue_table.rowCount()):
+            current_total_size = self.game_queue_table.item(idx, 1).data(UserRole.TOTAL_SIZE.value)
+            current_fetched_size = self.game_queue_table.item(idx, 1).data(UserRole.FETCHED_SIZE.value)
+            total_size = total_size + current_total_size
+            fetched_size = fetched_size + current_fetched_size
+        self.progress_bar.setValue(fetched_size * 100 / total_size)
+        return
+
+    def _on_game_succeeded(self, row_idx, fetched_list):
+        print(fetched_list)
+        self.set_progress(row_idx, 100)
+        total = self.game_queue_table.item(row_idx, 1).data(UserRole.TOTAL_SIZE.value)
+        self.game_queue_table.item(row_idx, 1).setData(UserRole.FETCHED_SIZE.value, total)
+        self.game_queue_table.item(row_idx, 1).setText(f"{humanize.naturalsize(total)} / {humanize.naturalsize(total)}")
+        with open(self.log_file, 'a') as fp:
+            for item in fetched_list:
+                fp.write(f"{item[0]} : {item[1]}\n")
+
+    def _on_game_failed(self, row_idx, msg, fetched_list):
+        print(fetched_list)
+        self.game_queue_table.item(row_idx,0).setToolTip(msg)
+        with open(self.log_file, 'a') as fp:
+            for item in fetched_list:
+                if len(item) > 2:
+                    fp.write(f"{item[0]}; Failed; expected={item[2]}; fetched={item[3]}\n")
+                else:
+                    fp.write(f"{item[0]} : {item[1]}\n")
+
+
+    def _on_finished(self):
+        self.start_pause_button.setDisabled(False)
+        self.progress_bar.setValue(self.progress_bar.maximum())
 
     def set_progress(self, row, percent = 0):
         item = self.game_queue_table.item(row, 0)

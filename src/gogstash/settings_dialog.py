@@ -186,6 +186,7 @@ class SettingsDialog(QDialog):
         if response == QMessageBox.StandardButton.Yes:
             library_db.clear_cache()
             self.cache_cleared.emit()
+        self.current_cache_label = QLabel(f"Size: {humanize.naturalsize(library_db.get_cache_size())}")
 
     def on_concurrency_changed(self, value: int):
         color_palette = QPalette(self.download_concurrency_edit.parentWidget().palette())
