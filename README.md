@@ -1,6 +1,6 @@
 <p align="center">
   <picture>
-    <img src="logo.svg" alt="GogStash" width="300"/>
+    <img src="packaging/icons/logo_512.png" alt="GogStash" width="300"/>
   </picture>
 </p>
 
