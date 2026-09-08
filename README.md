@@ -90,10 +90,10 @@ gogstash
 > Games will download to a folder called GogStash in your default "Download" location. You can change this in the settings.
 
 1. Click on the Login button in the toolbar and login to your GOG account.
-2. Once the status changes to "Logged in", click on the "Fetch Games" button to fetch your library.
-3. Select the games you want to download and click on the "Add to Download Queue" button. Optionally, double clicking on a game also adds it to the queue.
-4. Click on the "Show Download Queue" button on the right or in the toolbar.
-5. Click on "Start Downloads".
+2. Once the status changes to "Logged in", click on the `Refresh Games List` button to fetch your library.
+3. Select the games you want to download and click on the `Add to Download Queue` button. Optionally, double clicking on a game also adds it to the queue.
+4. Click on the `Show Download Queue` button on the right or in the toolbar.
+5. Click on `Start Downloads`.
 
 ## AI Disclaimer
 
