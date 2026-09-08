@@ -1,3 +1,9 @@
+<p align="center">
+  <picture>
+    <img src="logo.svg" alt="GogStash" width="300"/>
+  </picture>
+</p>
+
 # GogStash
 
 A desktop GUI, built with PySide6, for downloading and keeping local backups
