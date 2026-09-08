@@ -4,6 +4,9 @@ from gogstash import gog_api
 from pathlib import Path
 import urllib
 import requests
+import hashlib
+import xml.etree.ElementTree as ET
+import re
 
 from PySide6.QtCore import (
     QThread,
@@ -87,8 +90,13 @@ class DownloadWorkerThread(QThread):
             try:
                 resolved = gog_api.resolve_downlink(self.access_token, file['downlink'])
                 cdn_link = resolved['downlink']
+                checksum_link = resolved['checksum']
                 download_response = requests.get(cdn_link, stream=True)
                 download_response.raise_for_status()
+                checksum_response = requests.get(checksum_link)
+                checksum_response.raise_for_status()
+                checksum_xml = ET.fromstring(checksum_response.text)
+                checksum = checksum_xml.attrib['md5']
                 filename = urllib.parse.urlparse(cdn_link).path.rsplit('/',-1)[-1]
                 filename = urllib.parse.unquote(filename)
             except Exception as e:
@@ -103,12 +111,16 @@ class DownloadWorkerThread(QThread):
                 self.failed.emit(str(e), self.fetched_list)
                 break
             try:
+                content_length = int(cl) if (cl:= download_response.headers.get('Content-Length')) else 0
+                self.total_size += (content_length - file['size'])
+                file_hash = hashlib.md5()
                 with open(part_path, 'wb') as fp:
                     for chunk in download_response.iter_content(chunk_size=1024*1024):
                         bytes_written = fp.write(chunk)
                         self.fetched_size = self.fetched_size + bytes_written
+                        file_hash.update(chunk)
                         self.update_progress()
-                if file['size'] == part_path.stat().st_size:
+                if file_hash.hexdigest() == checksum:
                     part_path.rename(save_path)
                     self.fetched_list.append((save_path.name, save_path.stat().st_size))
                 else:
@@ -135,7 +147,6 @@ class DownloadWorkerThread(QThread):
 
     def update_progress(self):
         self.progress.emit(self.fetched_size, self.total_size)
-
 
 def _safe_size(path: Path) -> int:
     try:

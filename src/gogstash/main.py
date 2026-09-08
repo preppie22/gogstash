@@ -96,6 +96,7 @@ class MainWindow(QMainWindow):
         self.central_widget.setLayout(self.central_layout)
 
         self.games_list = QTableWidget()
+        self.games_list.cellDoubleClicked.connect(self.doubleclick_game_list)
         self.games_list.setColumnCount(3)
         self.games_list.setHorizontalHeaderLabels(['Title', 'Total Size', 'Fetched'])
         self.games_list.setAlternatingRowColors(True)
@@ -189,6 +190,13 @@ class MainWindow(QMainWindow):
             elif item.column() == 2:
                 self.download_window.add_to_queue(row_data.copy())
                 row_data.clear()
+
+    def doubleclick_game_list(self, row, _):
+        row_data = {}
+        row_data['product_id'] = self.games_list.item(row, 0).data(UserRole.PRODUCT_ID_ROLE.value)
+        row_data['title'] = self.games_list.item(row, 0).text()
+        row_data['size'] = self.games_list.item(row, 1).text()
+        self.download_window.add_to_queue(row_data.copy())
 
     def update_fetch_progress(self, progress: int):
         if not self.status_progress.isVisible():

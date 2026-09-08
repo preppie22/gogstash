@@ -74,8 +74,8 @@ class SettingsDialog(QDialog):
 
         # Verify Downloads
         self.verify_downloads_check = QCheckBox()
-        self.verify_downloads_check.setToolTip("Verify files with checksums (slower)")
-        self.window_layout.addRow("Verify Downloads", self.verify_downloads_check)
+        self.verify_downloads_check.setToolTip("Do not redownload files that exist on disk")
+        self.window_layout.addRow("Prevent Redownload", self.verify_downloads_check)
 
         # Download Filters
         self.download_categories_layout = QHBoxLayout()
