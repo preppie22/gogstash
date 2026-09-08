@@ -226,8 +226,11 @@ class MainWindow(QMainWindow):
         self.games_list.selectRow(0)
         self.games_list.setFocus()
 
-if __name__ == "__main__":
+def main():
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()

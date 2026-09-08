@@ -27,6 +27,9 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/preppie22/gogstash"
 
+[project.scripts]
+gogstash = "gogstash.main:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest",
