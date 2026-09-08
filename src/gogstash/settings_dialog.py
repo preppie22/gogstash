@@ -16,7 +16,9 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QLabel,
     QDialogButtonBox,
-    QMessageBox
+    QMessageBox,
+    QSpacerItem,
+    QSizePolicy
 )
 from PySide6.QtCore import (
     Qt,
@@ -24,7 +26,9 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QPalette,
-    QColor
+    QColor,
+    QAction,
+    QIcon
 )
 from gogstash import settings
 from gogstash import library_db
@@ -38,16 +42,20 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
 
         self.window_layout = QFormLayout()
+        self.window_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.setLayout(self.window_layout)
 
         # Download Path
-        self.download_edit = QHBoxLayout()
+        # self.download_edit = QHBoxLayout()
         self.download_edit_path = QLineEdit()
-        self.download_edit_browse = QPushButton("Browse")
-        self.download_edit_browse.clicked.connect(self.onclick_browse_download_path)
-        self.download_edit.addWidget(self.download_edit_path)
-        self.download_edit.addWidget(self.download_edit_browse)
-        self.window_layout.addRow("Download Directory", self.download_edit)
+        browse_action = QAction(QIcon.fromTheme('folder-open'), "Browse", self.download_edit_path)
+        browse_action.triggered.connect(self.onclick_browse_download_path)
+        self.download_edit_path.addAction(browse_action, QLineEdit.ActionPosition.TrailingPosition)
+        # self.download_edit_browse = QPushButton("Browse")
+        # self.download_edit_browse.clicked.connect(self.onclick_browse_download_path)
+        # self.download_edit.addWidget(self.download_edit_browse)
+        # self.download_edit.addWidget(self.download_edit_path)
+        self.window_layout.addRow("Download Directory", self.download_edit_path)
 
         # Download Concurrency
         self.download_concurrency_edit = QSpinBox()
@@ -90,6 +98,9 @@ class SettingsDialog(QDialog):
         for checkbox in self.download_categories_check.items():
             self.download_categories_layout.addWidget(checkbox[1])
         self.window_layout.addRow("Download Categories", self.download_categories_layout)
+
+        # Spacer
+        self.window_layout.addItem(QSpacerItem(0, 16, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
 
         # Cache
         self.cache_groupbox = QGroupBox("Library Cache")
@@ -177,8 +188,8 @@ class SettingsDialog(QDialog):
         confirmation = QMessageBox()
         confirmation.setIcon(QMessageBox.Icon.Question)
         confirmation.setWindowTitle("Clear Cache")
-        confirmation.setText("Cache rebuild can take a long time for large libraries.")
-        confirmation.setInformativeText("Are you sure you want to clear cache?")
+        confirmation.setInformativeText("Cache rebuild can take a long time for large libraries.")
+        confirmation.setText("Are you sure you want to clear cache?")
         confirmation.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         confirmation.setDefaultButton(QMessageBox.StandardButton.No)
         confirmation.setEscapeButton(QMessageBox.StandardButton.No)
