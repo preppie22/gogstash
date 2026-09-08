@@ -1,6 +1,5 @@
 import sys
 from random import randint
-from importlib import resources
 import platformdirs
 from enum import Enum
 import humanize
@@ -13,7 +12,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
     QVBoxLayout,
-    QHBoxLayout,
     QPushButton,
     QDialogButtonBox,
     QStyledItemDelegate,
@@ -32,11 +30,9 @@ from PySide6.QtGui import (
     QColor,
     QShortcut,
     QKeySequence,
-    QIcon
 )
 from gogstash.icon_utils import get_icon
 from gogstash.download_queue import DownloadScheduler, estimate_download_size
-from gogstash.gog_auth import get_valid_token
 from gogstash.settings import read_setting
 
 
@@ -142,17 +138,14 @@ class DownloadWindow(QDialog):
         return row_idx
 
     def start_downloads(self):
-        token = get_valid_token()
         concurrency = read_setting('download_concurrency')
-        if not token:
-            raise ValueError("Invalid access token") 
         product_queue = []
         for idx in range(self.game_queue_table.rowCount()):
             product_queue.append({
                 'idx': idx,
                 'product_id': self.game_queue_table.item(idx, 0).data(UserRole.PRODUCT_ID_ROLE.value)
             })
-        self.scheduler = DownloadScheduler(token['access_token'], product_queue, concurrency)
+        self.scheduler = DownloadScheduler(product_queue, concurrency)
         self.scheduler.game_succeeded.connect(self._on_game_succeeded)
         self.scheduler.game_failed.connect(self._on_game_failed)
         self.scheduler.progress_updated.connect(self._on_progress)

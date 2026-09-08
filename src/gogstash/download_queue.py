@@ -1,12 +1,12 @@
 from gogstash import library_db
 from gogstash import settings
 from gogstash import gog_api
+from gogstash.gog_auth import get_valid_token
 from pathlib import Path
 import urllib
 import requests
 import hashlib
 import xml.etree.ElementTree as ET
-import re
 
 from PySide6.QtCore import (
     QThread,
@@ -19,7 +19,7 @@ class DownloadScheduler(QObject):
     progress_updated = Signal(int, float, float)
     finished = Signal()
 
-    def __init__(self, access_token, product_queue: list[dict], concurrency: int = 1, parent=None):
+    def __init__(self, product_queue: list[dict], concurrency: int = 1, parent=None):
         super().__init__(parent)
         if concurrency < 1:
             raise ValueError("Concurrency must be more than 0")
@@ -29,7 +29,7 @@ class DownloadScheduler(QObject):
         for product in product_queue:
             queue_item = {
                 'row_idx': product['idx'],
-                'worker': DownloadWorkerThread(access_token, product['product_id']),
+                'worker': DownloadWorkerThread(product['product_id']),
             }
             self.download_queue.append(queue_item)
 
@@ -65,9 +65,8 @@ class DownloadWorkerThread(QThread):
     failed = Signal(str, list)
     progress = Signal(float, float)
 
-    def __init__(self, access_token, product_id: int, parent=None):
+    def __init__(self, product_id: int, parent=None):
         super().__init__(parent)
-        self.access_token = access_token
         self.product_id = product_id
         self.file_queue = None
         self.fetched_list = []
@@ -87,8 +86,12 @@ class DownloadWorkerThread(QThread):
             return
         self.total_size = self.total_size + sum(file['size'] for file in self.file_queue)
         for file in self.file_queue:
+            auth_token = get_valid_token()
+            if not auth_token:
+                self.failed.emit("Authentication failed. Login again.",self.fetched_list)
+                return
             try:
-                resolved = gog_api.resolve_downlink(self.access_token, file['downlink'])
+                resolved = gog_api.resolve_downlink(auth_token['access_token'], file['downlink'])
                 cdn_link = resolved['downlink']
                 download_response = requests.get(cdn_link, stream=True)
                 download_response.raise_for_status()
