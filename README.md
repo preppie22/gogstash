@@ -55,7 +55,7 @@ GogStash/
 
 ```
 
-## Goals
+## To Do
 
 - [ ] Stop/pause a download once it's started
 - [ ] Resume a paused or interrupted download instead of starting over
