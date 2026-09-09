@@ -150,8 +150,10 @@ class DownloadWindow(QDialog):
         self.scheduler.game_failed.connect(self._on_game_failed)
         self.scheduler.progress_updated.connect(self._on_progress)
         self.scheduler.finished.connect(self._on_finished)
+        self.scheduler.game_stopped.connect(self._on_game_stopped)
+        self.scheduler.stopped.connect(self._on_stopped)
         self.start_pause_button.setDisabled(True)
-        self.scheduler.dispatch()
+        self.scheduler.schedule()
 
     def _on_progress(self, row_idx, fetched, total):
         self.set_progress(row_idx, fetched*100/total)
@@ -188,6 +190,11 @@ class DownloadWindow(QDialog):
                 else:
                     fp.write(f"{item[0]} : {item[1]}\n")
 
+    def _on_game_stopped(self, row_idx):
+        return
+
+    def _on_stopped(self):
+        return
 
     def _on_finished(self):
         self.start_pause_button.setDisabled(False)

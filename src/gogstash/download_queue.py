@@ -16,13 +16,18 @@ from PySide6.QtCore import (
 class DownloadScheduler(QObject):
     game_succeeded = Signal(int, list)
     game_failed = Signal(int, str, list)
+    game_stopped = Signal(int)
     progress_updated = Signal(int, float, float)
     finished = Signal()
+    stopped = Signal()
+
+    _stopped_flag = False
 
     def __init__(self, product_queue: list[dict], concurrency: int = 1, parent=None):
         super().__init__(parent)
         if concurrency < 1:
             raise ValueError("Concurrency must be more than 0")
+        self.max_tokens = concurrency
         self.tokens = concurrency
         self.download_queue = []
         self.active_queue = []
@@ -30,32 +35,58 @@ class DownloadScheduler(QObject):
             queue_item = {
                 'row_idx': product['idx'],
                 'worker': DownloadWorkerThread(product['product_id']),
+                'stopped': False
             }
             self.download_queue.append(queue_item)
 
-    def dispatch(self):
+    def stop_all(self):
+        self._stopped_flag = True
+        for job in self.active_queue:
+            job['worker'].stop_worker()
+        for task in self.download_queue:
+            task['stopped'] = True
+
+    def schedule(self):
         while self.tokens > 0 and self.download_queue:
-            task = self.download_queue.pop(0)
-            task['worker'].succeeded.connect(lambda fetched_list, t=task: self._handle_success(t, fetched_list))
-            task['worker'].failed.connect(lambda msg, fetched_list, t=task: self._handle_failure(t, msg, fetched_list))
-            task['worker'].progress.connect(lambda fetched_size, total_size, t=task: self._report_progress(t, fetched_size, total_size))
-            self.active_queue.append(task)
-            self.tokens = self.tokens - 1
-            task['worker'].start()
+            job = self.download_queue.pop(0)
+            if job['stopped']:
+                self.game_stopped.emit(job['row_idx'])
+            else:
+                self._dispatch(job)
         if not self.download_queue and not self.active_queue:
-            self.finished.emit()
+            if self._stopped_flag:
+                self.stopped.emit()
+            else:
+                self.finished.emit()
+
+    def _dispatch(self, job: dict):
+        job['worker'].succeeded.connect(lambda fetched_list, t=job: self._handle_success(t, fetched_list))
+        job['worker'].failed.connect(lambda msg, fetched_list, t=job: self._handle_failure(t, msg, fetched_list))
+        job['worker'].progress.connect(lambda fetched_size, total_size, t=job: self._report_progress(t, fetched_size, total_size))
+        job['worker'].stopped.connect(lambda t=job: self._handle_stopped(t))
+        self.active_queue.append(job)
+        self.tokens = self.tokens - 1
+        job['worker'].start()
+
+    def _reap(self, job: dict):
+        if job in self.active_queue:
+            self.active_queue.remove(job)
+            self.tokens = self.tokens + 1
 
     def _handle_success(self, job: dict, fetched_list: list) -> None:
         self.game_succeeded.emit(job['row_idx'], fetched_list)
-        self.active_queue.remove(job)
-        self.tokens = self.tokens + 1
-        self.dispatch()
+        self._reap(job)
+        self.schedule()
+
+    def _handle_stopped(self, job: dict) -> None:
+        self.game_stopped.emit(job['row_idx'])
+        self._reap(job)
+        self.schedule()
 
     def _handle_failure(self, job: dict, msg: str, fetched_list: list) -> None:
         self.game_failed.emit(job['row_idx'], msg, fetched_list)
-        self.active_queue.remove(job)
-        self.tokens = self.tokens + 1
-        self.dispatch()
+        self._reap(job)
+        self.schedule()
 
     def _report_progress(self, job: dict, fetched: int, total: int) -> None:
         self.progress_updated.emit(job['row_idx'], fetched, total)
@@ -64,6 +95,9 @@ class DownloadWorkerThread(QThread):
     succeeded = Signal(list)
     failed = Signal(str, list)
     progress = Signal(float, float)
+    stopped = Signal()
+
+    _stop_flag = False
 
     def __init__(self, product_id: int, parent=None):
         super().__init__(parent)
@@ -125,6 +159,12 @@ class DownloadWorkerThread(QThread):
                         if file['directory'] != 'bonus_content':
                             file_hash.update(chunk)
                         self.update_progress()
+                        if self._stop_flag:
+                            self.stopped.emit()
+                            return
+                if self._stop_flag:
+                    self.stopped.emit()
+                    return
                 verified = False
                 if file['directory'] == 'bonus_content':
                     if part_path.stat().st_size == content_length:
@@ -156,6 +196,8 @@ class DownloadWorkerThread(QThread):
             else:
                 self.failed.emit("All files failed to download", self.fetched_list)
 
+    def stop_worker(self):
+        self._stop_flag = True
 
     def update_progress(self):
         self.progress.emit(self.fetched_size, self.total_size)
