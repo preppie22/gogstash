@@ -132,7 +132,7 @@ def test_start_downloads_builds_scheduler_from_queued_rows(mock_estimate, mock_s
 @patch("gogstash.download_window.DownloadScheduler")
 @patch("gogstash.download_window.estimate_download_size")
 def test_start_downloads_does_not_require_a_stored_token(mock_estimate, mock_scheduler_cls):
-    # Regression: this used to slam the brakes with ValueError("Invalid
+    # Regression: this used to puke ValueError("Invalid
     # access token") the moment nothing was on disk. Not this window's
     # problem anymore, the worker threads sort out their own tokens now.
     mock_estimate.return_value = 0
@@ -142,3 +142,62 @@ def test_start_downloads_does_not_require_a_stored_token(mock_estimate, mock_sch
     window.start_downloads()  # if this blows up, we've regressed
 
     mock_scheduler_cls.assert_called_once()
+
+
+def test_stop_downloads_does_not_crash_without_a_scheduler():
+    # Regression: stop_downloads() used to call self.scheduler.stop_all() no
+    # questions asked, a great way to raise AttributeError if Stop gets
+    # clicked before Start ever ran, or after a previous stop already
+    # jacked the scheduler back to None.
+    window = DownloadWindow()
+
+    window.stop_downloads()  # must not raise
+
+
+@patch("gogstash.download_window.DownloadScheduler")
+@patch("gogstash.download_window.estimate_download_size")
+def test_on_stopped_reenables_start_button_and_clears_scheduler(mock_estimate, mock_scheduler_cls):
+    # Regression: _on_stopped() forgot to re-enable start_pause_button, so
+    # one stopped download later, Start stayed disabled.
+    # "Have you tried turning it off and on again" is not a UX strategy.
+    mock_estimate.return_value = 0
+    window = DownloadWindow()
+    window.add_to_queue(_row())
+    window.start_downloads()
+    assert window.start_pause_button.isEnabled() is False
+
+    window._on_stopped()
+
+    assert window.start_pause_button.isEnabled() is True
+    assert window.scheduler is None
+
+
+@patch("gogstash.download_window.estimate_download_size")
+def test_on_game_stopped_logs_partial_failures_like_on_game_failed_does(mock_estimate):
+    # A stopped job's fetched_list can be a grab bag: completed files
+    # (2-tuples) sitting right next to per-file failures from before the
+    # stop landed (4-tuples with expected/actual size). _on_game_stopped
+    # should format each the way _on_game_failed already does, not flatten
+    # everything to "name : -1" and chuck the size details.
+    mock_estimate.return_value = 2_000_000_000
+    window = DownloadWindow()
+    window.add_to_queue(_row())
+
+    window._on_game_stopped(0, [("good.exe", 500), ("bad.exe", -1, 1000, 400)])
+
+    log_contents = window.log_file.read_text()
+    assert "good.exe : 500" in log_contents
+    assert "bad.exe; Failed; expected=1000; fetched=400" in log_contents
+
+
+@patch("gogstash.download_window.estimate_download_size")
+def test_on_game_stopped_resets_row_progress_and_size_text(mock_estimate):
+    mock_estimate.return_value = 2_000_000_000  # 2.0 GB
+    window = DownloadWindow()
+    window.add_to_queue(_row())
+    window.set_progress(0, 55)
+
+    window._on_game_stopped(0, [])
+
+    assert window.game_queue_table.item(0, 0).data(UserRole.PROGRESS_ROLE.value) == 0
+    assert window.game_queue_table.item(0, 1).text() == "0 / 2.0 GB"
