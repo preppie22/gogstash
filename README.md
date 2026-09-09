@@ -28,7 +28,7 @@ What's working:
 - Settings menu.
 
 What's not working:
-- Stopping downloads once they've been started.
+- ~~Stopping downloads once they've been started.~~
 - Removing or clearing the download queue (just restart the application).
 - Verify if files exist before redownloading them.
 - Adding fetched files to local cache.
@@ -57,7 +57,8 @@ GogStash/
 
 ## To Do
 
-- [ ] Stop/pause a download once it's started
+- [X] Stop downloads once they're started
+- [ ] Pause downloads once they're started
 - [ ] Resume a paused or interrupted download instead of starting over
 - [ ] Skip re-downloading files that already exist and check out
 - [ ] Record fetched files in the local cache so the library view reflects what you actually have
@@ -94,6 +95,14 @@ gogstash
 3. Select the games you want to download and click on the `Add to Download Queue` button. Optionally, double clicking on a game also adds it to the queue.
 4. Click on the `Show Download Queue` button on the right or in the toolbar.
 5. Click on `Start Downloads`.
+
+## Config Directory
+
+| Platform  | Path  |
+| -         |     - |
+| Linux     | `~/.config/gogstash/` or `$XDG_CONFIG_HOME/gogstash/` |
+| Windows   | `%USERPROFILE%\AppData\Local\gogstash\`               |
+| MacOS     | `~/Library/Application Support/gogstash/`             |
 
 ## AI Disclaimer
 
