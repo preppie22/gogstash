@@ -35,9 +35,6 @@ appimage-build/
 !provisional/
 !images/
 
-# Local reference material
-/reference/
-
 # OS cruft
 .DS_Store
 
