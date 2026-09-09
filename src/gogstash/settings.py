@@ -1,14 +1,10 @@
-from pathlib import Path
-import platformdirs
 import json
 from typing import Any
 
-def _download_dir_helper() -> str:
-    download_dir = platformdirs.user_downloads_path() / 'GogStash'
-    return str(download_dir)
+from gogstash import paths
 
 DEFAULT_SETTINGS = {
-    'download_path': _download_dir_helper(),
+    'download_path': str(paths.default_download_path()),
     'download_concurrency': 2,
     'platform_filter': ['Linux','Windows','MacOS'],
     'verify_downloads': True,
@@ -18,12 +14,8 @@ DEFAULT_SETTINGS = {
     'theme': 'System'
 }
 
-def _settings_path_helper(filename: str = "settings.json") -> Path:
-    config_dir = platformdirs.user_config_path(appname='gogstash', appauthor=False)
-    return config_dir / filename
-
 def _create_settings(force: bool = False) -> None:
-    settings_file = _settings_path_helper()
+    settings_file = paths.config_file_path(paths.ConfigFile.SETTINGS)
     if settings_file.exists() and not force:
         return
     settings_file.parent.mkdir(parents=True, exist_ok=True)
@@ -31,14 +23,14 @@ def _create_settings(force: bool = False) -> None:
         json.dump(obj=DEFAULT_SETTINGS, fp=sfw, indent=2)
 
 def _write_settings(settings: dict) -> None:
-    settings_file = _settings_path_helper()
+    settings_file = paths.config_file_path(paths.ConfigFile.SETTINGS)
     if not settings_file.exists():
         _create_settings()
     with open(settings_file, 'w') as sfw:
         json.dump(obj=settings, fp=sfw, indent=2)
 
 def _read_settings() -> dict:
-    settings_file = _settings_path_helper()
+    settings_file = paths.config_file_path(paths.ConfigFile.SETTINGS)
     if not settings_file.exists():
         _create_settings()
     with open(settings_file, 'r') as sfr:

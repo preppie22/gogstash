@@ -1,6 +1,5 @@
 import sys
 from random import randint
-import platformdirs
 from enum import Enum
 import humanize
 
@@ -35,6 +34,7 @@ from PySide6.QtGui import (
 from gogstash.icon_utils import get_icon
 from gogstash.download_queue import DownloadScheduler, estimate_download_size
 from gogstash.settings import read_setting
+from gogstash import paths
 
 
 LIGHT_FILL_COLOR = QColor("#4CAF50")
@@ -73,7 +73,7 @@ class DownloadWindow(QDialog):
         self.setWindowTitle("Download Queue")
         self.setMinimumHeight(400)
 
-        self.log_file = platformdirs.user_config_path(appname='gogstash') / 'downloads.log'
+        self.log_file = paths.config_file_path(paths.ConfigFile.DOWNLOAD_LOG)
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
 
         self.window_layout = QVBoxLayout()

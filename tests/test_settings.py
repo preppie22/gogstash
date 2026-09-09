@@ -2,12 +2,12 @@ import json
 
 import pytest
 
-from gogstash import settings
+from gogstash import paths, settings
 
 
 def test_create_settings_writes_default_settings_file():
     settings._create_settings()
-    settings_file = settings._settings_path_helper()
+    settings_file = paths.config_file_path(paths.ConfigFile.SETTINGS)
     assert settings_file.exists()
     with open(settings_file) as f:
         assert json.load(f) == settings.DEFAULT_SETTINGS
@@ -32,7 +32,7 @@ def test_create_settings_force_overwrites():
 
 
 def test_read_setting_creates_file_if_missing():
-    settings_file = settings._settings_path_helper()
+    settings_file = paths.config_file_path(paths.ConfigFile.SETTINGS)
     assert not settings_file.exists()
 
     result = settings.read_setting("theme")
@@ -43,7 +43,7 @@ def test_read_setting_creates_file_if_missing():
 
 def test_read_settings_merges_missing_keys_from_defaults():
     settings._create_settings()
-    settings_file = settings._settings_path_helper()
+    settings_file = paths.config_file_path(paths.ConfigFile.SETTINGS)
     with open(settings_file, "w") as f:
         json.dump({"theme": "Dark"}, f)  # simulates a settings file from an older version
 

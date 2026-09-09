@@ -3,7 +3,7 @@ import sqlite3
 
 import pytest
 
-from gogstash import library_db
+from gogstash import library_db, paths
 
 FAKE_PRODUCT = {
     "id": 111,
@@ -83,14 +83,14 @@ def db():
 
 
 def query_all(table):
-    db_path = library_db._db_path_helper()
+    db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         return [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
 
 
 def insert_fetched_file(product_id, group_id, file_id, size, checksum=None):
-    db_path = library_db._db_path_helper()
+    db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             "INSERT INTO fetched_files VALUES (?, ?, ?, ?, ?, ?)",
@@ -99,7 +99,7 @@ def insert_fetched_file(product_id, group_id, file_id, size, checksum=None):
 
 
 def test_create_db_creates_all_tables():
-    db_path = library_db._db_path_helper()
+    db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     with sqlite3.connect(db_path) as conn:
         tables = {
             row[0]
@@ -160,7 +160,7 @@ def test_update_products_does_not_overwrite_existing():
 
 
 def test_update_downloadables_creates_db_if_missing():
-    db_path = library_db._db_path_helper()
+    db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     db_path.unlink()
 
     library_db.update_downloadables([FAKE_DOWNLOADABLE])
@@ -171,7 +171,7 @@ def test_update_downloadables_creates_db_if_missing():
 
 
 def test_update_products_creates_db_if_missing():
-    db_path = library_db._db_path_helper()
+    db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     db_path.unlink()
 
     library_db.update_products([FAKE_PRODUCT])
@@ -246,7 +246,7 @@ def test_update_downloadables_handles_missing_categories_gracefully():
 
 
 def test_get_product_listing_returns_empty_list_when_db_missing():
-    library_db._db_path_helper().unlink()
+    paths.config_file_path(paths.ConfigFile.DB_CACHE).unlink()
     assert library_db.get_product_listing() == []
 
 
@@ -317,7 +317,7 @@ def test_get_product_listing_filters_by_product_id():
 
 
 def test_get_downloadables_returns_empty_list_when_db_missing():
-    library_db._db_path_helper().unlink()
+    paths.config_file_path(paths.ConfigFile.DB_CACHE).unlink()
     assert library_db.get_downloadables() == []
 
 
@@ -347,29 +347,29 @@ def test_get_downloadables_filters_by_product_id():
 
 
 def test_get_cache_size_returns_zero_when_db_missing():
-    library_db._db_path_helper().unlink()
+    paths.config_file_path(paths.ConfigFile.DB_CACHE).unlink()
     assert library_db.get_cache_size() == 0
 
 
 def test_get_cache_size_matches_db_file_size_on_disk():
-    db_path = library_db._db_path_helper()
+    db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     assert library_db.get_cache_size() == db_path.stat().st_size
 
 
 def test_clear_cache_is_noop_when_db_missing():
-    db_path = library_db._db_path_helper()
+    db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     db_path.unlink()
 
     library_db.clear_cache()  # should not raise
 
     assert not db_path.exists()
-    assert not library_db._db_path_helper(f"{db_path.name}.bak").exists()
+    assert not paths.config_file_backup(paths.ConfigFile.DB_CACHE).exists()
 
 
 def test_clear_cache_renames_active_db_to_backup():
-    db_path = library_db._db_path_helper()
+    db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     library_db.update_products([FAKE_PRODUCT])
-    backup_path = library_db._db_path_helper(f"{db_path.name}.bak")
+    backup_path = paths.config_file_backup(paths.ConfigFile.DB_CACHE)
 
     library_db.clear_cache()
 
@@ -378,8 +378,8 @@ def test_clear_cache_renames_active_db_to_backup():
 
 
 def test_clear_cache_keeps_only_the_most_recently_cleared_backup():
-    db_path = library_db._db_path_helper()
-    backup_path = library_db._db_path_helper(f"{db_path.name}.bak")
+    db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
+    backup_path = paths.config_file_backup(paths.ConfigFile.DB_CACHE)
 
     library_db.update_products([FAKE_PRODUCT])
     library_db.clear_cache()

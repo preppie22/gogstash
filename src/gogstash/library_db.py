@@ -1,13 +1,8 @@
 import sqlite3
-import platformdirs
-from pathlib import Path
-
-def _db_path_helper(filename: str = "goglibrary.db") -> Path:
-    config_dir = platformdirs.user_config_path(appname='gogstash')
-    return config_dir / filename
+from gogstash import paths
 
 def _create_db(force: bool = False) -> None:
-    db_path = _db_path_helper()
+    db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     if db_path.exists() and not force:
         return
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -58,7 +53,7 @@ def _create_db(force: bool = False) -> None:
         """)
 
 def update_products(products: list[dict]) -> None:
-    db_path = _db_path_helper()
+    db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     if not db_path.exists():
         _create_db()
     rows = [
@@ -79,7 +74,7 @@ def update_products(products: list[dict]) -> None:
         conn.executemany("INSERT OR IGNORE INTO product VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
 
 def update_downloadables(downloadables: list[dict]) -> None:
-    db_path = _db_path_helper()
+    db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     if not db_path.exists():
         _create_db()
     group_rows = []
@@ -127,7 +122,7 @@ def update_downloadables(downloadables: list[dict]) -> None:
         """, file_rows)
 
 def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
-    db_path = _db_path_helper()
+    db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     if not db_path.exists():
         return []
     query_result = None
@@ -167,7 +162,7 @@ def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
     return products
 
 def get_downloadables(product_id: tuple[int] = ()) -> list[dict]:
-    db_path = _db_path_helper()
+    db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     if not db_path.exists():
         return []
     query_result = None
@@ -203,20 +198,19 @@ def get_downloadables(product_id: tuple[int] = ()) -> list[dict]:
     return downloadables
 
 def get_cache_size() -> int:
-    db_file = _db_path_helper()
+    db_file = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     if not db_file.exists():
         return 0
     else:
         return db_file.stat().st_size
 
 def clear_cache() -> None:
-    db_file = _db_path_helper()
+    db_file = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     if not db_file.exists():
         return
-    backup_filename = f"{db_file.name}.bak"
-    backup_file = _db_path_helper(backup_filename)
+    backup_file = paths.config_file_backup(paths.ConfigFile.DB_CACHE)
     backup_file.unlink(missing_ok=True)
-    db_file.rename(_db_path_helper(backup_filename))
+    db_file.rename(paths.config_file_backup(paths.ConfigFile.DB_CACHE))
 
 
 if __name__ == "__main__":

@@ -1,9 +1,9 @@
-import platformdirs
 import json
-from pathlib import Path
 import requests
 import time
 from enum import StrEnum
+
+from gogstash import paths
 
 # These are public and obtained from https://gogapidocs.readthedocs.io/en/latest/auth.html
 CLIENT_ID = "46899977096215655"
@@ -56,22 +56,18 @@ def get_valid_token() -> dict | None:
         return new_token
     return token
 
-def _token_path_helper() -> Path:
-    config_dir = platformdirs.user_config_path(appname='gogstash')
-    return config_dir / "token.json"
-
 def save_token(token: dict) -> None:
-    save_file = _token_path_helper()
+    save_file = paths.config_file_path(paths.ConfigFile.TOKEN)
     save_file.parent.mkdir(parents=True, exist_ok=True)
     with open(save_file, 'w') as f:
         json.dump(token, f)
 
 def clear_token() -> None:
-    token_file = _token_path_helper()
+    token_file = paths.config_file_path(paths.ConfigFile.TOKEN)
     token_file.unlink(missing_ok=True)
 
 def _load_token() -> dict:
-    save_file = _token_path_helper()
+    save_file = paths.config_file_path(paths.ConfigFile.TOKEN)
     token_dict = None
     try:
         with open(save_file, 'r') as f:
