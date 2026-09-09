@@ -16,7 +16,8 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QStyledItemDelegate,
     QStyleOptionViewItem,
-    QProgressBar
+    QProgressBar,
+    QLabel
 )
 from PySide6.QtCore import ( 
     Qt,
@@ -97,8 +98,13 @@ class DownloadWindow(QDialog):
         self.start_pause_button.setIcon(get_icon('start_download.svg'))
         self.start_pause_button.setProperty('iconFile', 'start_download.svg')
         self.stop_button = QPushButton("Stop Downloads")
+        self.stop_button.clicked.connect(self.stop_downloads)
         self.stop_button.setIcon(get_icon('stop.svg'))
         self.stop_button.setProperty('iconFile', 'stop.svg')
+
+        self.downloads_status = QLabel()
+        self._reset_status()
+        self.window_layout.addWidget(self.downloads_status)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
@@ -154,6 +160,13 @@ class DownloadWindow(QDialog):
         self.scheduler.stopped.connect(self._on_stopped)
         self.start_pause_button.setDisabled(True)
         self.scheduler.schedule()
+        self.downloads_status.setText("Downloading...")
+
+    def stop_downloads(self):
+        try:
+            self.scheduler.stop_all()
+        except AttributeError:
+            return
 
     def _on_progress(self, row_idx, fetched, total):
         self.set_progress(row_idx, fetched*100/total)
@@ -190,15 +203,32 @@ class DownloadWindow(QDialog):
                 else:
                     fp.write(f"{item[0]} : {item[1]}\n")
 
-    def _on_game_stopped(self, row_idx):
-        return
+    def _on_game_stopped(self, row_idx, fetched_list):
+        print(fetched_list)
+        self.set_progress(row_idx, 0)
+        total = self.game_queue_table.item(row_idx, 1).data(UserRole.TOTAL_SIZE.value)
+        self.game_queue_table.item(row_idx, 1).setText(f"0 / {humanize.naturalsize(total)}")
+        self.game_queue_table.item(row_idx, 1).setData(UserRole.FETCHED_SIZE.value, 0)
+        with open(self.log_file, 'a') as fp:
+            for item in fetched_list:
+                if len(item) > 2:
+                    fp.write(f"{item[0]}; Failed; expected={item[2]}; fetched={item[3]}\n")
+                else:
+                    fp.write(f"{item[0]} : {item[1]}\n")
 
     def _on_stopped(self):
-        return
+        self.scheduler = None
+        self.progress_bar.setValue(0)
+        self.downloads_status.setText("Downloads stopped")
+        QTimer().singleShot(5000, self._reset_status)
+        self.start_pause_button.setDisabled(False)
 
     def _on_finished(self):
         self.start_pause_button.setDisabled(False)
         self.progress_bar.setValue(self.progress_bar.maximum())
+
+    def _reset_status(self):
+        self.downloads_status.setText("Ready!")
 
     def set_progress(self, row, percent = 0):
         item = self.game_queue_table.item(row, 0)

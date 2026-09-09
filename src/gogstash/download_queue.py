@@ -16,7 +16,7 @@ from PySide6.QtCore import (
 class DownloadScheduler(QObject):
     game_succeeded = Signal(int, list)
     game_failed = Signal(int, str, list)
-    game_stopped = Signal(int)
+    game_stopped = Signal(int, list)
     progress_updated = Signal(int, float, float)
     finished = Signal()
     stopped = Signal()
@@ -50,7 +50,7 @@ class DownloadScheduler(QObject):
         while self.tokens > 0 and self.download_queue:
             job = self.download_queue.pop(0)
             if job['stopped']:
-                self.game_stopped.emit(job['row_idx'])
+                self.game_stopped.emit(job['row_idx'], [])
             else:
                 self._dispatch(job)
         if not self.download_queue and not self.active_queue:
@@ -63,7 +63,7 @@ class DownloadScheduler(QObject):
         job['worker'].succeeded.connect(lambda fetched_list, t=job: self._handle_success(t, fetched_list))
         job['worker'].failed.connect(lambda msg, fetched_list, t=job: self._handle_failure(t, msg, fetched_list))
         job['worker'].progress.connect(lambda fetched_size, total_size, t=job: self._report_progress(t, fetched_size, total_size))
-        job['worker'].stopped.connect(lambda t=job: self._handle_stopped(t))
+        job['worker'].stopped.connect(lambda fetched_list, t=job: self._handle_stopped(t, fetched_list))
         self.active_queue.append(job)
         self.tokens = self.tokens - 1
         job['worker'].start()
@@ -78,8 +78,8 @@ class DownloadScheduler(QObject):
         self._reap(job)
         self.schedule()
 
-    def _handle_stopped(self, job: dict) -> None:
-        self.game_stopped.emit(job['row_idx'])
+    def _handle_stopped(self, job: dict, fetched_list: list) -> None:
+        self.game_stopped.emit(job['row_idx'], fetched_list)
         self._reap(job)
         self.schedule()
 
@@ -95,7 +95,7 @@ class DownloadWorkerThread(QThread):
     succeeded = Signal(list)
     failed = Signal(str, list)
     progress = Signal(float, float)
-    stopped = Signal()
+    stopped = Signal(list)
 
     _stop_flag = False
 
@@ -153,6 +153,7 @@ class DownloadWorkerThread(QThread):
                 self.total_size += (content_length - file['size'])
                 file_hash = hashlib.md5()
                 with open(part_path, 'wb') as fp:
+                    cleanup = False
                     for chunk in download_response.iter_content(chunk_size=1024*1024):
                         bytes_written = fp.write(chunk)
                         self.fetched_size = self.fetched_size + bytes_written
@@ -160,10 +161,11 @@ class DownloadWorkerThread(QThread):
                             file_hash.update(chunk)
                         self.update_progress()
                         if self._stop_flag:
-                            self.stopped.emit()
-                            return
-                if self._stop_flag:
-                    self.stopped.emit()
+                            cleanup = True
+                            break
+                if self._stop_flag and cleanup:
+                    part_path.unlink()  
+                    self.stopped.emit(self.fetched_list)
                     return
                 verified = False
                 if file['directory'] == 'bonus_content':
@@ -176,11 +178,14 @@ class DownloadWorkerThread(QThread):
                     part_path.rename(save_path)
                     self.fetched_list.append((save_path.name, save_path.stat().st_size))
                 else:
-                    # part_path.unlink()
-                    failed_path: Path = download_path / file['directory'] / (filename+'.fail')
                     actual_size = part_path.stat().st_size
-                    part_path.rename(failed_path)
+                    part_path.unlink()
+                    # failed_path: Path = download_path / file['directory'] / (filename+'.fail')
+                    # part_path.rename(failed_path)
                     self.fetched_list.append((save_path.name, -1, file['size'], actual_size))
+                if self._stop_flag:
+                    self.stopped.emit(self.fetched_list)
+                    return
             except requests.exceptions.RequestException as e:
                 self.fetched_list.append((f"{save_path.name}: {str(e)}", -1, file['size'], _safe_size(part_path)))
                 continue
