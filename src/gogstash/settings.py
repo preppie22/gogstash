@@ -19,7 +19,7 @@ DEFAULT_SETTINGS = {
 }
 
 def _settings_path_helper(filename: str = "settings.json") -> Path:
-    config_dir = platformdirs.user_config_path(appname='gogstash')
+    config_dir = platformdirs.user_config_path(appname='gogstash', appauthor=False)
     return config_dir / filename
 
 def _create_settings(force: bool = False) -> None:
