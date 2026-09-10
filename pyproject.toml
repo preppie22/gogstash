@@ -45,4 +45,4 @@ testpaths = ["tests"]
 addopts = "--testdox"
 
 [tool.setuptools.package-data]
-gogstash = ["icons/light/*.svg", "icons/dark/*.svg"]
+gogstash = ["icons/logo.svg", "icons/light/*.svg", "icons/dark/*.svg"]

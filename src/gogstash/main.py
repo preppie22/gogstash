@@ -28,13 +28,14 @@ from gogstash.gog_api import LibraryFetchThread, load_library
 from gogstash.login_window import LoginWindow
 from gogstash.settings_dialog import SettingsDialog
 from gogstash.download_window import DownloadWindow, UserRole
-from gogstash.icon_utils import get_icon, badge_icon
+from gogstash.icon_utils import get_icon, badge_icon, get_logo
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("GogStash")
+        self.setWindowIcon(get_logo())
         self.resize(800, 600)
         self.download_window = DownloadWindow(self)
         self.download_window.queue_changed.connect(self.set_download_badge)

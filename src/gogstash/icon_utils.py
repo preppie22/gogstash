@@ -13,6 +13,9 @@ from PySide6.QtCore import (
     QRect,
 )
 
+def get_logo() -> QIcon:
+    return QIcon(str(resources.files('gogstash') / 'icons' / 'gogstash.svg'))
+
 def get_icon(icon_file: str) -> QIcon:
     color_scheme =  QApplication.instance().styleHints().colorScheme()
     color_folder = 'dark' if color_scheme == Qt.ColorScheme.Dark else 'light'
