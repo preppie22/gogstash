@@ -35,6 +35,7 @@ dev = [
     "pytest",
     "pytest-testdox",
 ]
+packaging = ["pyinstaller"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
