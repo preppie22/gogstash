@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=GogStash
+Comment=GOG library backup tool
+Exec=gogstash
+Icon=gogstash
+Categories=Game;
+X-AppImage-Name=GogStash
