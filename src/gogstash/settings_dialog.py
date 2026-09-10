@@ -18,11 +18,12 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QMessageBox,
     QSpacerItem,
-    QSizePolicy
+    QSizePolicy,
+    QStyle
 )
 from PySide6.QtCore import (
     Qt,
-    Signal
+    Signal,
 )
 from PySide6.QtGui import (
     QPalette,
@@ -116,10 +117,11 @@ class SettingsDialog(QDialog):
         # Settings Buttons
         self.settings_form_buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save|
-            QDialogButtonBox.StandardButton.Discard|
             QDialogButtonBox.StandardButton.RestoreDefaults|
             QDialogButtonBox.StandardButton.Close
         )
+        discard_button = self.settings_form_buttons.addButton("Discard Changes", QDialogButtonBox.ButtonRole.DestructiveRole)
+        discard_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogDiscardButton))
         self.settings_form_buttons.clicked.connect(self.settings_buttons_handler)
         self.window_layout.addWidget(self.settings_form_buttons)
 
