@@ -2,3 +2,9 @@ name: "Build AppImage"
 
 on:
   workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubunt-latest
+    steps:
+      - uses: actions/checkout@4
