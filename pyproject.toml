@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gogstash"
-version = "0.1.0"
+version = "2026.9.10a1"
 description = "A desktop GUI for downloading and backing up your GOG.com game library"
 readme = "README.md"
 requires-python = ">=3.12"
