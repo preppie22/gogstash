@@ -8,3 +8,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: docker build -f packaging/docker/Dockerfile -t gogstash-builder .
