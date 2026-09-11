@@ -39,13 +39,17 @@ You can currently use the app to download your stuff off of GOG (I've used it). 
 The code is currently poorly documented (except for the tests). I'll probably do that at some point. For now, just open main.py and follow along from there.
 
 ## Download
+
 > [!CAUTION]
 > This application is currently in **alpha**. I have done everything possible to ensure it won't damage your system, but I cannot guarantee it.
 
-### Release: [**v2026.9.10-alpha**](https://github.com/preppie22/gogstash/releases/tag/v2026.9.10-alpha)
+<div align="center">
 
-[![Download Badge](https://img.shields.io/badge/AppImage-Download-green?style=for-the-badge&logo=linux&logoColor=green
-)](https://github.com/preppie22/gogstash/releases/latest/download/gogstash-x86_64.AppImage)
+| Version | Linux | Windows |
+| :-: | :-: | :-: |
+| [![GitHub Release](https://img.shields.io/github/v/release/preppie22/gogstash?style=for-the-badge&logo=github)](https://github.com/preppie22/gogstash/releases/latest) |  [![Linux Download](https://img.shields.io/badge/AppImage-Download-green?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/preppie22/gogstash/releases/latest/download/gogstash-x86_64.AppImage) | ![Windows Download](https://img.shields.io/badge/EXE-Coming%20Soon-blue?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0NDggNTEyIj48IS0tISBGb250IEF3ZXNvbWUgRnJlZSA2LjcuMiBieSBAZm9udGF3ZXNvbWUgLSBodHRwczovL2ZvbnRhd2Vzb21lLmNvbSBMaWNlbnNlIC0gaHR0cHM6Ly9mb250YXdlc29tZS5jb20vbGljZW5zZS9mcmVlIChJY29uczogQ0MgQlkgNC4wLCBGb250czogU0lMIE9GTCAxLjEsIENvZGU6IE1JVCBMaWNlbnNlKSBDb3B5cmlnaHQgMjAyNCBGb250aWNvbnMsIEluYy4gLS0%2BPHBhdGggZmlsbD0iI2ZmZmZmZiIgZD0iTTAgOTMuN2wxODMuNi0yNS4zdjE3Ny40SDBWOTMuN3ptMCAzMjQuNmwxODMuNiAyNS4zVjI2OC40SDB2MTQ5Ljl6bTIwMy44IDI4TDQ0OCA0ODBWMjY4LjRIMjAzLjh2MTc3Ljl6bTAtMzgwLjZ2MTgwLjFINDQ4VjMyTDIwMy44IDY1Ljd6Ii8%2BPC9zdmc%2B) | 
+
+</div>
 
 ## How to use it
 
