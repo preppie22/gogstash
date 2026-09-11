@@ -1,0 +1,4 @@
+name: "Build AppImage"
+
+on:
+  workflow_dispatch:
