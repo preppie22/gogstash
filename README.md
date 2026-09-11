@@ -42,7 +42,7 @@ The code is currently poorly documented (except for the tests). I'll probably do
 > [!CAUTION]
 > This application is currently in **alpha**. I have done everything possible to ensure it won't damage your system, but I cannot guarantee it.
 
-### Release: [**2026.9.10-alpha**](https://github.com/preppie22/gogstash/releases/tag/v2026.9.10-alpha)
+### Release: [**v2026.9.10-alpha**](https://github.com/preppie22/gogstash/releases/tag/v2026.9.10-alpha)
 
 [![Download Badge](https://img.shields.io/badge/AppImage-Download-green?style=for-the-badge&logo=linux&logoColor=green
 )](https://github.com/preppie22/gogstash/releases/latest/download/gogstash-x86_64.AppImage)
