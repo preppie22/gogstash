@@ -2,6 +2,9 @@ name: "Build AppImage"
 
 on:
   workflow_dispatch:
+  push:
+    tags: 
+      - 'v*'
 
 jobs:
   build:
@@ -17,4 +20,11 @@ jobs:
         with: 
           name: gogstash-appimage
           path: gogstash-x86_64.AppImage
-          
+      - if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create ${{ github.ref_name }} gogstash-x86_64.AppImage --generate-notes
+    permissions:
+      contents: write
+    
+    
