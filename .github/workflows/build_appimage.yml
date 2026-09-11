@@ -21,9 +21,11 @@ jobs:
           name: gogstash-appimage
           path: gogstash-x86_64.AppImage
       - if: github.event_name == 'push'
+        run: awk '/^## /{c++} c==1' CHANGELOG.md > release_notes.md
+      - if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create ${{ github.ref_name }} gogstash-x86_64.AppImage --generate-notes
+        run: gh release create ${{ github.ref_name }} gogstash-x86_64.AppImage --notes-file release_notes.md
     permissions:
       contents: write
     

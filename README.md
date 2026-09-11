@@ -38,6 +38,26 @@ You can currently use the app to download your stuff off of GOG (I've used it). 
 
 The code is currently poorly documented (except for the tests). I'll probably do that at some point. For now, just open main.py and follow along from there.
 
+## Download
+> [!CAUTION]
+> This application is currently in **alpha**. I have done everything possible to ensure it won't damage your system, but I cannot guarantee it.
+
+### Current Release: [**2026.9.10-alpha**](https://github.com/preppie22/gogstash)
+
+[![Download Badge](https://img.shields.io/badge/AppImage-Download-green?style=for-the-badge&logo=linux&logoColor=green
+)](https://github.com/preppie22/gogstash)
+
+## How to use it
+
+> [!NOTE]
+> Games will download to a folder called GogStash in your default "Download" location. You can change this in the settings.
+
+1. Click on the Login button in the toolbar and login to your GOG account.
+2. Once the status changes to "Logged in", click on the `Refresh Games List` button to fetch your library.
+3. Select the games you want to download and click on the `Add to Download Queue` button. Optionally, double clicking on a game also adds it to the queue.
+4. Click on the `Show Download Queue` button on the right or in the toolbar.
+5. Click on `Start Downloads`.
+
 ## Project layout
 
 ```
@@ -64,14 +84,14 @@ GogStash/
 - [ ] Record fetched files in the local cache so the library view reflects what you actually have
 - [ ] Remove or clear entries from the download queue without restarting the app
 - [ ] Reorder the download queue
-- [ ] Ship a self-contained Linux AppImage
+- [X] Ship a self-contained Linux AppImage
 - [ ] Ship a Windows build (zipped, not an installer)
 - [ ] Document the codebase beyond just the tests
 - [ ] Add auto-update capability to AppImage (e.g. via GearLever/AppImageUpdate)
 
 I'll probably add more as I work through these.
 
-## How to run it
+## Dev Environment Configuration
 
 > [!NOTE]
 > Make sure you use a virtual environment of some sort. I have only tried this in a Linux distro. So, I don't currently know how or if it works on Windows or MacOS. It should work in theory because the code is relatively platform independent.
@@ -86,16 +106,6 @@ Then, run it with
 ```bash
 gogstash
 ```
-## How to use it
-
-> [!NOTE]
-> Games will download to a folder called GogStash in your default "Download" location. You can change this in the settings.
-
-1. Click on the Login button in the toolbar and login to your GOG account.
-2. Once the status changes to "Logged in", click on the `Refresh Games List` button to fetch your library.
-3. Select the games you want to download and click on the `Add to Download Queue` button. Optionally, double clicking on a game also adds it to the queue.
-4. Click on the `Show Download Queue` button on the right or in the toolbar.
-5. Click on `Start Downloads`.
 
 ## Config Directory
 
