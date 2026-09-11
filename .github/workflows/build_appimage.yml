@@ -9,3 +9,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -f packaging/docker/Dockerfile -t gogstash-builder .
+      - run: | 
+          docker create --name extract gogstash-builder
+          docker cp extract:/build/gogstash-x86_64.AppImage .
+          docker rm extract
+      - uses: actions/upload-artifact@v4
+        with: 
+          name: gogstash-appimage
+          path: gogstash-x86_64.AppImage
+          
