@@ -209,7 +209,7 @@ class DownloadWindow(QDialog):
             if item.get('size', -1) > -1:
                 manifest.add_file(
                     game_dir=Path(read_setting('download_path')) / game_slug,
-                    filepath=item.get('filepath'),
+                    filepath=item.get('filepath').relative_to(Path(read_setting('download_path')) / game_slug),
                     checksum=item.get('checksum'),
                     timestamp=item.get('fetched_at')
                 )            
