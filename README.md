@@ -101,14 +101,14 @@ GogStash/
 
 ```
 
-
-
 ### Dev Environment Configuration
 
 > [!NOTE]
 > Make sure you use a virtual environment of some sort. I have only tried this in a Linux distro. So, I don't currently know how or if it works on Windows or MacOS. It should work in theory because the code is relatively platform independent.
 
 ```bash
+git clone https://github.com/preppie22/gogstash.git
+cd gogstash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
