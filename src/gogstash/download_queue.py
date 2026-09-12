@@ -3,10 +3,12 @@ from gogstash import settings
 from gogstash import gog_api
 from gogstash.gog_auth import get_valid_token
 from pathlib import Path
+
 import urllib
 import requests
 import hashlib
 import xml.etree.ElementTree as ET
+import time
 
 from PySide6.QtCore import (
     QThread,
@@ -129,6 +131,7 @@ class DownloadWorkerThread(QThread):
                 cdn_link = resolved['downlink']
                 download_response = requests.get(cdn_link, stream=True)
                 download_response.raise_for_status()
+                checksum = ""
                 if file['directory'] != 'bonus_content':
                     checksum_link = resolved['checksum']
                     checksum_response = requests.get(checksum_link)
@@ -138,14 +141,25 @@ class DownloadWorkerThread(QThread):
                 filename = urllib.parse.urlparse(cdn_link).path.rsplit('/',-1)[-1]
                 filename = urllib.parse.unquote(filename)
             except Exception as e:
-                self.fetched_list.append((f"{file['file']}: {str(e)}", -1))
+                self.fetched_list.append({
+                    'filepath': Path(file['file']), 
+                    'size': -1,
+                    'checksum': "",
+                    'fetched_at': time.time(),                    
+                    'error': str(e)
+                })
                 continue
             try:
                 part_path: Path = download_path / file['directory'] / (filename+'.part')
                 save_path: Path = download_path / file['directory'] / filename
                 save_path.parent.mkdir(parents=True, exist_ok=True)
             except Exception as e:
-                self.fetched_list.append((f"{file['file']}: {str(e)}", -1))
+                self.fetched_list.append({
+                    'filepath': Path(file['file']), 
+                    'size': -1,
+                    'checksum': "",
+                    'fetched_at': time.time(),
+                })
                 self.failed.emit(str(e), self.fetched_list)
                 break
             try:
@@ -176,26 +190,48 @@ class DownloadWorkerThread(QThread):
                         verified = True
                 if verified:
                     part_path.rename(save_path)
-                    self.fetched_list.append((save_path.name, save_path.stat().st_size))
+                    # self.fetched_list.append((save_path.name, save_path.stat().st_size))
+                    self.fetched_list.append({
+                        'filepath': save_path,
+                        'size': save_path.stat().st_size,
+                        'checksum': checksum,
+                        'fetched_at': time.time()
+                    })
                 else:
                     actual_size = part_path.stat().st_size
                     part_path.unlink()
-                    # failed_path: Path = download_path / file['directory'] / (filename+'.fail')
-                    # part_path.rename(failed_path)
-                    self.fetched_list.append((save_path.name, -1, file['size'], actual_size))
+                    self.fetched_list.append({
+                        'filepath': save_path,
+                        'size': -1, 
+                        'checksum': "",
+                        'fetched_at': time.time(),
+                        'error': f"Checksum mismatch | Expected size: {file['size']} | Got size: {actual_size}"
+                    })
                 if self._stop_flag:
                     self.stopped.emit(self.fetched_list)
                     return
             except requests.exceptions.RequestException as e:
-                self.fetched_list.append((f"{save_path.name}: {str(e)}", -1, file['size'], _safe_size(part_path)))
+                self.fetched_list.append({
+                    'filepath': save_path,
+                    'size': -1,
+                    'checksum': "",
+                    'fetched_at': time.time(),
+                    'error': f"{str(e)} | Expected size: {file['size']} | Got size: {_safe_size(part_path)}"
+                })
                 continue
             except Exception as e:
-                self.fetched_list.append((f"{save_path.name}: {str(e)}", -1, file['size'], _safe_size(part_path)))
+                self.fetched_list.append({
+                    'filepath': save_path,
+                    'size': -1,
+                    'checksum': "",
+                    'fetched_at': time.time(),
+                    'error': f"{str(e)} | Expected size: {file['size']} | Got size: {_safe_size(part_path)}"
+                })
                 self.failed.emit(str(e), self.fetched_list)
                 break
         else:
             for item in self.fetched_list:
-                if item[1] > -1:
+                if item['size'] > -1:
                     self.succeeded.emit(self.fetched_list)
                     break
             else:

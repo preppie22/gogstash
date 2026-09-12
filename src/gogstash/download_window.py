@@ -2,6 +2,7 @@ import sys
 from random import randint
 from enum import Enum
 import humanize
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -35,6 +36,8 @@ from gogstash.icon_utils import get_icon
 from gogstash.download_queue import DownloadScheduler, estimate_download_size
 from gogstash.settings import read_setting
 from gogstash import paths
+from gogstash import manifest
+from gogstash import library_db
 
 
 LIGHT_FILL_COLOR = QColor("#4CAF50")
@@ -125,6 +128,17 @@ class DownloadWindow(QDialog):
             if not button.icon(): continue
             button.setIcon(get_icon(button.property('iconFile')))
 
+    def write_log(self, fetched_game: dict) -> None:
+        if not fetched_game:
+            return
+        error_msg = fetched_game.get('error', "")
+        log_entry = f"[{fetched_game.get('fetched_at', "")}] | {str(fetched_game.get('filepath', ""))}: "
+        if error_msg:
+            log_entry = log_entry + error_msg
+        else:
+            log_entry = log_entry + f"Fetched {humanize.naturalsize(fetched_game.get('size',""))} | md5: {fetched_game.get('checksum', "")}"
+        with open(self.log_file, 'a') as wp:
+            wp.write(log_entry + "\n")
 
     def add_to_queue(self, row_data: dict) -> int:
         row_idx = self.game_queue_table.rowCount()
@@ -184,24 +198,27 @@ class DownloadWindow(QDialog):
         return
 
     def _on_game_succeeded(self, row_idx, fetched_list):
-        print(fetched_list)
+        # print(fetched_list)
         self.set_progress(row_idx, 100)
         total = self.game_queue_table.item(row_idx, 1).data(UserRole.TOTAL_SIZE.value)
         self.game_queue_table.item(row_idx, 1).setData(UserRole.FETCHED_SIZE.value, total)
         self.game_queue_table.item(row_idx, 1).setText(f"{humanize.naturalsize(total)} / {humanize.naturalsize(total)}")
-        with open(self.log_file, 'a') as fp:
-            for item in fetched_list:
-                fp.write(f"{item[0]} : {item[1]}\n")
+        game_slug = library_db.get_product_listing((self.game_queue_table.item(row_idx, 0).data(UserRole.PRODUCT_ID_ROLE),))[0]['slug']
+        for item in fetched_list:
+            self.write_log(item)
+            if item.get('size', -1) > -1:
+                manifest.add_file(
+                    game_dir=Path(read_setting('download_path')) / game_slug,
+                    filepath=item.get('filepath'),
+                    checksum=item.get('checksum'),
+                    timestamp=item.get('fetched_at')
+                )            
 
     def _on_game_failed(self, row_idx, msg, fetched_list):
-        print(fetched_list)
+        # print(fetched_list)
         self.game_queue_table.item(row_idx,0).setToolTip(msg)
-        with open(self.log_file, 'a') as fp:
-            for item in fetched_list:
-                if len(item) > 2:
-                    fp.write(f"{item[0]}; Failed; expected={item[2]}; fetched={item[3]}\n")
-                else:
-                    fp.write(f"{item[0]} : {item[1]}\n")
+        for item in fetched_list:
+            self.write_log(item)
 
     def _on_game_stopped(self, row_idx, fetched_list):
         print(fetched_list)
@@ -209,12 +226,12 @@ class DownloadWindow(QDialog):
         total = self.game_queue_table.item(row_idx, 1).data(UserRole.TOTAL_SIZE.value)
         self.game_queue_table.item(row_idx, 1).setText(f"0 / {humanize.naturalsize(total)}")
         self.game_queue_table.item(row_idx, 1).setData(UserRole.FETCHED_SIZE.value, 0)
-        with open(self.log_file, 'a') as fp:
-            for item in fetched_list:
-                if len(item) > 2:
-                    fp.write(f"{item[0]}; Failed; expected={item[2]}; fetched={item[3]}\n")
-                else:
-                    fp.write(f"{item[0]} : {item[1]}\n")
+        for item in fetched_list:
+            self.write_log(item)                
+                # if len(item) > 2:
+                #     fp.write(f"{item[0]}; Failed; expected={item[2]}; fetched={item[3]}\n")
+                # else:
+                #     fp.write(f"{item[0]} : {item[1]}\n")
 
     def _on_stopped(self):
         self.scheduler = None

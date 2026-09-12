@@ -1,7 +1,5 @@
 import json
 from pathlib import Path
-import time
-
 
 MANIFEST_FILE = ".gogstash.manifest"
 
