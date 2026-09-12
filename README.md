@@ -62,23 +62,6 @@ The code is currently poorly documented (except for the tests). I'll probably do
 4. Click on the `Show Download Queue` button on the right or in the toolbar.
 5. Click on `Start Downloads`.
 
-## Project layout
-
-```
-GogStash/
-├── src/
-│   └── gogstash/
-│       └── ...          # GUI + GOG API client code
-├── tests/
-├── packaging/
-│   └── icons/           # app icon assets for PyInstaller/AppImage builds
-├── logo.svg
-├── pyproject.toml
-├── LICENSE
-└── README.md
-
-```
-
 ## To Do
 
 **Legend:** ✅ done & released · 🟡 done, merged but not yet released · ⬜ not started
@@ -97,7 +80,30 @@ GogStash/
 
 I'll probably add more as I work through these.
 
-## Dev Environment Configuration
+## Developers
+
+This section is for developers and tinkerers.
+
+### Project Layout
+
+```
+GogStash/
+├── src/
+│   └── gogstash/
+│       └── ...          # GUI + GOG API client code
+├── tests/
+├── packaging/
+│   └── icons/           # app icon assets for PyInstaller/AppImage builds
+├── logo.svg
+├── pyproject.toml
+├── LICENSE
+└── README.md
+
+```
+
+
+
+### Dev Environment Configuration
 
 > [!NOTE]
 > Make sure you use a virtual environment of some sort. I have only tried this in a Linux distro. So, I don't currently know how or if it works on Windows or MacOS. It should work in theory because the code is relatively platform independent.
@@ -113,7 +119,7 @@ Then, run it with
 gogstash
 ```
 
-## Config Directory
+### Config Directory
 
 | Platform  | Path  |
 | -         |     - |
