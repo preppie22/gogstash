@@ -81,17 +81,19 @@ GogStash/
 
 ## To Do
 
-- [X] Stop downloads once they're started
-- [ ] Pause downloads once they're started
-- [ ] Resume a paused or interrupted download instead of starting over
-- [ ] Skip re-downloading files that already exist and check out
-- [ ] Record fetched files in the local cache so the library view reflects what you actually have
-- [ ] Remove or clear entries from the download queue without restarting the app
-- [ ] Reorder the download queue
-- [X] Ship a self-contained Linux AppImage
-- [ ] Ship a Windows build (zipped, not an installer)
-- [ ] Document the codebase beyond just the tests
-- [ ] Add auto-update capability to AppImage (e.g. via GearLever/AppImageUpdate)
+**Legend:** ✅ done & released · 🟡 done, merged but not yet released · ⬜ not started
+
+- ✅ Stop downloads once they're started
+- ⬜ Pause downloads once they're started
+- ⬜ Resume a paused or interrupted download instead of starting over
+- ⬜ Skip re-downloading files that already exist and check out
+- ⬜ Record fetched files in the local cache so the library view reflects what you actually have
+- ⬜ Remove or clear entries from the download queue without restarting the app
+- ⬜ Reorder the download queue
+- ✅ Ship a self-contained Linux AppImage
+- ⬜ Ship a Windows build (zipped, not an installer)
+- ⬜ Document the codebase beyond just the tests
+- ⬜ Add auto-update capability to AppImage (e.g. via GearLever/AppImageUpdate)
 
 I'll probably add more as I work through these.
 
