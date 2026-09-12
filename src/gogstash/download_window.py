@@ -203,7 +203,7 @@ class DownloadWindow(QDialog):
         total = self.game_queue_table.item(row_idx, 1).data(UserRole.TOTAL_SIZE.value)
         self.game_queue_table.item(row_idx, 1).setData(UserRole.FETCHED_SIZE.value, total)
         self.game_queue_table.item(row_idx, 1).setText(f"{humanize.naturalsize(total)} / {humanize.naturalsize(total)}")
-        game_slug = library_db.get_product_listing((self.game_queue_table.item(row_idx, 0).data(UserRole.PRODUCT_ID_ROLE),))[0]['slug']
+        game_slug = library_db.get_product_listing((self.game_queue_table.item(row_idx, 0).data(UserRole.PRODUCT_ID_ROLE.value),))[0]['slug']
         for item in fetched_list:
             self.write_log(item)
             if item.get('size', -1) > -1:
@@ -221,17 +221,13 @@ class DownloadWindow(QDialog):
             self.write_log(item)
 
     def _on_game_stopped(self, row_idx, fetched_list):
-        print(fetched_list)
+        # print(fetched_list)
         self.set_progress(row_idx, 0)
         total = self.game_queue_table.item(row_idx, 1).data(UserRole.TOTAL_SIZE.value)
         self.game_queue_table.item(row_idx, 1).setText(f"0 / {humanize.naturalsize(total)}")
         self.game_queue_table.item(row_idx, 1).setData(UserRole.FETCHED_SIZE.value, 0)
         for item in fetched_list:
-            self.write_log(item)                
-                # if len(item) > 2:
-                #     fp.write(f"{item[0]}; Failed; expected={item[2]}; fetched={item[3]}\n")
-                # else:
-                #     fp.write(f"{item[0]} : {item[1]}\n")
+            self.write_log(item)
 
     def _on_stopped(self):
         self.scheduler = None

@@ -1,10 +1,29 @@
+from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QPixmap
 
+from gogstash import library_db, manifest
 from gogstash.download_window import DownloadWindow, UserRole
 from gogstash.settings import update_setting
+
+FAKE_PRODUCT = {
+    "id": 42,
+    "title": "Some Game",
+    "slug": "some-game",
+    "isMovie": False,
+    "url": "/en/game/some_game",
+    "image": "//images.example.com/some_game",
+    "worksOn": {"Windows": True, "Linux": False, "Mac": True},
+}
+
+
+@pytest.fixture(autouse=True)
+def db():
+    library_db._create_db(force=True)
+    library_db.update_products([FAKE_PRODUCT])
 
 
 def _non_null_icon():
@@ -173,21 +192,27 @@ def test_on_stopped_reenables_start_button_and_clears_scheduler(mock_estimate, m
 
 
 @patch("gogstash.download_window.estimate_download_size")
-def test_on_game_stopped_logs_partial_failures_like_on_game_failed_does(mock_estimate):
-    # A stopped job's fetched_list can be a grab bag: completed files
-    # (2-tuples) sitting right next to per-file failures from before the
-    # stop landed (4-tuples with expected/actual size). _on_game_stopped
-    # should format each the way _on_game_failed already does, not flatten
-    # everything to "name : -1" and chuck the size details.
+def test_on_game_stopped_logs_each_entry_the_same_way_on_game_failed_does(mock_estimate):
+    # A stopped job's fetched_list can be a grab bag: files that finished
+    # right before the stop landed, sitting next to per-file failures from
+    # earlier in the same batch. _on_game_stopped should write each one
+    # through the same write_log() path _on_game_failed uses, not some
+    # bespoke tuple-unpacking format of its own.
     mock_estimate.return_value = 2_000_000_000
     window = DownloadWindow()
     window.add_to_queue(_row())
 
-    window._on_game_stopped(0, [("good.exe", 500), ("bad.exe", -1, 1000, 400)])
+    window._on_game_stopped(0, [
+        {"filepath": Path("good.exe"), "size": 500, "checksum": "abc123", "fetched_at": 1.0},
+        {
+            "filepath": Path("bad.exe"), "size": -1, "checksum": "", "fetched_at": 2.0,
+            "error": "Checksum mismatch | Expected size: 1000 | Got size: 400",
+        },
+    ])
 
     log_contents = window.log_file.read_text()
-    assert "good.exe : 500" in log_contents
-    assert "bad.exe; Failed; expected=1000; fetched=400" in log_contents
+    assert "good.exe: Fetched 500 Bytes | md5: abc123" in log_contents
+    assert "bad.exe: Checksum mismatch | Expected size: 1000 | Got size: 400" in log_contents
 
 
 @patch("gogstash.download_window.estimate_download_size")
@@ -201,3 +226,81 @@ def test_on_game_stopped_resets_row_progress_and_size_text(mock_estimate):
 
     assert window.game_queue_table.item(0, 0).data(UserRole.PROGRESS_ROLE.value) == 0
     assert window.game_queue_table.item(0, 1).text() == "0 / 2.0 GB"
+
+
+def test_write_log_formats_a_successful_entry():
+    window = DownloadWindow()
+
+    window.write_log({
+        "filepath": Path("setup.exe"), "size": 500, "checksum": "abc123", "fetched_at": 1.0
+    })
+
+    assert "setup.exe: Fetched 500 Bytes | md5: abc123" in window.log_file.read_text()
+
+
+def test_write_log_formats_an_error_entry():
+    window = DownloadWindow()
+
+    window.write_log({
+        "filepath": Path("setup.exe"), "size": -1, "checksum": "", "fetched_at": 1.0,
+        "error": "connection reset",
+    })
+
+    log_contents = window.log_file.read_text()
+    assert "setup.exe: connection reset" in log_contents
+    assert "Fetched" not in log_contents
+
+
+def test_write_log_does_nothing_for_an_empty_entry():
+    # _on_game_stopped can hand write_log a job that never dispatched at all.
+    window = DownloadWindow()
+
+    window.write_log({})
+
+    assert not window.log_file.exists()
+
+
+@patch("gogstash.download_window.estimate_download_size")
+def test_on_game_succeeded_records_completed_files_in_the_manifest(mock_estimate, tmp_path):
+    mock_estimate.return_value = 0
+    update_setting("download_path", str(tmp_path))
+    game_dir = tmp_path / "some-game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "setup.exe").write_bytes(b"hello")
+    window = DownloadWindow()
+    window.add_to_queue(_row())
+
+    window._on_game_succeeded(0, [
+        {"filepath": game_dir / "setup.exe", "size": 5, "checksum": "abc123", "fetched_at": 1.0},
+    ])
+
+    assert manifest.stat_file(game_dir, Path("setup.exe")) == {
+        "size": 5, "checksum": "abc123", "fetched_at": 1.0
+    }
+
+
+@patch("gogstash.download_window.estimate_download_size")
+def test_on_game_succeeded_skips_the_manifest_for_failed_entries_in_the_same_batch(mock_estimate, tmp_path):
+    # Regression: a partially-successful batch can contain failed entries
+    # (size -1, no real file behind them) right next to the real ones.
+    # Calling manifest.add_file on those blindly used to raise
+    # FileNotFoundError and abort the rest of the batch's manifest writes.
+    mock_estimate.return_value = 0
+    update_setting("download_path", str(tmp_path))
+    game_dir = tmp_path / "some-game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "good.exe").write_bytes(b"hello")
+    window = DownloadWindow()
+    window.add_to_queue(_row())
+
+    window._on_game_succeeded(0, [
+        {
+            "filepath": Path("bad_file_id"), "size": -1, "checksum": "", "fetched_at": 1.0,
+            "error": "boom",
+        },
+        {"filepath": game_dir / "good.exe", "size": 5, "checksum": "abc123", "fetched_at": 2.0},
+    ])
+
+    assert manifest.stat_file(game_dir, Path("good.exe")) == {
+        "size": 5, "checksum": "abc123", "fetched_at": 2.0
+    }

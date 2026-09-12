@@ -49,6 +49,7 @@ class DownloadScheduler(QObject):
             task['stopped'] = True
 
     def schedule(self):
+        self.download_queue = sorted(self.download_queue, key=lambda x: x['row_idx'])
         while self.tokens > 0 and self.download_queue:
             job = self.download_queue.pop(0)
             if job['stopped']:

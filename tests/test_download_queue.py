@@ -203,8 +203,13 @@ def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, mock_g
 
     mock_resolve.assert_called_once_with("token", "https://example.com/file1")
     assert failed == []
-    assert succeeded == [[("setup_fake_game.exe", 1000)]]
+    assert len(succeeded) == 1
+    [entry] = succeeded[0]
     written = tmp_path / "fake-game" / "installer_windows_en" / "setup_fake_game.exe"
+    assert entry["filepath"] == written
+    assert entry["size"] == 1000
+    assert entry["checksum"] == checksum
+    assert isinstance(entry["fetched_at"], float)
     assert written.read_bytes() == chunk_a + chunk_b
 
 
@@ -366,8 +371,13 @@ def test_download_worker_stop_after_full_download_still_saves_the_file(
 
     assert succeeded == []
     assert failed == []
-    assert stopped == [[("setup_fake_game.exe", 1000)]]
+    assert len(stopped) == 1
+    [entry] = stopped[0]
     written = tmp_path / "fake-game" / "installer_windows_en" / "setup_fake_game.exe"
+    assert entry["filepath"] == written
+    assert entry["size"] == 1000
+    assert entry["checksum"] == checksum
+    assert isinstance(entry["fetched_at"], float)
     assert written.read_bytes() == chunk_a + chunk_b
 
 
