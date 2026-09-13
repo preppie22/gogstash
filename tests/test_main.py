@@ -16,8 +16,8 @@ def _non_null_icon():
     return QIcon(QPixmap(4, 4))
 
 
-FAKE_GAME = {"product_id": 111, "title": "Fake Game", "download_size": 2048, "fetched": 1}
-FAKE_GAME_2 = {"product_id": 222, "title": "Second Fake Game", "download_size": 4096, "fetched": 0}
+FAKE_GAME = {"product_id": 111, "title": "Fake Game", "download_size": 2048}
+FAKE_GAME_2 = {"product_id": 222, "title": "Second Fake Game", "download_size": 4096}
 
 
 def test_not_logged_in_shows_red_indicator_and_status_text():
@@ -116,7 +116,8 @@ def test_on_games_loaded_populates_table_with_games():
 
     assert window.games_list.rowCount() == 1
     assert window.games_list.item(0, 0).text() == "Fake Game"
-    assert window.games_list.item(0, 2).text() == "1"
+    # "Fetched" is a hardcoded placeholder for now, not wired up to real data yet.
+    assert window.games_list.item(0, 2).text() == "0"
 
 
 def test_on_games_loaded_replaces_previous_rows_not_appends():

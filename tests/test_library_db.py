@@ -89,15 +89,6 @@ def query_all(table):
         return [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
 
 
-def insert_fetched_file(product_id, group_id, file_id, size, checksum=None):
-    db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "INSERT INTO fetched_files VALUES (?, ?, ?, ?, ?, ?)",
-            (product_id, file_id, group_id, size, checksum, "2026-01-01T00:00:00"),
-        )
-
-
 def test_create_db_creates_all_tables():
     db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     with sqlite3.connect(db_path) as conn:
@@ -105,7 +96,7 @@ def test_create_db_creates_all_tables():
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
-    assert {"product", "download_group", "download_file", "fetched_files"} <= tables
+    assert {"product", "download_group", "download_file"} <= tables
 
 
 def test_create_db_is_idempotent_without_force():
@@ -250,7 +241,7 @@ def test_get_product_listing_returns_empty_list_when_db_missing():
     assert library_db.get_product_listing() == []
 
 
-def test_get_product_listing_with_no_downloads_or_fetched_files():
+def test_get_product_listing_with_no_downloads():
     library_db.update_products([FAKE_PRODUCT])
 
     listing = library_db.get_product_listing()
@@ -261,49 +252,21 @@ def test_get_product_listing_with_no_downloads_or_fetched_files():
             "title": "Fake Game",
             "slug": "fake-game",
             "download_size": 0,
-            "fetched_size": 0,
-            "fetched": 0,
         }
     ]
 
 
 def test_get_product_listing_sums_download_size_across_groups():
+    # Product 111 has TWO download_group rows (installer + bonus_content).
+    # The subquery pre-sums total_size per product_id before the outer join
+    # ever sees it, so this stays a clean 2500 instead of a doubled total
+    # from the join fanning out across both group rows.
     library_db.update_products([FAKE_PRODUCT])
     library_db.update_downloadables([FAKE_DOWNLOADABLE])  # groups: 2000 + 500
 
     listing = library_db.get_product_listing()
 
     assert listing[0]["download_size"] == 2500
-    assert listing[0]["fetched"] == 0
-    assert listing[0]["fetched_size"] == 0
-
-
-def test_get_product_listing_reflects_fetched_files():
-    library_db.update_products([FAKE_PRODUCT])
-    library_db.update_downloadables([FAKE_DOWNLOADABLE])
-    insert_fetched_file(111, "installer_windows_en", "file1", 1000)
-
-    listing = library_db.get_product_listing()
-
-    assert listing[0]["fetched"] == 1
-    assert listing[0]["fetched_size"] == 1000
-
-
-def test_get_product_listing_join_does_not_fan_out_sums():
-    # Regression: product 111 has TWO download_group rows (installer +
-    # bonus_content, totaling 2500) and gets TWO fetched_files rows below.
-    # A naive `LEFT JOIN download_group ... LEFT JOIN fetched_files ...` in
-    # one query cross-multiplies these into 4 rows before SUM() runs, so
-    # both totals would silently come back doubled if this regresses.
-    library_db.update_products([FAKE_PRODUCT])
-    library_db.update_downloadables([FAKE_DOWNLOADABLE])
-    insert_fetched_file(111, "installer_windows_en", "file1", 100)
-    insert_fetched_file(111, "installer_windows_en", "file2", 100)
-
-    listing = library_db.get_product_listing()
-
-    assert listing[0]["download_size"] == 2500
-    assert listing[0]["fetched_size"] == 200
 
 
 def test_get_product_listing_filters_by_product_id():
