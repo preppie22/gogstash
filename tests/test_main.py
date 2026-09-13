@@ -87,27 +87,38 @@ def test_open_settings_constructs_and_executes_dialog(mock_settings_dialog_cls):
     mock_settings_dialog_cls.return_value.exec.assert_called_once()
 
 
-def test_fetch_games_shows_error_and_does_not_start_thread_when_logged_out():
-    window = MainWindow()
-    window.error_message.showMessage = MagicMock()
-
-    window.fetch_games()
-
-    window.error_message.showMessage.assert_called_once_with("You are not logged in to GOG!")
-    assert not hasattr(window, "fetch_thread")
-
-
-@patch("gogstash.main.LibraryFetchThread")
-def test_fetch_games_starts_thread_with_access_token_when_logged_in(mock_thread_cls):
-    gog_auth.save_token({"access_token": "mytoken", "expiry": time.time() + 3600})
+@patch("gogstash.library_db.LibraryFetchThread")
+def test_fetch_games_wires_up_thread_signals_and_starts_it(mock_thread_cls):
+    # Login status isn't checked here anymore -- the thread resolves its own
+    # token and reports back via auth_failure if there isn't one, so this
+    # just has to prove the wiring/start happens regardless.
     window = MainWindow()
 
     window.fetch_games()
 
-    mock_thread_cls.assert_called_once_with("mytoken", force=True)
+    mock_thread_cls.assert_called_once_with(force=True)
     mock_thread_instance = mock_thread_cls.return_value
     mock_thread_instance.succeeded.connect.assert_called_once_with(window.on_games_loaded)
+    mock_thread_instance.failed.connect.assert_called_once_with(window.fetch_failed_handler)
+    mock_thread_instance.auth_failure.connect.assert_called_once_with(window.on_auth_failure)
+    mock_thread_instance.progress.connect.assert_called_once_with(window.update_fetch_progress)
     mock_thread_instance.start.assert_called_once()
+
+
+def test_on_auth_failure_shows_error_and_resets_ui_state():
+    # Regression: on_auth_failure used to only show the error message, so a
+    # click on "Refresh Games List" while logged out left the button
+    # disabled and the status text stuck on "Fetching games list..." forever.
+    window = MainWindow()
+    window.error_message.showMessage = MagicMock()
+    window.fetch_games_button.setDisabled(True)
+    window.status_progress.setVisible(True)
+
+    window.on_auth_failure()
+
+    window.error_message.showMessage.assert_called_once_with("You are not logged in to GOG!")
+    assert window.fetch_games_button.isEnabled()
+    assert not window.status_progress.isVisible()
 
 
 def test_on_games_loaded_populates_table_with_games(tmp_path):

@@ -170,14 +170,12 @@ def make_checksum_response(md5: str):
     return response
 
 
-@patch("gogstash.download_queue.get_valid_token")
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
-def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, mock_get_valid_token, tmp_path):
+def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, tmp_path):
     library_db.update_products([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)  # isolate to the single installer file
-    mock_get_valid_token.return_value = {"access_token": "token"}
     mock_resolve.return_value = {
         "downlink": "https://cdn.example.com/setup_fake_game.exe",
         "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
@@ -201,7 +199,7 @@ def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, mock_g
 
     thread.run()
 
-    mock_resolve.assert_called_once_with("token", "https://example.com/file1")
+    mock_resolve.assert_called_once_with("https://example.com/file1")
     assert failed == []
     assert len(succeeded) == 1
     [entry] = succeeded[0]
@@ -213,14 +211,12 @@ def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, mock_g
     assert written.read_bytes() == chunk_a + chunk_b
 
 
-@patch("gogstash.download_queue.get_valid_token")
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
-def test_download_worker_skips_a_file_already_verified_in_the_manifest(mock_resolve, mock_get, mock_get_valid_token, tmp_path):
+def test_download_worker_skips_a_file_already_verified_in_the_manifest(mock_resolve, mock_get, tmp_path):
     library_db.update_products([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)
-    mock_get_valid_token.return_value = {"access_token": "token"}
     mock_resolve.return_value = {
         "downlink": "https://cdn.example.com/setup_fake_game.exe",
         "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
@@ -253,10 +249,9 @@ def test_download_worker_skips_a_file_already_verified_in_the_manifest(mock_reso
     assert existing_file.read_bytes() == b"already have this one"  # untouched
 
 
-@patch("gogstash.download_queue.get_valid_token")
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
-def test_download_worker_skipping_a_file_never_touches_the_network_stream_or_disk(mock_resolve, mock_get, mock_get_valid_token, tmp_path):
+def test_download_worker_skipping_a_file_never_touches_the_network_stream_or_disk(mock_resolve, mock_get, tmp_path):
     # More paranoid sibling of the "skips a file already verified" test above:
     # that one only proves a *read* of the stream blows up. This one proves
     # nothing ever gets far enough to even try writing bytes, and that the
@@ -265,7 +260,6 @@ def test_download_worker_skipping_a_file_never_touches_the_network_stream_or_dis
     library_db.update_products([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)
-    mock_get_valid_token.return_value = {"access_token": "token"}
     mock_resolve.return_value = {
         "downlink": "https://cdn.example.com/setup_fake_game.exe",
         "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
@@ -307,16 +301,14 @@ def test_download_worker_skipping_a_file_never_touches_the_network_stream_or_dis
     assert progress_events[-1][0] == len(b"already have this one")
 
 
-@patch("gogstash.download_queue.get_valid_token")
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
-def test_download_worker_redownloads_when_the_checksum_no_longer_matches(mock_resolve, mock_get, mock_get_valid_token, tmp_path):
+def test_download_worker_redownloads_when_the_checksum_no_longer_matches(mock_resolve, mock_get, tmp_path):
     # A stale local copy (say, GOG shipped a build update) should not be
     # trusted just because check_exist() found something at the right size.
     library_db.update_products([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)
-    mock_get_valid_token.return_value = {"access_token": "token"}
     mock_resolve.return_value = {
         "downlink": "https://cdn.example.com/setup_fake_game.exe",
         "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
@@ -348,20 +340,18 @@ def test_download_worker_redownloads_when_the_checksum_no_longer_matches(mock_re
     assert existing_file.read_bytes() == chunk_a + chunk_b  # overwritten with the fresh copy
 
 
-@patch("gogstash.download_queue.get_valid_token")
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
-def test_download_worker_only_emits_succeeded_once_when_some_files_are_skipped(mock_resolve, mock_get, mock_get_valid_token, tmp_path):
+def test_download_worker_only_emits_succeeded_once_when_some_files_are_skipped(mock_resolve, mock_get, tmp_path):
     # Regression: the skip path used to call self.succeeded.emit() right there
     # in the per-file loop, on top of the one the for/else block fires at the
     # very end, so a batch with any skipped file emitted `succeeded` more
-    # than once, prematurely ejaculating the scheduler's concurrency token for a
-    # worker thread that was still very much alive (was being buried alive).
+    # than once, prematurely freeing the scheduler's concurrency token for a
+    # worker thread that was still very much alive.
     library_db.update_products([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)
     settings.update_setting("bonus_content", True)  # installer (skip) + bonus (real download)
-    mock_get_valid_token.return_value = {"access_token": "token"}
     mock_resolve.return_value = {
         "downlink": "https://cdn.example.com/file.bin",
         "checksum": "https://cdn.example.com/file.bin.xml",
@@ -394,14 +384,12 @@ def test_download_worker_only_emits_succeeded_once_when_some_files_are_skipped(m
     assert len(succeeded[0]) == 2  # both the skipped installer and the freshly downloaded bonus file
 
 
-@patch("gogstash.download_queue.get_valid_token")
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
-def test_download_worker_failure_does_not_also_emit_succeeded(mock_resolve, mock_get, mock_get_valid_token, tmp_path):
+def test_download_worker_failure_does_not_also_emit_succeeded(mock_resolve, mock_get, tmp_path):
     library_db.update_products([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)  # isolate to the single installer file
-    mock_get_valid_token.return_value = {"access_token": "token"}
     mock_resolve.return_value = {
         "downlink": "https://cdn.example.com/setup_fake_game.exe",
         "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
@@ -427,15 +415,16 @@ def test_download_worker_failure_does_not_also_emit_succeeded(mock_resolve, mock
     assert succeeded == []  # regression: succeeded must not also fire after failed
 
 
-@patch("gogstash.download_queue.get_valid_token")
-def test_download_worker_fails_immediately_when_no_valid_token(mock_get_valid_token, tmp_path):
-    # Regression: no token, no refresh_token, no soup for you. get_valid_token()
-    # returning None used to send us straight into `None['access_token']`
-    # like nothing happened. Should just report the auth failure and bail.
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_fails_immediately_when_no_valid_token(mock_resolve, tmp_path):
+    # Regression: no token, no refresh_token, no soup for you. Auth checking
+    # now lives inside gog_api.resolve_downlink(), which raises
+    # PermissionError instead of letting `None['access_token']` blow up with
+    # something cryptic. Should just report the auth failure and bail.
     library_db.update_products([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)
-    mock_get_valid_token.return_value = None
+    mock_resolve.side_effect = PermissionError("Authentication failed. Login again.")
 
     thread = download_queue.DownloadWorkerThread(111)
     succeeded = []
@@ -449,41 +438,14 @@ def test_download_worker_fails_immediately_when_no_valid_token(mock_get_valid_to
     assert succeeded == []
 
 
-@patch("gogstash.download_queue.get_valid_token")
-@patch("gogstash.download_queue.requests.get")
-@patch("gogstash.gog_api.resolve_downlink")
-def test_download_worker_requests_a_fresh_token_per_file(mock_resolve, mock_get, mock_get_valid_token, tmp_path):
-    # Regression: we used to grab one token at thread creation and ride it
-    # for the entire download, expiry be damned. Now every file gets its own
-    # fresh get_valid_token() call. The actual download is set up to eat dirt
-    # immediately, we only care how many times we went back for a token.
-    library_db.update_products([FAKE_PRODUCT])
-    settings.update_setting("download_path", str(tmp_path))
-    settings.update_setting("patches", False)
-    settings.update_setting("bonus_content", True)  # installer + bonus, two files, easy math
-    mock_get_valid_token.return_value = {"access_token": "token"}
-    mock_resolve.return_value = {
-        "downlink": "https://cdn.example.com/file.bin",
-        "checksum": "https://cdn.example.com/file.bin.xml",
-    }
-    mock_get.side_effect = RuntimeError("network boom")
-
-    thread = download_queue.DownloadWorkerThread(111)
-    thread.run()
-
-    assert mock_get_valid_token.call_count == 2
-
-
-@patch("gogstash.download_queue.get_valid_token")
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
 def test_download_worker_stop_mid_chunk_deletes_part_file_and_emits_stopped(
-    mock_resolve, mock_get, mock_get_valid_token, tmp_path
+    mock_resolve, mock_get, tmp_path
 ):
     library_db.update_products([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)
-    mock_get_valid_token.return_value = {"access_token": "token"}
     mock_resolve.return_value = {
         "downlink": "https://cdn.example.com/setup_fake_game.exe",
         "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
@@ -511,11 +473,10 @@ def test_download_worker_stop_mid_chunk_deletes_part_file_and_emits_stopped(
     assert not (game_dir / "setup_fake_game.exe").exists()
 
 
-@patch("gogstash.download_queue.get_valid_token")
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
 def test_download_worker_stop_after_full_download_still_saves_the_file(
-    mock_resolve, mock_get, mock_get_valid_token, tmp_path
+    mock_resolve, mock_get, tmp_path
 ):
     # Stop can land in the sliver of time between the last chunk arriving and
     # the loop noticing the stream ran dry. The file's already fully on disk
@@ -524,7 +485,6 @@ def test_download_worker_stop_after_full_download_still_saves_the_file(
     library_db.update_products([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)
-    mock_get_valid_token.return_value = {"access_token": "token"}
     mock_resolve.return_value = {
         "downlink": "https://cdn.example.com/setup_fake_game.exe",
         "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
@@ -562,11 +522,10 @@ def test_download_worker_stop_after_full_download_still_saves_the_file(
     assert written.read_bytes() == chunk_a + chunk_b
 
 
-@patch("gogstash.download_queue.get_valid_token")
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
 def test_download_worker_unrelated_failure_with_stop_already_requested_does_not_also_emit_stopped(
-    mock_resolve, mock_get, mock_get_valid_token, tmp_path
+    mock_resolve, mock_get, tmp_path
 ):
     # Regression: `stopped` used to fire from one blanket check put
     # after the whole file loop, regardless of why the loop
@@ -578,7 +537,6 @@ def test_download_worker_unrelated_failure_with_stop_already_requested_does_not_
     library_db.update_products([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)
-    mock_get_valid_token.return_value = {"access_token": "token"}
     mock_resolve.return_value = {
         "downlink": "https://cdn.example.com/setup_fake_game.exe",
         "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",

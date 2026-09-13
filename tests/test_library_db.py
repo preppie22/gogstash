@@ -1,5 +1,6 @@
 import copy
 import sqlite3
+from unittest.mock import patch
 
 import pytest
 
@@ -356,3 +357,74 @@ def test_clear_cache_keeps_only_the_most_recently_cleared_backup():
     assert len(list(db_path.parent.glob(f"{db_path.name}*.bak"))) == 1
     with sqlite3.connect(backup_path) as conn:
         assert conn.execute("SELECT product_id FROM product").fetchall() == [(222,)]
+
+
+# --- LibraryFetchThread ---
+
+@patch("gogstash.library_db.fetch_downloadables")
+@patch("gogstash.library_db.fetch_library")
+def test_library_fetch_thread_bootstraps_when_db_empty(mock_fetch_library, mock_fetch_downloadables):
+    mock_fetch_library.return_value = [FAKE_PRODUCT]
+    mock_fetch_downloadables.return_value = [FAKE_DOWNLOADABLE]
+    thread = library_db.LibraryFetchThread()
+    received = []
+    thread.succeeded.connect(lambda result: received.append(result))
+    thread.failed.connect(lambda msg: pytest.fail(f"failed signal should not have fired: {msg}"))
+
+    thread.run()
+
+    mock_fetch_library.assert_called_once_with()
+    mock_fetch_downloadables.assert_called_once_with([111], thread.update_progress)
+    assert len(received) == 1
+    assert received[0] == [
+        {"product_id": 111, "title": "Fake Game", "slug": "fake-game", "download_size": 2500}
+    ]
+
+
+@patch("gogstash.library_db.fetch_downloadables")
+@patch("gogstash.library_db.fetch_library")
+def test_library_fetch_thread_reads_cache_without_hitting_network(mock_fetch_library, mock_fetch_downloadables):
+    library_db.update_products([FAKE_PRODUCT])
+    thread = library_db.LibraryFetchThread()
+    received = []
+    thread.succeeded.connect(lambda result: received.append(result))
+    thread.failed.connect(lambda msg: pytest.fail(f"failed signal should not have fired: {msg}"))
+
+    thread.run()
+
+    mock_fetch_library.assert_not_called()
+    mock_fetch_downloadables.assert_not_called()
+    assert received[0][0]["product_id"] == 111
+
+
+@patch("gogstash.library_db.fetch_library")
+def test_library_fetch_thread_emits_failed_on_exception(mock_fetch_library):
+    mock_fetch_library.side_effect = RuntimeError("network exploded")
+    thread = library_db.LibraryFetchThread()
+    errors = []
+    succeeded = []
+    thread.failed.connect(lambda msg: errors.append(msg))
+    thread.succeeded.connect(lambda result: succeeded.append(result))
+
+    thread.run()
+
+    assert errors == ["network exploded"]
+    assert succeeded == []
+
+
+@patch("gogstash.library_db.fetch_library")
+def test_library_fetch_thread_emits_auth_failure_instead_of_failed_on_permission_error(mock_fetch_library):
+    # PermissionError means "not logged in", a distinct case from a generic
+    # network/data failure -- the UI needs to tell them apart to show the
+    # right message and reset itself correctly.
+    mock_fetch_library.side_effect = PermissionError("Authentication failed. Login again.")
+    thread = library_db.LibraryFetchThread()
+    auth_failures = []
+    failed = []
+    thread.auth_failure.connect(lambda: auth_failures.append(True))
+    thread.failed.connect(lambda msg: failed.append(msg))
+
+    thread.run()
+
+    assert auth_failures == [True]
+    assert failed == []

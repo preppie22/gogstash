@@ -25,8 +25,8 @@ from PySide6.QtGui import (
 from PySide6.QtCore import Qt, QSize
 
 from gogstash import gog_auth
-from gogstash.gog_api import LibraryFetchThread, load_library
 from gogstash.login_window import LoginWindow
+from gogstash import library_db
 from gogstash.settings_dialog import SettingsDialog
 from gogstash.settings import read_setting
 from gogstash.manifest import read_manifest
@@ -125,7 +125,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self._update_login_status()
         self._color_scheme_refresh()
-        self.on_games_loaded(load_library())
+        self.on_games_loaded(library_db.get_product_listing())
 
     def _color_scheme_refresh(self) -> None:
         self.set_download_badge(self._queue_count)
@@ -161,23 +161,26 @@ class MainWindow(QMainWindow):
     def open_settings(self):
         settings_dialog = SettingsDialog(self)
         settings_dialog.exec()
-        self.on_games_loaded(load_library())
+        self.on_games_loaded(library_db.get_product_listing())
 
     def open_downloads(self):
         self.download_window.show()
 
     def fetch_games(self):
-        token = gog_auth.get_valid_token()
-        if not token:
-            self.error_message.showMessage("You are not logged in to GOG!")
-            return
-        self.fetch_thread = LibraryFetchThread(token["access_token"], force=True)
+        self.fetch_thread = library_db.LibraryFetchThread(force=True)
+        self.fetch_thread.auth_failure.connect(self.on_auth_failure)
         self.fetch_thread.succeeded.connect(self.on_games_loaded)
         self.fetch_thread.failed.connect(self.fetch_failed_handler)
         self.fetch_thread.progress.connect(self.update_fetch_progress)
         self.fetch_games_button.setDisabled(True)
         self.status_text.setText("Fetching games list...")
         self.fetch_thread.start()
+
+    def on_auth_failure(self):
+        self.error_message.showMessage("You are not logged in to GOG!")
+        self._update_login_status()
+        self.status_progress.setVisible(False)
+        self.fetch_games_button.setDisabled(False)
 
     def onclick_queue_download(self):
         selection_data = self.games_list.selectedItems()

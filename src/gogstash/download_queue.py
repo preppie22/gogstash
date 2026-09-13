@@ -1,7 +1,6 @@
 from gogstash import library_db
 from gogstash import settings
 from gogstash import gog_api
-from gogstash.gog_auth import get_valid_token
 from gogstash import manifest
 from pathlib import Path
 
@@ -124,12 +123,8 @@ class DownloadWorkerThread(QThread):
             return
         self.total_size = self.total_size + sum(file['size'] for file in self.file_queue)
         for file in self.file_queue:
-            auth_token = get_valid_token()
-            if not auth_token:
-                self.failed.emit("Authentication failed. Login again.",self.fetched_list)
-                return
             try:
-                resolved = gog_api.resolve_downlink(auth_token['access_token'], file['downlink'])
+                resolved = gog_api.resolve_downlink(file['downlink'])
                 cdn_link = resolved['downlink']
                 download_response = requests.get(cdn_link, stream=True)
                 download_response.raise_for_status()
@@ -142,6 +137,9 @@ class DownloadWorkerThread(QThread):
                     checksum = checksum_xml.attrib['md5']
                 filename = urllib.parse.urlparse(cdn_link).path.rsplit('/',-1)[-1]
                 filename = urllib.parse.unquote(filename)
+            except PermissionError as e:
+                self.failed.emit(str(e), self.fetched_list)
+                return
             except Exception as e:
                 self.fetched_list.append({
                     'filepath': Path(file['file']), 

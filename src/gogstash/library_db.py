@@ -1,5 +1,8 @@
 import sqlite3
 from gogstash import paths
+from gogstash.gog_api import fetch_library, fetch_downloadables
+
+from PySide6.QtCore import QThread, Signal
 
 def _create_db(force: bool = False) -> None:
     db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
@@ -41,6 +44,34 @@ def _create_db(force: bool = False) -> None:
                 FOREIGN KEY (product_id, group_id) REFERENCES download_group(product_id, group_id)
             );
         """)
+
+class LibraryFetchThread(QThread):
+    succeeded = Signal(list)
+    failed = Signal(str)
+    progress = Signal(int)
+    auth_failure = Signal()
+    
+    def __init__(self, force: bool = False, parent=None):
+        super().__init__(parent)
+        self.force = force
+
+    def run(self, product_id: tuple[int] = ()):
+        try:
+            product_listing = get_product_listing(product_id)
+            if not (product_listing or product_id) or self.force:
+                update_products(fetch_library())
+                product_listing = get_product_listing()
+                all_product_ids = [p['product_id'] for p in product_listing]
+                update_downloadables(fetch_downloadables(all_product_ids, self.update_progress))
+                product_listing = get_product_listing()
+            self.succeeded.emit(product_listing)
+        except PermissionError:
+            self.auth_failure.emit()
+        except Exception as e:
+            self.failed.emit(str(e))
+
+    def update_progress(self, percentage: int):
+        self.progress.emit(percentage)
 
 def update_products(products: list[dict]) -> None:
     db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
