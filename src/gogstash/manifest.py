@@ -35,3 +35,18 @@ def stat_file(game_dir: Path, filepath: Path) -> dict:
     if 'error' in manifest:
         return {}
     return manifest.get(str(filepath), {})
+
+def check_exist(game_dir: Path, filepath: Path) -> bool:
+    stats = stat_file(game_dir, filepath)
+    actual = Path(game_dir) / Path(filepath)
+    if stats and actual.exists():
+        if actual.stat().st_size == stats['size']:
+            return True
+        else:
+            return False
+    file_sizes = [f.stat().st_size for f in game_dir.rglob('*')]
+    manifest = _get_manifest(game_dir)
+    for file in manifest.values():        
+        if file['size'] in file_sizes:
+            return True         
+    return False
