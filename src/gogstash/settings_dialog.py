@@ -47,15 +47,10 @@ class SettingsDialog(QDialog):
         self.setLayout(self.window_layout)
 
         # Download Path
-        # self.download_edit = QHBoxLayout()
         self.download_edit_path = QLineEdit()
         browse_action = QAction(QIcon.fromTheme('folder-open'), "Browse", self.download_edit_path)
         browse_action.triggered.connect(self.onclick_browse_download_path)
         self.download_edit_path.addAction(browse_action, QLineEdit.ActionPosition.TrailingPosition)
-        # self.download_edit_browse = QPushButton("Browse")
-        # self.download_edit_browse.clicked.connect(self.onclick_browse_download_path)
-        # self.download_edit.addWidget(self.download_edit_browse)
-        # self.download_edit.addWidget(self.download_edit_path)
         self.window_layout.addRow("Download Directory", self.download_edit_path)
 
         # Download Concurrency
@@ -199,7 +194,7 @@ class SettingsDialog(QDialog):
         if response == QMessageBox.StandardButton.Yes:
             library_db.clear_cache()
             self.cache_cleared.emit()
-        self.current_cache_label = QLabel(f"Size: {humanize.naturalsize(library_db.get_cache_size())}")
+        self.current_cache_label.setText(f"Size: {humanize.naturalsize(library_db.get_cache_size())}")
 
     def on_concurrency_changed(self, value: int):
         color_palette = QPalette(self.download_concurrency_edit.parentWidget().palette())

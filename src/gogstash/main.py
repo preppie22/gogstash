@@ -223,9 +223,12 @@ class MainWindow(QMainWindow):
             self.games_list.insertRow(row_idx)
             self.games_list.setItem(row_idx, 0, first_column)
             self.games_list.setItem(row_idx, 1, QTableWidgetItem(humanize.naturalsize(game['download_size'])))
-            self.games_list.setItem(row_idx, 2, QTableWidgetItem(str(game['fetched'])))
+            self.games_list.setItem(row_idx, 2, QTableWidgetItem(str(0)))
         self.games_list.selectRow(0)
         self.games_list.setFocus()
+
+    def _check_fetched(self, product_id: int) -> bool:
+        return False
 
 def main():
     app = QApplication(sys.argv)

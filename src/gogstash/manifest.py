@@ -13,13 +13,14 @@ def _get_manifest(game_dir: Path) -> dict:
         return {'error': f'Missing: {str(manifest_file)}'}
     return manifest
 
-def add_file(game_dir: Path, filepath: Path, checksum: str, timestamp: float) -> None:
+def add_file(game_dir: Path, filepath: Path, category: str, checksum: str, timestamp: float) -> None:
     manifest = _get_manifest(game_dir)
     if 'error' in manifest:
         manifest = {}
     if not filepath.exists():
         raise FileNotFoundError(f"No such file {filepath}")
     manifest[str(filepath.relative_to(game_dir))] = {
+        "category": category,
         'size': filepath.stat().st_size,
         'checksum': checksum,
         'fetched_at': timestamp

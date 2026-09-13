@@ -230,7 +230,7 @@ def test_download_worker_skips_a_file_already_verified_in_the_manifest(mock_reso
     existing_file.parent.mkdir(parents=True)
     existing_file.write_bytes(b"already have this one")
     checksum = hashlib.md5(b"already have this one").hexdigest()
-    manifest.add_file(game_dir, existing_file, checksum=checksum, timestamp=42.0)
+    manifest.add_file(game_dir, existing_file, category="installers", checksum=checksum, timestamp=42.0)
     # If the skip check fails to short-circuit, iter_content() gets called and
     # blows up loudly instead of quietly re-downloading something we already have.
     stream_response = MagicMock()
@@ -275,7 +275,7 @@ def test_download_worker_skipping_a_file_never_touches_the_network_stream_or_dis
     existing_file.parent.mkdir(parents=True)
     existing_file.write_bytes(b"already have this one")
     checksum = hashlib.md5(b"already have this one").hexdigest()
-    manifest.add_file(game_dir, existing_file, checksum=checksum, timestamp=42.0)
+    manifest.add_file(game_dir, existing_file, category="installers", checksum=checksum, timestamp=42.0)
     stream_response = MagicMock()
     stream_response.iter_content.side_effect = AssertionError("should never read the byte stream when skipping")
     mock_get.side_effect = [stream_response, make_checksum_response(checksum)]
@@ -325,7 +325,7 @@ def test_download_worker_redownloads_when_the_checksum_no_longer_matches(mock_re
     existing_file = game_dir / "installer_windows_en" / "setup_fake_game.exe"
     existing_file.parent.mkdir(parents=True)
     existing_file.write_bytes(b"a" * 1000)  # matches file1's declared size, but stale content
-    manifest.add_file(game_dir, existing_file, checksum="stale-checksum", timestamp=1.0)
+    manifest.add_file(game_dir, existing_file, category="installers", checksum="stale-checksum", timestamp=1.0)
     chunk_a = b"a" * 400
     chunk_b = b"b" * 600
     fresh_checksum = hashlib.md5(chunk_a + chunk_b).hexdigest()
@@ -373,7 +373,7 @@ def test_download_worker_only_emits_succeeded_once_when_some_files_are_skipped(m
     existing_file.parent.mkdir(parents=True)
     existing_file.write_bytes(b"already have this one")
     checksum = hashlib.md5(b"already have this one").hexdigest()
-    manifest.add_file(game_dir, existing_file, checksum=checksum, timestamp=1.0)
+    manifest.add_file(game_dir, existing_file, category="installers", checksum=checksum, timestamp=1.0)
     bonus_chunk = b"x" * 10
     bonus_response = MagicMock()
     bonus_response.headers = {"Content-Length": str(len(bonus_chunk))}

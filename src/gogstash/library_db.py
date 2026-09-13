@@ -40,16 +40,6 @@ def _create_db(force: bool = False) -> None:
                 PRIMARY KEY (product_id, group_id, file_id),
                 FOREIGN KEY (product_id, group_id) REFERENCES download_group(product_id, group_id)
             );
-            CREATE TABLE fetched_files(
-                product_id BIGINT,
-                file_id TEXT,
-                group_id TEXT,
-                size BIGINT,
-                checksum TEXT,
-                timestamp DATETIME,
-                PRIMARY KEY (product_id, group_id, file_id),
-                FOREIGN KEY (product_id, group_id) REFERENCES download_group(product_id, group_id)
-            );
         """)
 
 def update_products(products: list[dict]) -> None:
@@ -135,20 +125,13 @@ def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
                 p.product_id,
                 p.title,
                 p.slug,
-                COALESCE(dg.download_size, 0) as download_size,
-                COALESCE(ff.fetched_size, 0) as fetched_size,
-                CASE WHEN ff.fetched_size IS NOT NULL THEN 1 ELSE 0 END AS fetched
+                COALESCE(dg.download_size, 0) as download_size
             FROM product p
             LEFT JOIN (
                 SELECT product_id, SUM(total_size) AS download_size
                 FROM download_group
                 GROUP BY product_id
             ) dg ON dg.product_id = p.product_id
-            LEFT JOIN (
-                SELECT product_id, SUM(size) AS fetched_size
-                FROM fetched_files
-                GROUP BY product_id
-            ) ff ON ff.product_id = p.product_id
             {where_block}
         """, product_id)
     products = [{
@@ -156,8 +139,6 @@ def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
         'title': p[1],
         'slug': p[2],
         'download_size': p[3],
-        'fetched_size': p[4],
-        'fetched': p[5]
     } for p in query_result]
     return products
 

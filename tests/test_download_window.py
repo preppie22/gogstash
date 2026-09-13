@@ -271,11 +271,11 @@ def test_on_game_succeeded_records_completed_files_in_the_manifest(mock_estimate
     window.add_to_queue(_row())
 
     window._on_game_succeeded(0, [
-        {"filepath": game_dir / "setup.exe", "size": 5, "checksum": "abc123", "fetched_at": 1.0},
+        {"filepath": game_dir / "setup.exe", "category": "installers", "size": 5, "checksum": "abc123", "fetched_at": 1.0},
     ])
 
     assert manifest.stat_file(game_dir, game_dir / "setup.exe") == {
-        "size": 5, "checksum": "abc123", "fetched_at": 1.0
+        "category": "installers", "size": 5, "checksum": "abc123", "fetched_at": 1.0
     }
 
 
@@ -298,9 +298,9 @@ def test_on_game_succeeded_skips_the_manifest_for_failed_entries_in_the_same_bat
             "filepath": Path("bad_file_id"), "size": -1, "checksum": "", "fetched_at": 1.0,
             "error": "boom",
         },
-        {"filepath": game_dir / "good.exe", "size": 5, "checksum": "abc123", "fetched_at": 2.0},
+        {"filepath": game_dir / "good.exe", "category": "installers", "size": 5, "checksum": "abc123", "fetched_at": 2.0},
     ])
 
     assert manifest.stat_file(game_dir, game_dir / "good.exe") == {
-        "size": 5, "checksum": "abc123", "fetched_at": 2.0
+        "category": "installers", "size": 5, "checksum": "abc123", "fetched_at": 2.0
     }

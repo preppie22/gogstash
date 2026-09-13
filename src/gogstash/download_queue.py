@@ -145,6 +145,7 @@ class DownloadWorkerThread(QThread):
             except Exception as e:
                 self.fetched_list.append({
                     'filepath': Path(file['file']), 
+                    'category': file['category'],
                     'size': -1,
                     'checksum': "",
                     'fetched_at': time.time(),                    
@@ -157,7 +158,8 @@ class DownloadWorkerThread(QThread):
                 save_path.parent.mkdir(parents=True, exist_ok=True)
             except Exception as e:
                 self.fetched_list.append({
-                    'filepath': Path(file['file']), 
+                    'filepath': Path(file['file']),
+                    'category': file['category'], 
                     'size': -1,
                     'checksum': "",
                     'fetched_at': time.time(),
@@ -170,6 +172,7 @@ class DownloadWorkerThread(QThread):
                 if existing_metadata and checksum == existing_metadata['checksum']:
                     self.fetched_list.append({
                         'filepath': save_path,
+                        'category': file['category'],
                         'size': existing_metadata['size'],
                         'checksum': existing_metadata['checksum'],
                         'fetched_at': existing_metadata['fetched_at']
@@ -203,9 +206,9 @@ class DownloadWorkerThread(QThread):
                         verified = True
                 if verified:
                     part_path.rename(save_path)
-                    # self.fetched_list.append((save_path.name, save_path.stat().st_size))
                     self.fetched_list.append({
                         'filepath': save_path,
+                        'category': file['category'],
                         'size': save_path.stat().st_size,
                         'checksum': checksum,
                         'fetched_at': time.time()
@@ -215,6 +218,7 @@ class DownloadWorkerThread(QThread):
                     part_path.unlink()
                     self.fetched_list.append({
                         'filepath': save_path,
+                        'category': file['category'],
                         'size': -1, 
                         'checksum': "",
                         'fetched_at': time.time(),
@@ -226,6 +230,7 @@ class DownloadWorkerThread(QThread):
             except requests.exceptions.RequestException as e:
                 self.fetched_list.append({
                     'filepath': save_path,
+                    'category': file['category'],
                     'size': -1,
                     'checksum': "",
                     'fetched_at': time.time(),
@@ -235,6 +240,7 @@ class DownloadWorkerThread(QThread):
             except Exception as e:
                 self.fetched_list.append({
                     'filepath': save_path,
+                    'category': file['category'],
                     'size': -1,
                     'checksum': "",
                     'fetched_at': time.time(),
@@ -288,6 +294,7 @@ def generate_download_list(product_ids: tuple[int]) -> list[dict]:
             continue
         file_info = {
             'directory': "",
+            'category': item['category'],
             'file': item['file_id'],
             'os': item['os'],
             'size': item['file_size'],
