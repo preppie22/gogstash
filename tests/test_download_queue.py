@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PySide6.QtCore import QObject, Signal
 
-from gogstash import download_queue, library_db, settings
+from gogstash import download_queue, library_db, manifest, settings
 
 FAKE_PRODUCT = {
     "id": 111,
@@ -211,6 +211,187 @@ def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, mock_g
     assert entry["checksum"] == checksum
     assert isinstance(entry["fetched_at"], float)
     assert written.read_bytes() == chunk_a + chunk_b
+
+
+@patch("gogstash.download_queue.get_valid_token")
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_skips_a_file_already_verified_in_the_manifest(mock_resolve, mock_get, mock_get_valid_token, tmp_path):
+    library_db.update_products([FAKE_PRODUCT])
+    settings.update_setting("download_path", str(tmp_path))
+    settings.update_setting("patches", False)
+    mock_get_valid_token.return_value = {"access_token": "token"}
+    mock_resolve.return_value = {
+        "downlink": "https://cdn.example.com/setup_fake_game.exe",
+        "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
+    }
+    game_dir = tmp_path / "fake-game"
+    existing_file = game_dir / "installer_windows_en" / "setup_fake_game.exe"
+    existing_file.parent.mkdir(parents=True)
+    existing_file.write_bytes(b"already have this one")
+    checksum = hashlib.md5(b"already have this one").hexdigest()
+    manifest.add_file(game_dir, existing_file, checksum=checksum, timestamp=42.0)
+    # If the skip check fails to short-circuit, iter_content() gets called and
+    # blows up loudly instead of quietly re-downloading something we already have.
+    stream_response = MagicMock()
+    stream_response.iter_content.side_effect = AssertionError("should never read the byte stream when skipping")
+    mock_get.side_effect = [stream_response, make_checksum_response(checksum)]
+
+    thread = download_queue.DownloadWorkerThread(111)
+    succeeded, failed = [], []
+    thread.succeeded.connect(lambda result: succeeded.append(result))
+    thread.failed.connect(lambda msg, fetched: failed.append(msg))
+
+    thread.run()
+
+    assert failed == []
+    assert len(succeeded) == 1
+    [entry] = succeeded[0]
+    assert entry["filepath"] == existing_file
+    assert entry["checksum"] == checksum
+    assert entry["fetched_at"] == 42.0
+    assert existing_file.read_bytes() == b"already have this one"  # untouched
+
+
+@patch("gogstash.download_queue.get_valid_token")
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_skipping_a_file_never_touches_the_network_stream_or_disk(mock_resolve, mock_get, mock_get_valid_token, tmp_path):
+    # More paranoid sibling of the "skips a file already verified" test above:
+    # that one only proves a *read* of the stream blows up. This one proves
+    # nothing ever gets far enough to even try writing bytes, and that the
+    # progress signal still reports the skipped file as done instead of
+    # leaving the bar stuck at 0% (the gap that was just patched).
+    library_db.update_products([FAKE_PRODUCT])
+    settings.update_setting("download_path", str(tmp_path))
+    settings.update_setting("patches", False)
+    mock_get_valid_token.return_value = {"access_token": "token"}
+    mock_resolve.return_value = {
+        "downlink": "https://cdn.example.com/setup_fake_game.exe",
+        "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
+    }
+    game_dir = tmp_path / "fake-game"
+    existing_file = game_dir / "installer_windows_en" / "setup_fake_game.exe"
+    existing_file.parent.mkdir(parents=True)
+    existing_file.write_bytes(b"already have this one")
+    checksum = hashlib.md5(b"already have this one").hexdigest()
+    manifest.add_file(game_dir, existing_file, checksum=checksum, timestamp=42.0)
+    stream_response = MagicMock()
+    stream_response.iter_content.side_effect = AssertionError("should never read the byte stream when skipping")
+    mock_get.side_effect = [stream_response, make_checksum_response(checksum)]
+
+    thread = download_queue.DownloadWorkerThread(111)
+    succeeded, failed, progress_events = [], [], []
+    thread.succeeded.connect(lambda result: succeeded.append(result))
+    thread.failed.connect(lambda msg, fetched: failed.append(msg))
+    thread.progress.connect(lambda fetched, total: progress_events.append((fetched, total)))
+
+    real_open = open
+
+    def guard_against_part_file_writes(path, mode="r", *args, **kwargs):
+        if "w" in mode or "a" in mode or "x" in mode:
+            raise AssertionError(f"should never open {path!r} for writing when skipping")
+        return real_open(path, mode, *args, **kwargs)
+
+    with patch("builtins.open", side_effect=guard_against_part_file_writes):
+        thread.run()
+
+    part_path = game_dir / "installer_windows_en" / "setup_fake_game.exe.part"
+    assert failed == []
+    assert len(succeeded) == 1
+    assert stream_response.iter_content.call_count == 0
+    assert not part_path.exists()
+    # The skip path now reports the skipped file's own size as progress made,
+    # instead of silently sitting on the fetched_size it walked in with.
+    assert progress_events
+    assert progress_events[-1][0] == len(b"already have this one")
+
+
+@patch("gogstash.download_queue.get_valid_token")
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_redownloads_when_the_checksum_no_longer_matches(mock_resolve, mock_get, mock_get_valid_token, tmp_path):
+    # A stale local copy (say, GOG shipped a build update) should not be
+    # trusted just because check_exist() found something at the right size.
+    library_db.update_products([FAKE_PRODUCT])
+    settings.update_setting("download_path", str(tmp_path))
+    settings.update_setting("patches", False)
+    mock_get_valid_token.return_value = {"access_token": "token"}
+    mock_resolve.return_value = {
+        "downlink": "https://cdn.example.com/setup_fake_game.exe",
+        "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
+    }
+    game_dir = tmp_path / "fake-game"
+    existing_file = game_dir / "installer_windows_en" / "setup_fake_game.exe"
+    existing_file.parent.mkdir(parents=True)
+    existing_file.write_bytes(b"a" * 1000)  # matches file1's declared size, but stale content
+    manifest.add_file(game_dir, existing_file, checksum="stale-checksum", timestamp=1.0)
+    chunk_a = b"a" * 400
+    chunk_b = b"b" * 600
+    fresh_checksum = hashlib.md5(chunk_a + chunk_b).hexdigest()
+    mock_get.side_effect = [
+        make_streamed_response([chunk_a, chunk_b]),
+        make_checksum_response(fresh_checksum),
+    ]
+
+    thread = download_queue.DownloadWorkerThread(111)
+    succeeded, failed = [], []
+    thread.succeeded.connect(lambda result: succeeded.append(result))
+    thread.failed.connect(lambda msg, fetched: failed.append(msg))
+
+    thread.run()
+
+    assert failed == []
+    assert len(succeeded) == 1
+    [entry] = succeeded[0]
+    assert entry["checksum"] == fresh_checksum
+    assert existing_file.read_bytes() == chunk_a + chunk_b  # overwritten with the fresh copy
+
+
+@patch("gogstash.download_queue.get_valid_token")
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_only_emits_succeeded_once_when_some_files_are_skipped(mock_resolve, mock_get, mock_get_valid_token, tmp_path):
+    # Regression: the skip path used to call self.succeeded.emit() right there
+    # in the per-file loop, on top of the one the for/else block fires at the
+    # very end -- so a batch with any skipped file emitted `succeeded` more
+    # than once, prematurely freeing the scheduler's concurrency token for a
+    # worker thread that was still very much alive.
+    library_db.update_products([FAKE_PRODUCT])
+    settings.update_setting("download_path", str(tmp_path))
+    settings.update_setting("patches", False)
+    settings.update_setting("bonus_content", True)  # installer (skip) + bonus (real download)
+    mock_get_valid_token.return_value = {"access_token": "token"}
+    mock_resolve.return_value = {
+        "downlink": "https://cdn.example.com/file.bin",
+        "checksum": "https://cdn.example.com/file.bin.xml",
+    }
+    # generate_download_list() yields bonus_content before the installer for
+    # this fixture, so the mocked calls below are ordered bonus-first.
+    game_dir = tmp_path / "fake-game"
+    existing_file = game_dir / "installer_windows_en" / "file.bin"
+    existing_file.parent.mkdir(parents=True)
+    existing_file.write_bytes(b"already have this one")
+    checksum = hashlib.md5(b"already have this one").hexdigest()
+    manifest.add_file(game_dir, existing_file, checksum=checksum, timestamp=1.0)
+    bonus_chunk = b"x" * 10
+    bonus_response = MagicMock()
+    bonus_response.headers = {"Content-Length": str(len(bonus_chunk))}
+    bonus_response.iter_content.return_value = [bonus_chunk]
+    stream_response = MagicMock()
+    stream_response.iter_content.side_effect = AssertionError("should never read the byte stream when skipping")
+    mock_get.side_effect = [bonus_response, stream_response, make_checksum_response(checksum)]
+
+    thread = download_queue.DownloadWorkerThread(111)
+    succeeded, failed = [], []
+    thread.succeeded.connect(lambda result: succeeded.append(result))
+    thread.failed.connect(lambda msg, fetched: failed.append(msg))
+
+    thread.run()
+
+    assert failed == []
+    assert len(succeeded) == 1  # not one emission per skipped file plus one at the end
+    assert len(succeeded[0]) == 2  # both the skipped installer and the freshly downloaded bonus file
 
 
 @patch("gogstash.download_queue.get_valid_token")

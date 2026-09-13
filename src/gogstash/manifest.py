@@ -17,11 +17,10 @@ def add_file(game_dir: Path, filepath: Path, checksum: str, timestamp: float) ->
     manifest = _get_manifest(game_dir)
     if 'error' in manifest:
         manifest = {}
-    filepath_abs = Path(game_dir) / Path(filepath)
-    if not filepath_abs.exists():
-        raise FileNotFoundError(f"No such file {filepath_abs}")
-    manifest[str(filepath)] = {
-        'size': filepath_abs.stat().st_size,
+    if not filepath.exists():
+        raise FileNotFoundError(f"No such file {filepath}")
+    manifest[str(filepath.relative_to(game_dir))] = {
+        'size': filepath.stat().st_size,
         'checksum': checksum,
         'fetched_at': timestamp
     }
@@ -34,19 +33,24 @@ def stat_file(game_dir: Path, filepath: Path) -> dict:
     manifest = _get_manifest(game_dir)
     if 'error' in manifest:
         return {}
-    return manifest.get(str(filepath), {})
+    return manifest.get(str(filepath.relative_to(game_dir)), {})
 
-def check_exist(game_dir: Path, filepath: Path) -> bool:
+def check_exist(game_dir: Path, filepath: Path, filesize: int) -> dict:
     stats = stat_file(game_dir, filepath)
-    actual = Path(game_dir) / Path(filepath)
-    if stats and actual.exists():
-        if actual.stat().st_size == stats['size']:
-            return True
+    if filepath.exists():
+        if stats:
+            file_size = filepath.stat().st_size
+            if file_size == stats['size']:
+                return stats
         else:
-            return False
-    file_sizes = [f.stat().st_size for f in game_dir.rglob('*')]
-    manifest = _get_manifest(game_dir)
-    for file in manifest.values():        
-        if file['size'] in file_sizes:
-            return True         
-    return False
+            return {}
+    else:
+        manifest = _get_manifest(game_dir)
+        if 'error' in manifest:
+            return {}
+        file_sizes = [f.stat().st_size for f in game_dir.rglob('*')]
+        for name, meta in manifest.items():
+            if meta['size'] == filesize:
+                if filesize in file_sizes:
+                    return manifest[name]
+    return {}

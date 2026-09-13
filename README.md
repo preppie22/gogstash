@@ -69,7 +69,7 @@ The code is currently poorly documented (except for the tests). I'll probably do
 - ✅ Stop downloads once they're started
 - ⬜ Pause downloads once they're started
 - ⬜ Resume a paused or interrupted download instead of starting over
-- ⬜ Skip re-downloading files that already exist and check out
+- 🟡 Skip re-downloading files that already exist and check out
 - ⬜ Record fetched files in the local cache so the library view reflects what you actually have
 - ⬜ Remove or clear entries from the download queue without restarting the app
 - ⬜ Reorder the download queue

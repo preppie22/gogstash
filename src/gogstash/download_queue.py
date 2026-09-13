@@ -2,6 +2,7 @@ from gogstash import library_db
 from gogstash import settings
 from gogstash import gog_api
 from gogstash.gog_auth import get_valid_token
+from gogstash import manifest
 from pathlib import Path
 
 import urllib
@@ -165,6 +166,17 @@ class DownloadWorkerThread(QThread):
                 break
             try:
                 content_length = int(cl) if (cl:= download_response.headers.get('Content-Length')) else 0
+                existing_metadata = manifest.check_exist(download_path, save_path, content_length)
+                if existing_metadata and checksum == existing_metadata['checksum']:
+                    self.fetched_list.append({
+                        'filepath': save_path,
+                        'size': existing_metadata['size'],
+                        'checksum': existing_metadata['checksum'],
+                        'fetched_at': existing_metadata['fetched_at']
+                    })
+                    self.fetched_size = self.fetched_size + existing_metadata['size']
+                    self.update_progress()
+                    continue
                 self.total_size += (content_length - file['size'])
                 file_hash = hashlib.md5()
                 with open(part_path, 'wb') as fp:

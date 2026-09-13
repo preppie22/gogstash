@@ -274,7 +274,7 @@ def test_on_game_succeeded_records_completed_files_in_the_manifest(mock_estimate
         {"filepath": game_dir / "setup.exe", "size": 5, "checksum": "abc123", "fetched_at": 1.0},
     ])
 
-    assert manifest.stat_file(game_dir, Path("setup.exe")) == {
+    assert manifest.stat_file(game_dir, game_dir / "setup.exe") == {
         "size": 5, "checksum": "abc123", "fetched_at": 1.0
     }
 
@@ -301,6 +301,6 @@ def test_on_game_succeeded_skips_the_manifest_for_failed_entries_in_the_same_bat
         {"filepath": game_dir / "good.exe", "size": 5, "checksum": "abc123", "fetched_at": 2.0},
     ])
 
-    assert manifest.stat_file(game_dir, Path("good.exe")) == {
+    assert manifest.stat_file(game_dir, game_dir / "good.exe") == {
         "size": 5, "checksum": "abc123", "fetched_at": 2.0
     }
