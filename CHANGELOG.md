@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Version numbers are CalVer-based (`YYYY.M.D` plus an `-alpha`/`-beta`/`-rc` stage
 suffix while pre-1.0), not SemVer.
 
+## [2026.9.13-alpha] - 2026-09-13
+
+### Added
+- Skip re-downloading a file if it (or an identically-sized copy under a different name) already exists in the game folder, verified against the recorded checksum
+- Record every fetched file's size, checksum, and category in a per-game manifest, replacing the old database-only tracking
+- Show whether a game's installer has already been downloaded in the library view
+
+### Known Issues
+- Removing or clearing the download queue requires restarting the application
+- The download queue can't be reordered
+- Pausing and resuming downloads isn't supported yet
+
 ## [2026.9.10-alpha] - 2026-09-10
 
 ### Added
