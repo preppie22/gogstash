@@ -88,8 +88,10 @@ GogStash/
 │       └── ...          # GUI + GOG API client code
 ├── tests/
 ├── packaging/
-│   └── icons/           # app icon assets for PyInstaller/AppImage builds
-├── logo.svg
+│   ├── appimage/        # AppRun, .desktop file, and icon for the AppImage
+│   ├── docker/          # Dockerfile used to build the AppImage in a container
+│   └── icons/           # app icon assets for PyInstaller builds
+├── CHANGELOG.md
 ├── pyproject.toml
 ├── LICENSE
 └── README.md
