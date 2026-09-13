@@ -73,7 +73,7 @@ def test_add_file_does_not_leave_the_temp_file_behind(tmp_path):
 
 def test_add_file_rejects_a_file_that_is_not_under_game_dir(tmp_path):
     # filepath.relative_to(game_dir) is the whole point of taking an absolute
-    # path -- if it's not actually under game_dir, there's no sane relative
+    # path. If it's not actually under game_dir, there's no sane relative
     # key to store it under.
     outside_dir = tmp_path.parent / "somewhere_else"
     outside_dir.mkdir(exist_ok=True)
@@ -109,7 +109,7 @@ def test_stat_file_returns_empty_dict_when_no_manifest_exists_yet(tmp_path):
 
 
 def test_stat_file_does_not_require_the_file_to_still_be_on_disk(tmp_path):
-    # stat_file is a pure manifest lookup -- it shouldn't care whether the
+    # stat_file is a pure manifest lookup that shouldn't care whether the
     # actual file is still there. That's check_exist's job.
     game_file = tmp_path / "a.exe"
     game_file.write_bytes(b"aaa")
@@ -135,18 +135,19 @@ def test_check_exist_returns_the_entry_when_the_file_matches_at_its_expected_pat
 
 
 def test_check_exist_returns_empty_dict_for_a_brand_new_game_with_no_manifest_yet(tmp_path):
-    # Regression: this used to crash with TypeError -- the fallback branch's
-    # own _get_manifest() call didn't check for the "no manifest file yet"
-    # sentinel the way stat_file() does, so iterating {'error': '...'}.items()
-    # handed 'metadata' a plain string and metadata['size'] blew up.
-    game_file = tmp_path / "setup.exe"  # nothing's ever been recorded, nothing's on disk either
+    # Regression: this used to crash with TypeError, because the fallback
+    # branch's own _get_manifest() call didn't check for the "no manifest
+    # file yet" sentinel the way stat_file() does, so iterating
+    # {'error': '...'}.items() handed 'metadata' a plain string and
+    # metadata['size'] blew up.
+    game_file = tmp_path / "setup.exe"  # no record, no file. zilch.
 
     assert manifest.check_exist(tmp_path, game_file, 5) == {}
 
 
 def test_check_exist_returns_empty_dict_when_the_expected_file_is_corrupted_or_truncated(tmp_path):
     # Regression: a size mismatch at the exact expected path means the file
-    # is a different build or got clipped mid-write, not renamed. It should
+    # is a different build or got fucked mid-write, not renamed. It should
     # be treated as verification failed, not handed off to the rename scan.
     game_file = tmp_path / "setup.exe"
     game_file.write_bytes(b"hello")
@@ -180,8 +181,8 @@ def test_check_exist_returns_empty_dict_when_the_file_is_deleted_with_nothing_ma
 
 
 def test_check_exist_picks_the_right_entry_out_of_several_when_scanning_by_size(tmp_path):
-    # Two other tracked files are also missing from where they should be --
-    # the rename scan has to land on the one whose size actually matches the
+    # Two other tracked files are also missing from where they should be.
+    # The rename scan has to land on the one whose size actually matches the
     # renamed file that's still sitting in the folder, not just any entry.
     patch_file = tmp_path / "patch.exe"
     patch_file.write_bytes(b"pp")

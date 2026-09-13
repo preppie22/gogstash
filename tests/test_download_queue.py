@@ -354,9 +354,9 @@ def test_download_worker_redownloads_when_the_checksum_no_longer_matches(mock_re
 def test_download_worker_only_emits_succeeded_once_when_some_files_are_skipped(mock_resolve, mock_get, mock_get_valid_token, tmp_path):
     # Regression: the skip path used to call self.succeeded.emit() right there
     # in the per-file loop, on top of the one the for/else block fires at the
-    # very end -- so a batch with any skipped file emitted `succeeded` more
-    # than once, prematurely freeing the scheduler's concurrency token for a
-    # worker thread that was still very much alive.
+    # very end, so a batch with any skipped file emitted `succeeded` more
+    # than once, prematurely ejaculating the scheduler's concurrency token for a
+    # worker thread that was still very much alive (was being buried alive).
     library_db.update_products([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)

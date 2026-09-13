@@ -18,7 +18,17 @@ SAVED_SETTINGS = {
 
 
 def click(dialog, standard_button):
-    dialog.settings_form_buttons.button(standard_button).click()
+    button = dialog.settings_form_buttons.button(standard_button)
+    if button is None and standard_button == QDialogButtonBox.StandardButton.Discard:
+        # Discard is a custom-added button here, not Qt's standard one, since
+        # 3660ecb deliberately dodged inconsistent per-platform wording
+        # ("Discard" vs "Don't Save"). .button() only finds actual standard
+        # buttons, so track it down by its role instead.
+        button = next(
+            b for b in dialog.settings_form_buttons.buttons()
+            if dialog.settings_form_buttons.buttonRole(b) == QDialogButtonBox.ButtonRole.DestructiveRole
+        )
+    button.click()
 
 
 def test_dialog_loads_saved_settings_on_construction():
