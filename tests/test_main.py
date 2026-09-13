@@ -6,8 +6,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import QDialog
 
-from gogstash import gog_auth
+from gogstash import gog_auth, manifest
 from gogstash.main import MainWindow
+from gogstash.settings import update_setting
 
 
 def _non_null_icon():
@@ -16,8 +17,8 @@ def _non_null_icon():
     return QIcon(QPixmap(4, 4))
 
 
-FAKE_GAME = {"product_id": 111, "title": "Fake Game", "download_size": 2048}
-FAKE_GAME_2 = {"product_id": 222, "title": "Second Fake Game", "download_size": 4096}
+FAKE_GAME = {"product_id": 111, "title": "Fake Game", "slug": "fake-game", "download_size": 2048}
+FAKE_GAME_2 = {"product_id": 222, "title": "Second Fake Game", "slug": "second-fake-game", "download_size": 4096}
 
 
 def test_not_logged_in_shows_red_indicator_and_status_text():
@@ -109,15 +110,46 @@ def test_fetch_games_starts_thread_with_access_token_when_logged_in(mock_thread_
     mock_thread_instance.start.assert_called_once()
 
 
-def test_on_games_loaded_populates_table_with_games():
+def test_on_games_loaded_populates_table_with_games(tmp_path):
+    update_setting("download_path", str(tmp_path))  # no manifest under here for "fake-game"
     window = MainWindow()
 
     window.on_games_loaded([FAKE_GAME])
 
     assert window.games_list.rowCount() == 1
     assert window.games_list.item(0, 0).text() == "Fake Game"
-    # "Fetched" is a hardcoded placeholder for now, not wired up to real data yet.
-    assert window.games_list.item(0, 2).text() == "0"
+    assert window.games_list.item(0, 2).text() == "No"
+
+
+def test_on_games_loaded_marks_fetched_when_an_installer_is_in_the_manifest(tmp_path):
+    update_setting("download_path", str(tmp_path))
+    game_dir = tmp_path / "fake-game"
+    installer = game_dir / "installer_windows_en" / "setup.exe"
+    installer.parent.mkdir(parents=True)
+    installer.write_bytes(b"hello")
+    manifest.add_file(game_dir, installer, category="installers", checksum="abc", timestamp=1.0)
+    window = MainWindow()
+
+    window.on_games_loaded([FAKE_GAME])
+
+    assert window.games_list.item(0, 2).text() == "Yes"
+
+
+def test_on_games_loaded_does_not_mark_fetched_for_bonus_content_alone(tmp_path):
+    # A game with only its manual/soundtrack downloaded shouldn't read as
+    # "fetched" -- that's the whole reason this checks category, not just
+    # "is the manifest non-empty".
+    update_setting("download_path", str(tmp_path))
+    game_dir = tmp_path / "fake-game"
+    manual = game_dir / "bonus_content" / "manual.pdf"
+    manual.parent.mkdir(parents=True)
+    manual.write_bytes(b"doc")
+    manifest.add_file(game_dir, manual, category="bonus_content", checksum="xyz", timestamp=1.0)
+    window = MainWindow()
+
+    window.on_games_loaded([FAKE_GAME])
+
+    assert window.games_list.item(0, 2).text() == "No"
 
 
 def test_on_games_loaded_replaces_previous_rows_not_appends():

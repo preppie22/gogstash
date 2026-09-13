@@ -1,5 +1,6 @@
 import sys
 import humanize
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -27,9 +28,10 @@ from gogstash import gog_auth
 from gogstash.gog_api import LibraryFetchThread, load_library
 from gogstash.login_window import LoginWindow
 from gogstash.settings_dialog import SettingsDialog
+from gogstash.settings import read_setting
+from gogstash.manifest import read_manifest
 from gogstash.download_window import DownloadWindow, UserRole
 from gogstash.icon_utils import get_icon, badge_icon, get_logo
-
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -217,17 +219,23 @@ class MainWindow(QMainWindow):
         self.games_list.setRowCount(0)
         result = sorted(result, key=(lambda n: n['title']))
         for game in result:
+            fetched = self._check_fetched(Path(read_setting('download_path')) / game['slug'])
             row_idx = self.games_list.rowCount()
             first_column = QTableWidgetItem(game['title'])
             first_column.setData(UserRole.PRODUCT_ID_ROLE.value, game['product_id'])
             self.games_list.insertRow(row_idx)
             self.games_list.setItem(row_idx, 0, first_column)
             self.games_list.setItem(row_idx, 1, QTableWidgetItem(humanize.naturalsize(game['download_size'])))
-            self.games_list.setItem(row_idx, 2, QTableWidgetItem(str(0)))
+            self.games_list.setItem(row_idx, 2, QTableWidgetItem("Yes" if fetched else "No"))
         self.games_list.selectRow(0)
         self.games_list.setFocus()
 
-    def _check_fetched(self, product_id: int) -> bool:
+    def _check_fetched(self, game_dir: Path) -> bool:
+        manifest = read_manifest(game_dir)
+        if 'error' in manifest:
+            return False
+        if 'installers' in [f['category'] for f in manifest.values()]:
+            return True
         return False
 
 def main():

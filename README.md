@@ -27,12 +27,7 @@ What's working:
 - Select what categories to download.
 - Settings menu.
 
-What's not working:
-- ~~Stopping downloads once they've been started.~~
-- Removing or clearing the download queue (just restart the application).
-- Verify if files exist before redownloading them.
-- Adding fetched files to local cache.
-- Reordering the download queue.
+What's not working: see [To Do](#to-do)
 
 You can currently use the app to download your stuff off of GOG (I've used it). I've put in a lot of safety stuff to make sure it won't break anything on your drive or ban your account or something. Don't set the download concurrency too high. I don't know how lenient GOG is with their API being hammered. Don't say I didn't warn you if your account gets banned.
 
@@ -70,7 +65,7 @@ The code is currently poorly documented (except for the tests). I'll probably do
 - ⬜ Pause downloads once they're started
 - ⬜ Resume a paused or interrupted download instead of starting over
 - 🟡 Skip re-downloading files that already exist and check out
-- ⬜ Record fetched files in the local cache so the library view reflects what you actually have
+- 🟡 Record fetched files in the local cache so the library view reflects what you actually have
 - ⬜ Remove or clear entries from the download queue without restarting the app
 - ⬜ Reorder the download queue
 - ✅ Ship a self-contained Linux AppImage

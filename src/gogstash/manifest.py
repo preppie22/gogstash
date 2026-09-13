@@ -3,7 +3,7 @@ from pathlib import Path
 
 MANIFEST_FILE = ".gogstash.manifest"
 
-def _get_manifest(game_dir: Path) -> dict:
+def read_manifest(game_dir: Path) -> dict:
     manifest_file = Path(game_dir) / MANIFEST_FILE
     manifest = None
     try:
@@ -14,7 +14,7 @@ def _get_manifest(game_dir: Path) -> dict:
     return manifest
 
 def add_file(game_dir: Path, filepath: Path, category: str, checksum: str, timestamp: float) -> None:
-    manifest = _get_manifest(game_dir)
+    manifest = read_manifest(game_dir)
     if 'error' in manifest:
         manifest = {}
     if not filepath.exists():
@@ -31,7 +31,7 @@ def add_file(game_dir: Path, filepath: Path, category: str, checksum: str, times
     temp_file.replace(Path(game_dir) / Path(MANIFEST_FILE))
 
 def stat_file(game_dir: Path, filepath: Path) -> dict:
-    manifest = _get_manifest(game_dir)
+    manifest = read_manifest(game_dir)
     if 'error' in manifest:
         return {}
     return manifest.get(str(filepath.relative_to(game_dir)), {})
@@ -46,7 +46,7 @@ def check_exist(game_dir: Path, filepath: Path, filesize: int) -> dict:
         else:
             return {}
     else:
-        manifest = _get_manifest(game_dir)
+        manifest = read_manifest(game_dir)
         if 'error' in manifest:
             return {}
         file_sizes = [f.stat().st_size for f in game_dir.rglob('*')]
