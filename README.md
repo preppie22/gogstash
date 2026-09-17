@@ -9,15 +9,13 @@
 A desktop GUI application for downloading local backups
 of your GOG.com game library.
 
-Before you yell "AI SLOP..!!" I wrote the whole thing myself but used AI to help me here and there for testing, debugging and maintaining a to-do list so I can keep track of what needs to be done. That logo is basically this [diskette image](https://openclipart.org/detail/284105/old-three-and-a-half-diskette) I found with "GoG" slapped onto it.  
-
-The project is probably in alpha stage (see [Status](#status)) right now and there's a lot of work to be done to get it fully working and polished. Let me know if you're interested in contributing.
-
 ## Why
 
-Basically, I just wanted a tool that can batch download installers/extras from GOG for my game library. There are some CLI tools, but I didn't really like those. So, I built this rinky dink application to do that for me.
+Basically, I wanted to build a tool that can batch download installers/extras for your GOG game library. There are some CLI tools, but I didn't really like those because they were clunky for batch downloads and mostly single threaded. So, I built this application to do better than that. The program code is not AI generated (see [AI Disclosure](#ai-disclosure)). My plan is to have this program batch download content only when it hasn't already been downloaded or if the downloaded content is stale.
 
 ## Status
+
+The project is in alpha stage right now and there's a lot of work to be done to get it fully working and polished. Please download the alpha and report any bugs you find.
 
 What's working:
 - Login to GOG.com.
@@ -29,14 +27,16 @@ What's working:
 
 What's not working: see [To Do](#to-do)
 
-You can currently use the app to download your stuff off of GOG (I've used it). I've put in a lot of safety stuff to make sure it won't break anything on your drive or ban your account or something. Don't set the download concurrency too high. I don't know how lenient GOG is with their API being hammered. Don't say I didn't warn you if your account gets banned.
+You can currently use the app to download your stuff off of GOG (I use it often). I've put in a lot of safety checks to make sure it won't break anything on your drive or ban your account or something. Don't set the download concurrency too high. I don't know how lenient GOG is with their API being hammered. Don't say I didn't warn you if your account gets banned.
 
-The code is currently poorly documented (except for the tests). I'll probably do that at some point. For now, just open main.py and follow along from there.
+The code is currently poorly documented (except for the tests). I'll probably do that at some point. For now, if you want to poke at the code, just open main.py and follow along from there.
 
 ## Download
 
 > [!CAUTION]
-> This application is currently in **alpha**. I have done everything possible to ensure it won't damage your system, but I cannot guarantee it.
+> This application is currently in **alpha**. However, I have done everything possible to ensure it won't damage your system.
+
+I'd appreciate your feedback on bugs, features, or improvements in the [issues section](https://github.com/preppie22/gogstash/issues).
 
 <div align="center">
 
@@ -124,10 +124,11 @@ gogstash
 | Windows   | `%USERPROFILE%\AppData\Local\gogstash\`               |
 | MacOS     | `~/Library/Application Support/gogstash/`             |
 
-## AI Disclaimer
+## AI Disclosure
 
 **All code has been written by the author of this project.** AI (Claude) was only used to assist
-in testing, debugging, and planning of this project.
+in testing, debugging, and planning of this project. Basically, I used Claude to keep track of a to-do
+list, hunt down bugs (read only), and assist in writing test cases to ensure said bugs don't return.
 
 ## Attribution
 
