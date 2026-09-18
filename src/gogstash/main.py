@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
     QDialog,
+    QDockWidget,
     QErrorMessage,
     QTableWidget,
     QTableWidgetItem,
@@ -14,10 +15,10 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QSizePolicy,
-    QHBoxLayout,
     QVBoxLayout,
     QPushButton,
-    QProgressBar
+    QProgressBar,
+    QDialogButtonBox,
 )
 from PySide6.QtGui import (
     QAction,
@@ -31,16 +32,16 @@ from gogstash.settings_dialog import SettingsDialog
 from gogstash.settings import read_setting
 from gogstash.manifest import read_manifest
 from gogstash.download_window import DownloadWindow, UserRole
-from gogstash.icon_utils import get_icon, badge_icon, get_logo
+from gogstash.icon_utils import get_icon, get_logo
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("GogStash")
         self.setWindowIcon(get_logo())
-        self.resize(800, 600)
+        self.resize(1024, 768)
         self.download_window = DownloadWindow(self)
-        self.download_window.queue_changed.connect(self.set_download_badge)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.download_window)
         self._queue_count = 0
 
         self.logged_in_indicator = QLabel()
@@ -74,12 +75,6 @@ class MainWindow(QMainWindow):
         self.fetch_games_button.setProperty('iconFile', 'fetch.svg')
         self.fetch_games_button.triggered.connect(self.fetch_games)
         self.main_toolbar.addAction(self.fetch_games_button)
-        # self.main_toolbar.addSeparator()
-
-        self.downloads_window_button = QAction("Show Download Queue", self, icon=get_icon('download.svg'))
-        self.downloads_window_button.setProperty('iconFile', 'download.svg')
-        self.downloads_window_button.triggered.connect(self.open_downloads)
-        self.main_toolbar.addAction(self.downloads_window_button)
 
         self.spacer = QWidget()
         self.spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -92,9 +87,13 @@ class MainWindow(QMainWindow):
         QApplication.instance().styleHints().colorSchemeChanged.connect(self._color_scheme_refresh)
         SettingsDialog.set_color_theme()
 
-        self.central_widget = QWidget()
-        self.central_layout = QHBoxLayout()
-        self.central_widget.setLayout(self.central_layout)
+        self.left_dock = QDockWidget()
+        self.library_widget = QWidget()
+        self.library_layout = QVBoxLayout()
+        self.library_widget.setLayout(self.library_layout)
+        self.left_dock.setWidget(self.library_widget)
+        self.left_dock.setWindowTitle("Library")
+        self.left_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
 
         self.games_list = QTableWidget()
         self.games_list.cellDoubleClicked.connect(self.doubleclick_game_list)
@@ -108,29 +107,22 @@ class MainWindow(QMainWindow):
         self.games_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.games_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
 
-        self.button_layout = QVBoxLayout()
-        self.button_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        self.queue_download_button = QPushButton("Add to Download Queue")
+        self.queue_download_button = QPushButton("Queue Selected")
         self.queue_download_button.clicked.connect(self.onclick_queue_download)
-        self.button_layout.addWidget(self.queue_download_button)
 
-        self.open_download_queue_button = QPushButton("Show Download Queue")
-        self.open_download_queue_button.clicked.connect(self.open_downloads)
-        self.button_layout.addWidget(self.open_download_queue_button)
+        self.button_layout = QDialogButtonBox()
+        self.button_layout.addButton(self.queue_download_button, QDialogButtonBox.ButtonRole.ActionRole)
 
-        self.central_layout.addWidget(self.games_list)
-        self.central_layout.addLayout(self.button_layout)
+        self.library_layout.addWidget(self.games_list)
+        self.library_layout.addWidget(self.button_layout)
 
-        self.setCentralWidget(self.central_widget)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea,self.left_dock)
         self._update_login_status()
         self._color_scheme_refresh()
         self.on_games_loaded(library_db.get_product_listing())
 
     def _color_scheme_refresh(self) -> None:
-        self.set_download_badge(self._queue_count)
         for button in self.main_toolbar.actions():
-            if button is self.downloads_window_button: continue
             if not button.icon(): continue
             button.setIcon(get_icon(button.property('iconFile')))
     
@@ -142,12 +134,6 @@ class MainWindow(QMainWindow):
         else:
             self.status_text.setText("Not logged in")
             self.logged_in_indicator.setStyleSheet("background-color: red; border-radius: 5")
-
-    def set_download_badge(self, count: int):
-        self._queue_count = count
-        base_icon = get_icon('download.svg')
-        badged_icon = badge_icon(base_icon, count)
-        self.downloads_window_button.setIcon(badged_icon)
 
     def logout(self):
         gog_auth.clear_token()
@@ -162,9 +148,6 @@ class MainWindow(QMainWindow):
         settings_dialog = SettingsDialog(self)
         settings_dialog.exec()
         self.on_games_loaded(library_db.get_product_listing())
-
-    def open_downloads(self):
-        self.download_window.show()
 
     def fetch_games(self):
         self.fetch_thread = library_db.LibraryFetchThread(force=True)

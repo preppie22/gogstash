@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QApplication,
-    QDialog,
+    QDockWidget,
     QTableWidget,
     QTableWidgetItem,
     QAbstractItemView,
@@ -17,14 +17,14 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QProgressBar,
-    QLabel
+    QLabel,
+    QWidget
 )
 from PySide6.QtCore import ( 
     Qt,
     QModelIndex,
     QRect,
     QTimer,
-    Signal
 )
 from PySide6.QtGui import (
     QPainter,
@@ -68,22 +68,23 @@ class RowItemDelegate(QStyledItemDelegate):
             index.data(Qt.ItemDataRole.DisplayRole)
         )
 
-class DownloadWindow(QDialog):
-    queue_changed = Signal(int)
-
+class DownloadWindow(QDockWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Download Queue")
-        self.setMinimumHeight(400)
+        self.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        # self.setMinimumHeight(400)
 
         self.log_file = paths.config_file_path(paths.ConfigFile.DOWNLOAD_LOG)
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
 
+        self.main_widget = QWidget()
         self.window_layout = QVBoxLayout()
+        self.main_widget.setLayout(self.window_layout)
 
         self.game_queue_table = QTableWidget()
         self.game_queue_table.setColumnCount(2)
-        self.game_queue_table.setHorizontalHeaderLabels(['Product', 'Progress'])
+        self.game_queue_table.setHorizontalHeaderLabels(['Title', 'Progress'])
         self.game_queue_table.setAlternatingRowColors(True)
         self.game_queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.game_queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -119,7 +120,7 @@ class DownloadWindow(QDialog):
         self.dialog_buttons.addButton(self.clear_queue_button, QDialogButtonBox.ButtonRole.ResetRole)
         self.window_layout.addWidget(self.dialog_buttons)
 
-        self.setLayout(self.window_layout)
+        self.setWidget(self.main_widget)
         QApplication.instance().styleHints().colorSchemeChanged.connect(self._color_scheme_refresh)
         self._color_scheme_refresh()
 
@@ -154,7 +155,6 @@ class DownloadWindow(QDialog):
             self.game_queue_table.setItem(row_idx, i, column_data[i])
         self.set_progress(row_idx, 0)
         self.game_queue_table.selectRow(row_idx)
-        self.queue_changed.emit(row_idx + 1)
         return row_idx
 
     def start_downloads(self):
@@ -281,5 +281,6 @@ if __name__ == "__main__":
     timer_toggle_shortcut = QShortcut(QKeySequence("s"), dialog)
     timer_toggle_shortcut.activated.connect(toggle_timer)
         
-    dialog.exec()
+    dialog.show()
+    app.exec()
 
