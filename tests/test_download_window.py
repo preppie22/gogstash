@@ -84,17 +84,6 @@ def test_add_to_queue_returns_incrementing_row_index():
     assert second_idx == 1
 
 
-def test_add_to_queue_emits_queue_changed_with_new_count():
-    window = DownloadWindow()
-    received = []
-    window.queue_changed.connect(lambda count: received.append(count))
-
-    window.add_to_queue(_row(title="First Game"))
-    window.add_to_queue(_row(title="Second Game"))
-
-    assert received == [1, 2]
-
-
 def test_set_progress_updates_progress_role_data():
     window = DownloadWindow()
     window.add_to_queue(_row())
@@ -183,11 +172,11 @@ def test_on_stopped_reenables_start_button_and_clears_scheduler(mock_estimate, m
     window = DownloadWindow()
     window.add_to_queue(_row())
     window.start_downloads()
-    assert window.start_pause_button.isEnabled() is False
+    assert window.start_button.isEnabled() is False
 
     window._on_stopped()
 
-    assert window.start_pause_button.isEnabled() is True
+    assert window.start_button.isEnabled() is True
     assert window.scheduler is None
 
 

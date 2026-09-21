@@ -19,11 +19,14 @@ class DownloadScheduler(QObject):
     game_succeeded = Signal(int, list)
     game_failed = Signal(int, str, list)
     game_stopped = Signal(int, list)
+    game_paused = Signal(int, list)
     progress_updated = Signal(int, float, float)
     finished = Signal()
     stopped = Signal()
+    paused = Signal()
 
     _stopped_flag = False
+    _paused_flag = False
 
     def __init__(self, product_queue: list[dict], concurrency: int = 1, parent=None):
         super().__init__(parent)
@@ -31,32 +34,51 @@ class DownloadScheduler(QObject):
             raise ValueError("Concurrency must be more than 0")
         self.max_tokens = concurrency
         self.tokens = concurrency
-        self.download_queue = []
+        self.idle_queue = []
         self.active_queue = []
+        self.paused_queue = []
         for product in product_queue:
             queue_item = {
                 'row_idx': product['idx'],
                 'worker': DownloadWorkerThread(product['product_id']),
                 'stopped': False
             }
-            self.download_queue.append(queue_item)
+            self.idle_queue.append(queue_item)
 
     def stop_all(self):
         self._stopped_flag = True
+        self._paused_flag = False
         for job in self.active_queue:
             job['worker'].stop_worker()
-        for task in self.download_queue:
+        for task in self.idle_queue:
             task['stopped'] = True
+        while self.paused_queue:
+            job = self.paused_queue.pop()
+            self.game_stopped.emit(job['row_idx'], job['fetched_list'])
+            part_path : Path = job.get('partpath', None)
+            if part_path: part_path.unlink(missing_ok=True)
+        self.schedule()
+            
+    def pause_all(self):
+        if self._paused_flag:
+            return
+        self._paused_flag = True
+        for job in self.active_queue:
+            job['worker'].pause_worker()
 
     def schedule(self):
-        self.download_queue = sorted(self.download_queue, key=lambda x: x['row_idx'])
-        while self.tokens > 0 and self.download_queue:
-            job = self.download_queue.pop(0)
+        self.idle_queue.sort(key=lambda x: x['row_idx'])
+        if self._paused_flag:
+            if not self.active_queue:
+                self.paused.emit()
+            return
+        while self.tokens > 0 and self.idle_queue:
+            job = self.idle_queue.pop(0)
             if job['stopped']:
                 self.game_stopped.emit(job['row_idx'], [])
             else:
                 self._dispatch(job)
-        if not self.download_queue and not self.active_queue:
+        if not self.idle_queue and not self.active_queue:
             if self._stopped_flag:
                 self.stopped.emit()
             else:
@@ -67,6 +89,7 @@ class DownloadScheduler(QObject):
         job['worker'].failed.connect(lambda msg, fetched_list, t=job: self._handle_failure(t, msg, fetched_list))
         job['worker'].progress.connect(lambda fetched_size, total_size, t=job: self._report_progress(t, fetched_size, total_size))
         job['worker'].stopped.connect(lambda fetched_list, t=job: self._handle_stopped(t, fetched_list))
+        job['worker'].paused.connect(lambda fetched_list, partial_file, t=job: self._handle_paused(t, fetched_list, partial_file))
         self.active_queue.append(job)
         self.tokens = self.tokens - 1
         job['worker'].start()
@@ -86,6 +109,16 @@ class DownloadScheduler(QObject):
         self._reap(job)
         self.schedule()
 
+    def _handle_paused(self, job: dict, fetched_list: list, partial_file: dict) -> None:
+        self.game_paused.emit(job['row_idx'], fetched_list)
+        if job in self.active_queue:
+            paused_job = job.copy()
+            paused_job.update(partial_file)
+            paused_job['fetched_list'] = fetched_list
+            self.paused_queue.append(paused_job)
+        self._reap(job)
+        self.schedule()
+
     def _handle_failure(self, job: dict, msg: str, fetched_list: list) -> None:
         self.game_failed.emit(job['row_idx'], msg, fetched_list)
         self._reap(job)
@@ -99,8 +132,10 @@ class DownloadWorkerThread(QThread):
     failed = Signal(str, list)
     progress = Signal(float, float)
     stopped = Signal(list)
+    paused = Signal(list, dict)
 
     _stop_flag = False
+    _pause_flag = False
 
     def __init__(self, product_id: int, parent=None):
         super().__init__(parent)
@@ -191,6 +226,12 @@ class DownloadWorkerThread(QThread):
                         if self._stop_flag:
                             cleanup = True
                             break
+                        if self._pause_flag:
+                            self.paused.emit(self.fetched_list, {
+                                'partpath': part_path,
+                                'downlink': file['downlink']
+                            })
+                            return
                 if self._stop_flag and cleanup:
                     part_path.unlink()  
                     self.stopped.emit(self.fetched_list)
@@ -225,6 +266,9 @@ class DownloadWorkerThread(QThread):
                 if self._stop_flag:
                     self.stopped.emit(self.fetched_list)
                     return
+                if self._pause_flag:
+                    self.paused.emit(self.fetched_list, {})
+                    return
             except requests.exceptions.RequestException as e:
                 self.fetched_list.append({
                     'filepath': save_path,
@@ -256,6 +300,9 @@ class DownloadWorkerThread(QThread):
 
     def stop_worker(self):
         self._stop_flag = True
+
+    def pause_worker(self):
+        self._pause_flag = True
 
     def update_progress(self):
         self.progress.emit(self.fetched_size, self.total_size)

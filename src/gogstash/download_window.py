@@ -97,11 +97,11 @@ class DownloadWindow(QDockWidget):
         self.clear_queue_button = QPushButton("Clear Queue")
         self.clear_queue_button.setIcon(get_icon('trash.svg'))
         self.clear_queue_button.setProperty('iconFile', 'trash.svg')
-        self.start_pause_button = QPushButton("Start Downloads")
-        self.start_pause_button.clicked.connect(self.start_downloads)
-        self.start_pause_button.setIcon(get_icon('start_download.svg'))
-        self.start_pause_button.setProperty('iconFile', 'start_download.svg')
-        self.stop_button = QPushButton("Stop Downloads")
+        self.start_button = QPushButton("Start Downloads")
+        self.start_button.clicked.connect(self.start_downloads)
+        self.start_button.setIcon(get_icon('start_download.svg'))
+        self.start_button.setProperty('iconFile', 'start_download.svg')
+        self.stop_button = QPushButton("Cancel Downloads")
         self.stop_button.clicked.connect(self.stop_downloads)
         self.stop_button.setIcon(get_icon('stop.svg'))
         self.stop_button.setProperty('iconFile', 'stop.svg')
@@ -115,7 +115,7 @@ class DownloadWindow(QDockWidget):
         self.window_layout.addWidget(self.progress_bar)
 
         self.dialog_buttons = QDialogButtonBox()
-        self.dialog_buttons.addButton(self.start_pause_button, QDialogButtonBox.ButtonRole.ActionRole)
+        self.dialog_buttons.addButton(self.start_button, QDialogButtonBox.ButtonRole.ActionRole)
         self.dialog_buttons.addButton(self.stop_button, QDialogButtonBox.ButtonRole.ActionRole)
         self.dialog_buttons.addButton(self.clear_queue_button, QDialogButtonBox.ButtonRole.ResetRole)
         self.window_layout.addWidget(self.dialog_buttons)
@@ -172,7 +172,7 @@ class DownloadWindow(QDockWidget):
         self.scheduler.finished.connect(self._on_finished)
         self.scheduler.game_stopped.connect(self._on_game_stopped)
         self.scheduler.stopped.connect(self._on_stopped)
-        self.start_pause_button.setDisabled(True)
+        self.start_button.setDisabled(True)
         self.scheduler.schedule()
         self.downloads_status.setText("Downloading...")
 
@@ -235,10 +235,10 @@ class DownloadWindow(QDockWidget):
         self.progress_bar.setValue(0)
         self.downloads_status.setText("Downloads stopped")
         QTimer().singleShot(5000, self._reset_status)
-        self.start_pause_button.setDisabled(False)
+        self.start_button.setDisabled(False)
 
     def _on_finished(self):
-        self.start_pause_button.setDisabled(False)
+        self.start_button.setDisabled(False)
         self.progress_bar.setValue(self.progress_bar.maximum())
 
     def _reset_status(self):

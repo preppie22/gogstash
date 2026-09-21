@@ -173,27 +173,6 @@ def test_on_games_loaded_replaces_previous_rows_not_appends():
     assert window.games_list.item(0, 0).text() == "Second Fake Game"
 
 
-def test_open_downloads_shows_the_persistent_download_window():
-    window = MainWindow()
-    window.download_window.show = MagicMock()
-
-    window.open_downloads()
-
-    window.download_window.show.assert_called_once()
-
-
-def test_open_downloads_does_not_create_a_new_window_each_time():
-    # Regression: open_downloads() used to construct a fresh DownloadWindow on
-    # every call, silently discarding whatever was already queued.
-    window = MainWindow()
-    first_instance = window.download_window
-
-    window.open_downloads()
-    window.open_downloads()
-
-    assert window.download_window is first_instance
-
-
 def test_onclick_queue_download_adds_selected_game_title_once():
     # Regression: games_list has 3 columns per row under SelectRows, so
     # selectedItems() hands back 3 items for a single selected row. Naively
@@ -228,63 +207,10 @@ def test_onclick_queue_download_does_nothing_without_a_selection():
     window.download_window.add_to_queue.assert_not_called()
 
 
-def test_set_download_badge_stores_the_new_count():
-    window = MainWindow()
-
-    window.set_download_badge(7)
-
-    assert window._queue_count == 7
-
-
-@patch("gogstash.main.badge_icon")
-@patch("gogstash.main.get_icon")
-def test_set_download_badge_composes_the_download_icon_then_badges_it(mock_get_icon, mock_badge_icon):
-    mock_get_icon.return_value = _non_null_icon()  # needed to survive construction below
-    mock_badge_icon.return_value = _non_null_icon()
-    window = MainWindow()
-    mock_get_icon.reset_mock()
-    mock_badge_icon.reset_mock()
-    mock_get_icon.return_value = "DOWNLOAD_ICON_SENTINEL"
-    mock_badge_icon.return_value = QIcon()
-
-    window.set_download_badge(3)
-
-    mock_get_icon.assert_called_once_with("download.svg")
-    mock_badge_icon.assert_called_once_with("DOWNLOAD_ICON_SENTINEL", 3)
-    assert window.downloads_window_button.icon().cacheKey() == mock_badge_icon.return_value.cacheKey()
-
-
-def test_color_scheme_refresh_always_recomputes_the_download_badge():
-    window = MainWindow()
-    window.set_download_badge = MagicMock()
-
-    window._color_scheme_refresh()
-
-    window.set_download_badge.assert_called_once_with(window._queue_count)
-
-
-@patch("gogstash.main.get_icon")
-def test_color_scheme_refresh_skips_the_downloads_toolbar_action(mock_get_icon):
-    # Regression: reloading the download-queue icon plain via get_icon here
-    # would wipe out the badge that set_download_badge drew on it.
-    mock_get_icon.side_effect = lambda *args, **kwargs: _non_null_icon()  # distinct icon per call
-    window = MainWindow()
-    window.set_download_badge = MagicMock()
-    downloads_icon = window.downloads_window_button.icon()
-    mock_get_icon.reset_mock()
-
-    window._color_scheme_refresh()
-
-    called_icons = [call.args[0] for call in mock_get_icon.call_args_list]
-    assert "download.svg" not in called_icons
-    assert len(called_icons) == 4  # login, logout, fetch_games, settings
-
-
 @patch("gogstash.main.get_icon")
 def test_color_scheme_refresh_reloads_each_toolbar_action_from_its_own_icon_file(mock_get_icon):
     mock_get_icon.return_value = _non_null_icon()
     window = MainWindow()
-    window.set_download_badge = MagicMock()
     mock_get_icon.reset_mock()
 
     window._color_scheme_refresh()

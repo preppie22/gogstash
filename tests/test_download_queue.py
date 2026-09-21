@@ -524,6 +524,93 @@ def test_download_worker_stop_after_full_download_still_saves_the_file(
 
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_pause_mid_chunk_keeps_part_file_and_reports_where_it_is(
+    mock_resolve, mock_get, tmp_path
+):
+    # Pause is Stop's chill sibling: same "drop everything right now", but the
+    # half-baked .part file has to survive, since that's the whole point of
+    # being able to resume later instead of starting from byte zero.
+    library_db.update_products([FAKE_PRODUCT])
+    settings.update_setting("download_path", str(tmp_path))
+    settings.update_setting("patches", False)
+    mock_resolve.return_value = {
+        "downlink": "https://cdn.example.com/setup_fake_game.exe",
+        "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
+    }
+    mock_get.side_effect = [
+        make_streamed_response([b"a" * 400, b"b" * 600]),
+        make_checksum_response("irrelevant"),
+    ]
+
+    thread = download_queue.DownloadWorkerThread(111)
+    thread.update_progress = lambda: thread.pause_worker()
+    succeeded, failed, stopped, paused = [], [], [], []
+    thread.succeeded.connect(lambda result: succeeded.append(result))
+    thread.failed.connect(lambda msg, fetched: failed.append(msg))
+    thread.stopped.connect(lambda fetched: stopped.append(fetched))
+    thread.paused.connect(lambda fetched, partial: paused.append((fetched, partial)))
+
+    thread.run()
+
+    assert succeeded == []
+    assert failed == []
+    assert stopped == []
+    game_dir = tmp_path / "fake-game" / "installer_windows_en"
+    part_path = game_dir / "setup_fake_game.exe.part"
+    assert paused == [([], {"partpath": part_path, "downlink": "https://example.com/file1"})]
+    assert part_path.read_bytes() == b"a" * 400
+    assert not (game_dir / "setup_fake_game.exe").exists()
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_pause_after_full_download_saves_the_file_and_only_pauses_once(
+    mock_resolve, mock_get, tmp_path
+):
+    # Regression: pausing in the gap after a file finishes verifying used to
+    # emit `paused` and then just keep on trucking into the next file (or, on
+    # the last file, straight into `succeeded`), so the poor scheduler got
+    # told "paused" and "done" for the same job. Now it emits paused once and gets out.
+    library_db.update_products([FAKE_PRODUCT])
+    settings.update_setting("download_path", str(tmp_path))
+    settings.update_setting("patches", False)
+    mock_resolve.return_value = {
+        "downlink": "https://cdn.example.com/setup_fake_game.exe",
+        "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
+    }
+    chunk_a = b"a" * 400
+    chunk_b = b"b" * 600
+    checksum = hashlib.md5(chunk_a + chunk_b).hexdigest()
+    thread = download_queue.DownloadWorkerThread(111)
+
+    def chunks_then_pause():
+        yield chunk_a
+        yield chunk_b
+        thread.pause_worker()  # lands after the last chunk, before the loop notices
+
+    response = MagicMock()
+    response.iter_content.return_value = chunks_then_pause()
+    mock_get.side_effect = [response, make_checksum_response(checksum)]
+
+    succeeded, failed, paused = [], [], []
+    thread.succeeded.connect(lambda result: succeeded.append(result))
+    thread.failed.connect(lambda msg, fetched: failed.append(msg))
+    thread.paused.connect(lambda fetched, partial: paused.append((fetched, partial)))
+
+    thread.run()
+
+    assert succeeded == []
+    assert failed == []
+    assert len(paused) == 1
+    fetched, partial = paused[0]
+    assert partial == {}
+    written = tmp_path / "fake-game" / "installer_windows_en" / "setup_fake_game.exe"
+    assert [entry["filepath"] for entry in fetched] == [written]
+    assert written.read_bytes() == chunk_a + chunk_b
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
 def test_download_worker_unrelated_failure_with_stop_already_requested_does_not_also_emit_stopped(
     mock_resolve, mock_get, tmp_path
 ):
@@ -572,11 +659,13 @@ class FakeWorker(QObject):
     failed = Signal(str, list)
     progress = Signal(float, float)
     stopped = Signal(list)
+    paused = Signal(list, dict)
 
     def __init__(self, product_id):
         super().__init__()
         self.product_id = product_id
         self.stop_worker = MagicMock()
+        self.pause_worker = MagicMock()
 
     def start(self):
         pass
@@ -671,3 +760,148 @@ def test_reap_ignores_a_job_that_was_already_removed():
     scheduler._reap(job)  # deja vu, but tokens should only tick up once
 
     assert scheduler.tokens == 1
+
+
+def _pause_active_worker(job, partial=None):
+    job["worker"].paused.emit([], {} if partial is None else partial)
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_pause_all_pauses_active_workers_and_leaves_pending_ones_alone():
+    scheduler = make_scheduler(concurrency=1, count=2)
+    scheduler.schedule()
+    active_worker = scheduler.active_queue[0]["worker"]
+
+    scheduler.pause_all()
+
+    active_worker.pause_worker.assert_called_once()
+    active_worker.stop_worker.assert_not_called()
+    assert [job["row_idx"] for job in scheduler.idle_queue] == [1]
+    assert scheduler.idle_queue[0]["stopped"] is False
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_pause_all_twice_only_pauses_workers_once():
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+    active_worker = scheduler.active_queue[0]["worker"]
+
+    scheduler.pause_all()
+    scheduler.pause_all()  # panicked double-click, should be a no-op
+
+    active_worker.pause_worker.assert_called_once()
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_paused_worker_moves_to_paused_queue_and_frees_its_token(tmp_path):
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+    job = scheduler.active_queue[0]
+    part_path = tmp_path / "game.exe.part"
+    game_paused_events = []
+    scheduler.game_paused.connect(lambda row_idx, fetched: game_paused_events.append((row_idx, fetched)))
+
+    scheduler.pause_all()
+    _pause_active_worker(job, {"partpath": part_path, "downlink": "https://example.com/f"})
+
+    assert game_paused_events == [(0, [])]
+    assert scheduler.active_queue == []
+    assert scheduler.tokens == 1
+    [paused_job] = scheduler.paused_queue
+    assert paused_job["row_idx"] == 0
+    assert paused_job["partpath"] == part_path
+    assert paused_job["downlink"] == "https://example.com/f"
+    assert paused_job["fetched_list"] == []
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_scheduler_paused_signal_waits_for_the_last_active_worker():
+    scheduler = make_scheduler(concurrency=2, count=2)
+    scheduler.schedule()
+    first, second = list(scheduler.active_queue)
+    paused_events = []
+    scheduler.paused.connect(lambda: paused_events.append(True))
+
+    scheduler.pause_all()
+    _pause_active_worker(first)
+    assert paused_events == []  # one worker is still mid-chunk, so nope
+
+    _pause_active_worker(second)
+    assert paused_events == [True]
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_pausing_does_not_dispatch_pending_jobs_or_announce_finished():
+    scheduler = make_scheduler(concurrency=1, count=2)
+    scheduler.schedule()
+    job = scheduler.active_queue[0]
+    finished_events = []
+    scheduler.finished.connect(lambda: finished_events.append(True))
+
+    scheduler.pause_all()
+    _pause_active_worker(job)
+
+    # The freed token is right there begging to be used, but the scheduler
+    # is supposed to be sitting on its hands.
+    assert scheduler.active_queue == []
+    assert [j["row_idx"] for j in scheduler.idle_queue] == [1]
+    assert finished_events == []
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_stop_all_while_paused_reports_everything_stopped_and_deletes_part_files(tmp_path):
+    scheduler = make_scheduler(concurrency=1, count=2)
+    scheduler.schedule()
+    job = scheduler.active_queue[0]
+    part_path = tmp_path / "game.exe.part"
+    part_path.write_bytes(b"half a game")
+    stopped_rows, stopped_events, finished_events = [], [], []
+    scheduler.game_stopped.connect(lambda row_idx, fetched: stopped_rows.append(row_idx))
+    scheduler.stopped.connect(lambda: stopped_events.append(True))
+    scheduler.finished.connect(lambda: finished_events.append(True))
+    scheduler.pause_all()
+    _pause_active_worker(job, {"partpath": part_path, "downlink": "https://example.com/f"})
+
+    scheduler.stop_all()
+
+    # Row 0 was paused mid-file, row 1 never even started. Both get sent off,
+    # the partial file gets binned, and the UI gets its `stopped` instead of
+    # sitting there forever waiting on a paused scheduler that will never talk again.
+    assert sorted(stopped_rows) == [0, 1]
+    assert not part_path.exists()
+    assert scheduler.paused_queue == []
+    assert stopped_events == [True]
+    assert finished_events == []
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_stop_all_while_paused_survives_a_job_paused_between_files():
+    # A pause that lands between two files has no .part file to point at, so
+    # the paused record comes back with no partpath at all. Stop shouldn't
+    # trip over the missing key.
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+    job = scheduler.active_queue[0]
+    stopped_events = []
+    scheduler.stopped.connect(lambda: stopped_events.append(True))
+    scheduler.pause_all()
+    _pause_active_worker(job)
+
+    scheduler.stop_all()
+
+    assert stopped_events == [True]
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_stop_all_while_paused_tolerates_a_part_file_that_already_vanished(tmp_path):
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+    job = scheduler.active_queue[0]
+    stopped_events = []
+    scheduler.stopped.connect(lambda: stopped_events.append(True))
+    scheduler.pause_all()
+    _pause_active_worker(job, {"partpath": tmp_path / "ghost.part", "downlink": "x"})
+
+    scheduler.stop_all()
+
+    assert stopped_events == [True]
