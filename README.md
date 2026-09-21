@@ -59,7 +59,7 @@ I'd appreciate your feedback on bugs, features, or improvements in the [issues s
 
 ## To Do
 
-This list represents the functionality is required in the final program. Beta release
+This list represents the functionality expected in the final program. Beta release
 will have all of these features.
 
 **Legend:** ✅ done & released · 🟡 done, merged but not yet released · ⬜ not started
