@@ -59,11 +59,15 @@ I'd appreciate your feedback on bugs, features, or improvements in the [issues s
 
 ## To Do
 
+This list represents the functionality is required in the final program. Beta release
+will have all of these features.
+
 **Legend:** ✅ done & released · 🟡 done, merged but not yet released · ⬜ not started
 
 - ✅ Stop downloads once they're started
-- ⬜ Pause downloads once they're started
+- 🟡 Pause downloads once they're started
 - ⬜ Resume a paused or interrupted download instead of starting over
+- ⬜ Add downloads to queue without stopping or pausing started downloads
 - ✅ Skip re-downloading files that already exist and check out
 - ✅ Record fetched files in the local cache so the library view reflects what you actually have
 - ⬜ Remove or clear entries from the download queue without restarting the app
