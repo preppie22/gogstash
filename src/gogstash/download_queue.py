@@ -137,8 +137,9 @@ class DownloadWorkerThread(QThread):
     _stop_flag = False
     _pause_flag = False
 
-    def __init__(self, product_id: int, parent=None):
+    def __init__(self, product_id: int, resume_link: str = "", parent=None):
         super().__init__(parent)
+        self.resume_link = resume_link
         self.product_id = product_id
         self.file_queue = None
         self.fetched_list = []
@@ -161,8 +162,6 @@ class DownloadWorkerThread(QThread):
             try:
                 resolved = gog_api.resolve_downlink(file['downlink'])
                 cdn_link = resolved['downlink']
-                download_response = requests.get(cdn_link, stream=True)
-                download_response.raise_for_status()
                 checksum = ""
                 if file['directory'] != 'bonus_content':
                     checksum_link = resolved['checksum']
@@ -200,6 +199,22 @@ class DownloadWorkerThread(QThread):
                 self.failed.emit(str(e), self.fetched_list)
                 break
             try:
+                header_params = {}
+                file_hash = hashlib.md5()
+                if self.resume_link == file['downlink']:
+                    with open(part_path, 'rb') as fp:
+                        while True:
+                            chunk = fp.read(1024*1024)
+                            if not chunk:
+                                break
+                            file_hash.update(chunk)
+                        fetched_bytes = part_path.stat().st_size
+                        header_params['Range'] = f"bytes={fetched_bytes}-"
+                        self.total_size += fetched_bytes
+                        self.fetched_size += fetched_bytes
+                        self.resume_link = ""
+                download_response = requests.get(cdn_link, headers=header_params, stream=True)
+                download_response.raise_for_status()
                 content_length = int(cl) if (cl:= download_response.headers.get('Content-Length')) else 0
                 existing_metadata = manifest.check_exist(download_path, save_path, content_length)
                 if existing_metadata and checksum == existing_metadata['checksum']:
@@ -214,12 +229,12 @@ class DownloadWorkerThread(QThread):
                     self.update_progress()
                     continue
                 self.total_size += (content_length - file['size'])
-                file_hash = hashlib.md5()
-                with open(part_path, 'wb') as fp:
+
+                with open(part_path, 'ab') as fp:
                     cleanup = False
                     for chunk in download_response.iter_content(chunk_size=1024*1024):
                         bytes_written = fp.write(chunk)
-                        self.fetched_size = self.fetched_size + bytes_written
+                        self.fetched_size += bytes_written
                         if file['directory'] != 'bonus_content':
                             file_hash.update(chunk)
                         self.update_progress()

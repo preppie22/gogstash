@@ -187,8 +187,8 @@ def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, tmp_pa
     chunk_b = b"b" * 600
     checksum = hashlib.md5(chunk_a + chunk_b).hexdigest()
     mock_get.side_effect = [
+        make_checksum_response(checksum),  # the .xml sidekick that verifies it, fetched first
         make_streamed_response([chunk_a, chunk_b]),  # the real download
-        make_checksum_response(checksum),  # the .xml sidekick that verifies it
     ]
 
     thread = download_queue.DownloadWorkerThread(111)
@@ -231,7 +231,7 @@ def test_download_worker_skips_a_file_already_verified_in_the_manifest(mock_reso
     # blows up loudly instead of quietly re-downloading something we already have.
     stream_response = MagicMock()
     stream_response.iter_content.side_effect = AssertionError("should never read the byte stream when skipping")
-    mock_get.side_effect = [stream_response, make_checksum_response(checksum)]
+    mock_get.side_effect = [make_checksum_response(checksum), stream_response]
 
     thread = download_queue.DownloadWorkerThread(111)
     succeeded, failed = [], []
@@ -272,7 +272,7 @@ def test_download_worker_skipping_a_file_never_touches_the_network_stream_or_dis
     manifest.add_file(game_dir, existing_file, category="installers", checksum=checksum, timestamp=42.0)
     stream_response = MagicMock()
     stream_response.iter_content.side_effect = AssertionError("should never read the byte stream when skipping")
-    mock_get.side_effect = [stream_response, make_checksum_response(checksum)]
+    mock_get.side_effect = [make_checksum_response(checksum), stream_response]
 
     thread = download_queue.DownloadWorkerThread(111)
     succeeded, failed, progress_events = [], [], []
@@ -322,8 +322,8 @@ def test_download_worker_redownloads_when_the_checksum_no_longer_matches(mock_re
     chunk_b = b"b" * 600
     fresh_checksum = hashlib.md5(chunk_a + chunk_b).hexdigest()
     mock_get.side_effect = [
-        make_streamed_response([chunk_a, chunk_b]),
         make_checksum_response(fresh_checksum),
+        make_streamed_response([chunk_a, chunk_b]),
     ]
 
     thread = download_queue.DownloadWorkerThread(111)
@@ -401,7 +401,7 @@ def test_download_worker_failure_does_not_also_emit_succeeded(mock_resolve, mock
     broken_response = MagicMock()
     broken_response.headers = {}
     broken_response.iter_content.side_effect = RuntimeError("connection reset")
-    mock_get.side_effect = [broken_response, make_checksum_response("irrelevant")]
+    mock_get.side_effect = [make_checksum_response("irrelevant"), broken_response]
 
     thread = download_queue.DownloadWorkerThread(111)
     succeeded = []
@@ -451,8 +451,8 @@ def test_download_worker_stop_mid_chunk_deletes_part_file_and_emits_stopped(
         "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
     }
     mock_get.side_effect = [
-        make_streamed_response([b"a" * 400, b"b" * 600]),
         make_checksum_response("irrelevant"),
+        make_streamed_response([b"a" * 400, b"b" * 600]),
     ]
 
     thread = download_queue.DownloadWorkerThread(111)
@@ -501,7 +501,7 @@ def test_download_worker_stop_after_full_download_still_saves_the_file(
 
     response = MagicMock()
     response.iter_content.return_value = chunks_then_stop()
-    mock_get.side_effect = [response, make_checksum_response(checksum)]
+    mock_get.side_effect = [make_checksum_response(checksum), response]
 
     succeeded, failed, stopped = [], [], []
     thread.succeeded.connect(lambda result: succeeded.append(result))
@@ -538,8 +538,8 @@ def test_download_worker_pause_mid_chunk_keeps_part_file_and_reports_where_it_is
         "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
     }
     mock_get.side_effect = [
-        make_streamed_response([b"a" * 400, b"b" * 600]),
         make_checksum_response("irrelevant"),
+        make_streamed_response([b"a" * 400, b"b" * 600]),
     ]
 
     thread = download_queue.DownloadWorkerThread(111)
@@ -590,7 +590,7 @@ def test_download_worker_pause_after_full_download_saves_the_file_and_only_pause
 
     response = MagicMock()
     response.iter_content.return_value = chunks_then_pause()
-    mock_get.side_effect = [response, make_checksum_response(checksum)]
+    mock_get.side_effect = [make_checksum_response(checksum), response]
 
     succeeded, failed, paused = [], [], []
     thread.succeeded.connect(lambda result: succeeded.append(result))
@@ -629,8 +629,8 @@ def test_download_worker_unrelated_failure_with_stop_already_requested_does_not_
         "checksum": "https://cdn.example.com/setup_fake_game.exe.xml",
     }
     mock_get.side_effect = [
-        make_streamed_response([b"a"]),
         make_checksum_response("irrelevant"),
+        make_streamed_response([b"a"]),
     ]
 
     thread = download_queue.DownloadWorkerThread(111)
