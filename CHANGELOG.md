@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Version numbers are CalVer-based (`YYYY.M.D` plus an `-alpha`/`-beta`/`-rc` stage
 suffix while pre-1.0), not SemVer.
 
+## [Unreleased]
+
+### Added
+- Pause downloads and resume them later, picking up each file from where it stopped instead of starting over
+- Add games to the download queue while downloads are running
+- Download queue docked next to the games list in the main window
+
+### Changed
+- The download log records pause, resume and stop, with timestamps on every entry
+
+### Fixed
+- Queuing the same game twice no longer downloads it twice at the same time
+
+### Known Issues
+- Removing or clearing the download queue requires restarting the application
+- The download queue can't be reordered
+
 ## [2026.9.13-alpha] - 2026-09-13
 
 ### Added
