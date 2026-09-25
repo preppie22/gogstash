@@ -154,6 +154,10 @@ class DownloadWindow(QDockWidget):
     def add_to_queue(self, row_data: dict) -> int:
         if not self.start_button.isEnabled():
             return -1
+        for row_idx in range(self.game_queue_table.rowCount()):
+            if self.game_queue_table.item(row_idx, 0).data(UserRole.PRODUCT_ID_ROLE.value) == row_data['product_id']:
+                self.game_queue_table.selectRow(row_idx)
+                return row_idx
         row_idx = self.game_queue_table.rowCount()
         self.game_queue_table.insertRow(row_idx)
         estimated_size = estimate_download_size(row_data['product_id'])
@@ -171,6 +175,7 @@ class DownloadWindow(QDockWidget):
             'idx': row_idx,
             'product_id': row_data['product_id']
         })
+        self._update_progress_bar()
         return row_idx
 
     def _onclick_start_button(self):
@@ -216,11 +221,7 @@ class DownloadWindow(QDockWidget):
             return
         self.start_button.setDisabled(True)
 
-    def _on_progress(self, row_idx, fetched, total):
-        self.set_progress(row_idx, fetched*100/total)
-        self.game_queue_table.item(row_idx, 1).setText(f"{humanize.naturalsize(fetched)} / {humanize.naturalsize(total)}")
-        self.game_queue_table.item(row_idx, 1).setData(UserRole.FETCHED_SIZE.value, fetched)
-        self.game_queue_table.item(row_idx, 1).setData(UserRole.TOTAL_SIZE.value, total)
+    def _update_progress_bar(self):
         total_size = 0
         fetched_size = 0
         for idx in range(self.game_queue_table.rowCount()):
@@ -228,7 +229,15 @@ class DownloadWindow(QDockWidget):
             current_fetched_size = self.game_queue_table.item(idx, 1).data(UserRole.FETCHED_SIZE.value)
             total_size = total_size + current_total_size
             fetched_size = fetched_size + current_fetched_size
-        self.progress_bar.setValue(fetched_size * 100 / total_size)
+        if total_size != 0:
+            self.progress_bar.setValue(fetched_size * 100 / total_size)
+
+    def _on_progress(self, row_idx, fetched, total):
+        self.set_progress(row_idx, fetched*100/total)
+        self.game_queue_table.item(row_idx, 1).setText(f"{humanize.naturalsize(fetched)} / {humanize.naturalsize(total)}")
+        self.game_queue_table.item(row_idx, 1).setData(UserRole.FETCHED_SIZE.value, fetched)
+        self.game_queue_table.item(row_idx, 1).setData(UserRole.TOTAL_SIZE.value, total)
+        self._update_progress_bar()
         return
 
     def _on_game_succeeded(self, row_idx):

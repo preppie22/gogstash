@@ -67,9 +67,9 @@ def test_add_to_queue_sets_initial_progress_to_zero():
 
 def test_add_to_queue_selects_the_new_row():
     window = DownloadWindow()
-    window.add_to_queue(_row(title="First Game"))
+    window.add_to_queue(_row(title="First Game", product_id=1))
 
-    window.add_to_queue(_row(title="Second Game"))
+    window.add_to_queue(_row(title="Second Game", product_id=2))
 
     assert window.game_queue_table.currentRow() == 1
 
@@ -77,8 +77,8 @@ def test_add_to_queue_selects_the_new_row():
 def test_add_to_queue_returns_incrementing_row_index():
     window = DownloadWindow()
 
-    first_idx = window.add_to_queue(_row(title="First Game"))
-    second_idx = window.add_to_queue(_row(title="Second Game"))
+    first_idx = window.add_to_queue(_row(title="First Game", product_id=1))
+    second_idx = window.add_to_queue(_row(title="Second Game", product_id=2))
 
     assert first_idx == 0
     assert second_idx == 1
@@ -337,3 +337,76 @@ def test_add_to_queue_still_works_while_downloads_are_running(mock_estimate, moc
 
     assert window.add_to_queue(_row(product_id=2)) == 1
     assert window.game_queue_table.rowCount() == 2
+
+
+@patch("gogstash.download_window.estimate_download_size")
+def test_add_to_queue_wont_queue_the_same_damn_game_twice(mock_estimate):
+    # Regression: nothing stopped a game from being queued twice, and with
+    # concurrency 2 both copies downloaded into the same .part files at once.
+    # Best case one fails its MD5, worst case both do. Now the second add just
+    # points you at the row that's already there.
+    mock_estimate.return_value = 0
+    window = DownloadWindow()
+    window.add_to_queue(_row(title="First Game", product_id=1))
+    window.add_to_queue(_row(title="Second Game", product_id=2))
+
+    window.add_to_queue(_row(title="First Game", product_id=1))
+
+    assert window.game_queue_table.rowCount() == 2
+    assert window.game_queue_table.currentRow() == 0
+    assert [j["product_id"] for j in window.scheduler.idle_queue] == [1, 2]
+
+
+@patch.object(DownloadScheduler, "schedule")
+@patch("gogstash.download_window.estimate_download_size")
+def test_double_clicking_a_game_thats_already_downloading_doesnt_start_a_second_copy(mock_estimate, mock_schedule):
+    # The mid-run version, a.k.a. the impatient double-clicker.
+    mock_estimate.return_value = 0
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+    window.start_downloads()
+
+    window.add_to_queue(_row(product_id=1))
+
+    assert window.game_queue_table.rowCount() == 1
+    assert [j["product_id"] for j in window.scheduler.idle_queue] == [1]
+
+
+@patch("gogstash.download_window.estimate_download_size")
+def test_add_to_queue_still_takes_a_different_game_after_bouncing_a_duplicate(mock_estimate):
+    mock_estimate.return_value = 0
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+    window.add_to_queue(_row(product_id=1))
+
+    assert window.add_to_queue(_row(product_id=2)) == 1
+    assert window.game_queue_table.rowCount() == 2
+
+
+@patch("gogstash.download_window.estimate_download_size")
+def test_queuing_a_game_with_nothing_to_download_doesnt_divide_by_fucking_zero(mock_estimate):
+    # A Mac-only game with the filter set to Linux/Windows estimates to 0
+    # bytes. As the first row in the queue, that made the overall bar divide
+    # by zero and took add_to_queue down with it.
+    mock_estimate.return_value = 0
+    window = DownloadWindow()
+    before = window.progress_bar.value()
+
+    assert window.add_to_queue(_row(product_id=1)) == 0  # if this blows up, we've regressed
+    assert window.progress_bar.value() == before  # nothing to measure, so leave the damn bar alone
+
+
+@patch("gogstash.download_window.estimate_download_size")
+def test_adding_a_game_after_a_finish_drags_the_overall_bar_back_to_reality(mock_estimate):
+    # _on_finished pins the bar at 100%. Queue another game afterwards and the
+    # bar used to keep bragging about 100% until someone hit Start.
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+    window._on_game_succeeded(0)
+    window._on_finished()
+    assert window.progress_bar.value() == 100
+
+    window.add_to_queue(_row(product_id=2))
+
+    assert window.progress_bar.value() == 50

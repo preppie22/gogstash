@@ -66,8 +66,8 @@ will have all of these features.
 
 - ✅ Stop downloads once they're started
 - 🟡 Pause downloads once they're started
-- ⬜ Resume a paused or interrupted download instead of starting over
-- ⬜ Add downloads to queue without stopping or pausing started downloads
+- 🟡 Resume a paused or interrupted download instead of starting over
+- 🟡 Add downloads to queue without stopping or pausing started downloads
 - ✅ Skip re-downloading files that already exist and check out
 - ✅ Record fetched files in the local cache so the library view reflects what you actually have
 - ⬜ Remove or clear entries from the download queue without restarting the app
