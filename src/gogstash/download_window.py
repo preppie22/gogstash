@@ -2,7 +2,7 @@ import sys
 from random import randint
 from enum import Enum
 import humanize
-from pathlib import Path
+# from pathlib import Path
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -35,9 +35,8 @@ from PySide6.QtGui import (
 from gogstash.icon_utils import get_icon
 from gogstash.download_queue import DownloadScheduler, estimate_download_size
 from gogstash.settings import read_setting
-from gogstash import paths
-from gogstash import manifest
-from gogstash import library_db
+# from gogstash import manifest
+# from gogstash import library_db
 
 
 LIGHT_FILL_COLOR = QColor("#4CAF50")
@@ -74,9 +73,6 @@ class DownloadWindow(QDockWidget):
         self.setWindowTitle("Download Queue")
         self.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
         # self.setMinimumHeight(400)
-
-        self.log_file = paths.config_file_path(paths.ConfigFile.DOWNLOAD_LOG)
-        self.log_file.parent.mkdir(parents=True, exist_ok=True)
 
         self.main_widget = QWidget()
         self.window_layout = QVBoxLayout()
@@ -128,18 +124,6 @@ class DownloadWindow(QDockWidget):
         for button in self.dialog_buttons.buttons():
             if not button.icon(): continue
             button.setIcon(get_icon(button.property('iconFile')))
-
-    def write_log(self, fetched_game: dict) -> None:
-        if not fetched_game:
-            return
-        error_msg = fetched_game.get('error', "")
-        log_entry = f"[{fetched_game.get('fetched_at', "")}] | {str(fetched_game.get('filepath', ""))}: "
-        if error_msg:
-            log_entry = log_entry + error_msg
-        else:
-            log_entry = log_entry + f"Fetched {humanize.naturalsize(fetched_game.get('size',""))} | md5: {fetched_game.get('checksum', "")}"
-        with open(self.log_file, 'a') as wp:
-            wp.write(log_entry + "\n")
 
     def add_to_queue(self, row_data: dict) -> int:
         row_idx = self.game_queue_table.rowCount()
@@ -197,38 +181,20 @@ class DownloadWindow(QDockWidget):
         self.progress_bar.setValue(fetched_size * 100 / total_size)
         return
 
-    def _on_game_succeeded(self, row_idx, fetched_list):
-        # print(fetched_list)
+    def _on_game_succeeded(self, row_idx):
         self.set_progress(row_idx, 100)
         total = self.game_queue_table.item(row_idx, 1).data(UserRole.TOTAL_SIZE.value)
         self.game_queue_table.item(row_idx, 1).setData(UserRole.FETCHED_SIZE.value, total)
         self.game_queue_table.item(row_idx, 1).setText(f"{humanize.naturalsize(total)} / {humanize.naturalsize(total)}")
-        game_slug = library_db.get_product_listing((self.game_queue_table.item(row_idx, 0).data(UserRole.PRODUCT_ID_ROLE.value),))[0]['slug']
-        for item in fetched_list:
-            self.write_log(item)
-            if item.get('size', -1) > -1:
-                manifest.add_file(
-                    game_dir=Path(read_setting('download_path')) / game_slug,
-                    category=item['category'],
-                    filepath=item.get('filepath'),
-                    checksum=item.get('checksum'),
-                    timestamp=item.get('fetched_at')
-                )            
 
-    def _on_game_failed(self, row_idx, msg, fetched_list):
-        # print(fetched_list)
+    def _on_game_failed(self, row_idx, msg):
         self.game_queue_table.item(row_idx,0).setToolTip(msg)
-        for item in fetched_list:
-            self.write_log(item)
 
-    def _on_game_stopped(self, row_idx, fetched_list):
-        # print(fetched_list)
+    def _on_game_stopped(self, row_idx):
         self.set_progress(row_idx, 0)
         total = self.game_queue_table.item(row_idx, 1).data(UserRole.TOTAL_SIZE.value)
         self.game_queue_table.item(row_idx, 1).setText(f"0 / {humanize.naturalsize(total)}")
         self.game_queue_table.item(row_idx, 1).setData(UserRole.FETCHED_SIZE.value, 0)
-        for item in fetched_list:
-            self.write_log(item)
 
     def _on_stopped(self):
         self.scheduler = None

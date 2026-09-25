@@ -2,6 +2,8 @@ from gogstash import library_db
 from gogstash import settings
 from gogstash import gog_api
 from gogstash import manifest
+from gogstash import paths
+import humanize
 from pathlib import Path
 
 import urllib
@@ -16,10 +18,10 @@ from PySide6.QtCore import (
     Signal
 )
 class DownloadScheduler(QObject):
-    game_succeeded = Signal(int, list)
-    game_failed = Signal(int, str, list)
-    game_stopped = Signal(int, list)
-    game_paused = Signal(int, list)
+    game_succeeded = Signal(int)
+    game_failed = Signal(int, str)
+    game_stopped = Signal(int)
+    game_paused = Signal(int)
     progress_updated = Signal(int, float, float)
     finished = Signal()
     stopped = Signal()
@@ -40,12 +42,15 @@ class DownloadScheduler(QObject):
         for product in product_queue:
             queue_item = {
                 'row_idx': product['idx'],
-                'worker': DownloadWorkerThread(product['product_id']),
-                'stopped': False
+                'product_id': product['product_id'],
+                'worker': None,
+                'stopped': False,
+                'resume_link': {}
             }
             self.idle_queue.append(queue_item)
 
     def stop_all(self):
+        _write_log_msg("Downloads stopped")
         self._stopped_flag = True
         self._paused_flag = False
         for job in self.active_queue:
@@ -54,17 +59,27 @@ class DownloadScheduler(QObject):
             task['stopped'] = True
         while self.paused_queue:
             job = self.paused_queue.pop()
-            self.game_stopped.emit(job['row_idx'], job['fetched_list'])
-            part_path : Path = job.get('partpath', None)
+            self.game_stopped.emit(job['row_idx'])
+            part_path : Path = job['resume_link'].get('partpath', None)
             if part_path: part_path.unlink(missing_ok=True)
         self.schedule()
             
     def pause_all(self):
         if self._paused_flag:
             return
+        _write_log_msg("Downloads paused")
         self._paused_flag = True
         for job in self.active_queue:
             job['worker'].pause_worker()
+
+    def resume_all(self):
+        if not self._paused_flag:
+            return
+        _write_log_msg("Downloads resumed")
+        self._paused_flag = False
+        while self.paused_queue:
+            self.idle_queue.append(self.paused_queue.pop())
+        self.schedule()
 
     def schedule(self):
         self.idle_queue.sort(key=lambda x: x['row_idx'])
@@ -75,7 +90,7 @@ class DownloadScheduler(QObject):
         while self.tokens > 0 and self.idle_queue:
             job = self.idle_queue.pop(0)
             if job['stopped']:
-                self.game_stopped.emit(job['row_idx'], [])
+                self.game_stopped.emit(job['row_idx'])
             else:
                 self._dispatch(job)
         if not self.idle_queue and not self.active_queue:
@@ -85,42 +100,57 @@ class DownloadScheduler(QObject):
                 self.finished.emit()
 
     def _dispatch(self, job: dict):
-        job['worker'].succeeded.connect(lambda fetched_list, t=job: self._handle_success(t, fetched_list))
-        job['worker'].failed.connect(lambda msg, fetched_list, t=job: self._handle_failure(t, msg, fetched_list))
+        job['worker'] = DownloadWorkerThread(job['product_id'], job.get('resume_link'))
+        job['worker'].succeeded.connect(lambda t=job: self._handle_success(t))
+        job['worker'].failed.connect(lambda msg, t=job: self._handle_failure(t, msg))
         job['worker'].progress.connect(lambda fetched_size, total_size, t=job: self._report_progress(t, fetched_size, total_size))
-        job['worker'].stopped.connect(lambda fetched_list, t=job: self._handle_stopped(t, fetched_list))
-        job['worker'].paused.connect(lambda fetched_list, partial_file, t=job: self._handle_paused(t, fetched_list, partial_file))
+        job['worker'].stopped.connect(lambda t=job: self._handle_stopped(t))
+        job['worker'].paused.connect(lambda resume_link, t=job: self._handle_paused(t, resume_link))
+        job['worker'].fetched.connect(self._handle_fetched)
         self.active_queue.append(job)
         self.tokens = self.tokens - 1
         job['worker'].start()
 
     def _reap(self, job: dict):
         if job in self.active_queue:
+            job['worker'] = None
             self.active_queue.remove(job)
             self.tokens = self.tokens + 1
 
-    def _handle_success(self, job: dict, fetched_list: list) -> None:
-        self.game_succeeded.emit(job['row_idx'], fetched_list)
+    def _handle_fetched(self, fetched_file: dict) -> None:
+        skipped = fetched_file.get('skipped', False)
+        valid = fetched_file.get('size', -1) > -1
+        if valid and not skipped:
+            manifest.add_file(
+                game_dir=fetched_file.get('game_dir'),
+                filepath=fetched_file.get('filepath'),
+                category=fetched_file.get('category'),
+                checksum=fetched_file.get('checksum'),
+                timestamp=time.time()
+            )
+        _write_log_file(fetched_file)
+
+    def _handle_success(self, job: dict) -> None:
+        self.game_succeeded.emit(job['row_idx'])
         self._reap(job)
         self.schedule()
 
-    def _handle_stopped(self, job: dict, fetched_list: list) -> None:
-        self.game_stopped.emit(job['row_idx'], fetched_list)
+    def _handle_stopped(self, job: dict) -> None:
+        self.game_stopped.emit(job['row_idx'])
         self._reap(job)
         self.schedule()
 
-    def _handle_paused(self, job: dict, fetched_list: list, partial_file: dict) -> None:
-        self.game_paused.emit(job['row_idx'], fetched_list)
+    def _handle_paused(self, job: dict, resume_link: dict) -> None:
+        self.game_paused.emit(job['row_idx'])
         if job in self.active_queue:
             paused_job = job.copy()
-            paused_job.update(partial_file)
-            paused_job['fetched_list'] = fetched_list
+            paused_job['resume_link'] = resume_link
             self.paused_queue.append(paused_job)
         self._reap(job)
         self.schedule()
 
-    def _handle_failure(self, job: dict, msg: str, fetched_list: list) -> None:
-        self.game_failed.emit(job['row_idx'], msg, fetched_list)
+    def _handle_failure(self, job: dict, msg: str) -> None:
+        self.game_failed.emit(job['row_idx'], msg)
         self._reap(job)
         self.schedule()
 
@@ -128,21 +158,22 @@ class DownloadScheduler(QObject):
         self.progress_updated.emit(job['row_idx'], fetched, total)
     
 class DownloadWorkerThread(QThread):
-    succeeded = Signal(list)
-    failed = Signal(str, list)
+    succeeded = Signal()
+    failed = Signal(str)
     progress = Signal(float, float)
-    stopped = Signal(list)
-    paused = Signal(list, dict)
+    stopped = Signal()
+    paused = Signal(dict)
+    fetched = Signal(dict)
 
     _stop_flag = False
     _pause_flag = False
+    _failed_flag = False
 
-    def __init__(self, product_id: int, resume_link: str = "", parent=None):
+    def __init__(self, product_id: int, resume_link: dict | None = None, parent=None):
         super().__init__(parent)
-        self.resume_link = resume_link
+        self.resume_link = resume_link.get('downlink', "") if resume_link else ""
         self.product_id = product_id
         self.file_queue = None
-        self.fetched_list = []
         self.total_size = 0
         self.fetched_size = 0
 
@@ -150,12 +181,12 @@ class DownloadWorkerThread(QThread):
         try:
             self.file_queue = generate_download_list((self.product_id,))
             if not self.file_queue:
-                self.failed.emit("No files to download",self.fetched_list)
+                self.failed.emit("No files to download")
                 return
             slug = library_db.get_product_listing((self.product_id,))[0]['slug']
             download_path: Path = Path(settings.read_setting('download_path')) / slug
         except Exception as e:
-            self.failed.emit(str(e),self.fetched_list)
+            self.failed.emit(str(e))
             return
         self.total_size = self.total_size + sum(file['size'] for file in self.file_queue)
         for file in self.file_queue:
@@ -172,31 +203,33 @@ class DownloadWorkerThread(QThread):
                 filename = urllib.parse.urlparse(cdn_link).path.rsplit('/',-1)[-1]
                 filename = urllib.parse.unquote(filename)
             except PermissionError as e:
-                self.failed.emit(str(e), self.fetched_list)
+                self.failed.emit(str(e))
                 return
             except Exception as e:
-                self.fetched_list.append({
+                self.fetched.emit({
+                    'game_dir': download_path,
                     'filepath': Path(file['file']), 
                     'category': file['category'],
                     'size': -1,
                     'checksum': "",
-                    'fetched_at': time.time(),                    
                     'error': str(e)
                 })
+                self._failed_flag = True
                 continue
             try:
                 part_path: Path = download_path / file['directory'] / (filename+'.part')
                 save_path: Path = download_path / file['directory'] / filename
                 save_path.parent.mkdir(parents=True, exist_ok=True)
             except Exception as e:
-                self.fetched_list.append({
+                self.fetched.emit({
+                    'game_dir': download_path,
                     'filepath': Path(file['file']),
                     'category': file['category'], 
                     'size': -1,
                     'checksum': "",
-                    'fetched_at': time.time(),
+                    'error': str(e)
                 })
-                self.failed.emit(str(e), self.fetched_list)
+                self.failed.emit(str(e))
                 break
             try:
                 header_params = {}
@@ -218,12 +251,13 @@ class DownloadWorkerThread(QThread):
                 content_length = int(cl) if (cl:= download_response.headers.get('Content-Length')) else 0
                 existing_metadata = manifest.check_exist(download_path, save_path, content_length)
                 if existing_metadata and checksum == existing_metadata['checksum']:
-                    self.fetched_list.append({
+                    self.fetched.emit({
+                        'game_dir': download_path,
                         'filepath': save_path,
                         'category': file['category'],
                         'size': existing_metadata['size'],
                         'checksum': existing_metadata['checksum'],
-                        'fetched_at': existing_metadata['fetched_at']
+                        'skipped': True
                     })
                     self.fetched_size = self.fetched_size + existing_metadata['size']
                     self.update_progress()
@@ -242,14 +276,14 @@ class DownloadWorkerThread(QThread):
                             cleanup = True
                             break
                         if self._pause_flag:
-                            self.paused.emit(self.fetched_list, {
+                            self.paused.emit({
                                 'partpath': part_path,
                                 'downlink': file['downlink']
                             })
                             return
                 if self._stop_flag and cleanup:
                     part_path.unlink()  
-                    self.stopped.emit(self.fetched_list)
+                    self.stopped.emit()
                     return
                 verified = False
                 if file['directory'] == 'bonus_content':
@@ -260,58 +294,58 @@ class DownloadWorkerThread(QThread):
                         verified = True
                 if verified:
                     part_path.rename(save_path)
-                    self.fetched_list.append({
+                    self.fetched.emit({
+                        'game_dir': download_path,
                         'filepath': save_path,
                         'category': file['category'],
                         'size': save_path.stat().st_size,
-                        'checksum': checksum,
-                        'fetched_at': time.time()
+                        'checksum': checksum
                     })
                 else:
                     actual_size = part_path.stat().st_size
                     part_path.unlink()
-                    self.fetched_list.append({
+                    self.fetched.emit({
+                        'game_dir': download_path,
                         'filepath': save_path,
                         'category': file['category'],
                         'size': -1, 
                         'checksum': "",
-                        'fetched_at': time.time(),
                         'error': f"Checksum mismatch | Expected size: {file['size']} | Got size: {actual_size}"
                     })
+                    self._failed_flag = True
                 if self._stop_flag:
-                    self.stopped.emit(self.fetched_list)
+                    self.stopped.emit()
                     return
                 if self._pause_flag:
-                    self.paused.emit(self.fetched_list, {})
+                    self.paused.emit({})
                     return
             except requests.exceptions.RequestException as e:
-                self.fetched_list.append({
+                self.fetched.emit({
+                    'game_dir': download_path,
                     'filepath': save_path,
                     'category': file['category'],
                     'size': -1,
                     'checksum': "",
-                    'fetched_at': time.time(),
                     'error': f"{str(e)} | Expected size: {file['size']} | Got size: {_safe_size(part_path)}"
                 })
+                self._failed_flag = True
                 continue
             except Exception as e:
-                self.fetched_list.append({
+                self.fetched.emit({
+                    'game_dir': download_path,
                     'filepath': save_path,
                     'category': file['category'],
                     'size': -1,
                     'checksum': "",
-                    'fetched_at': time.time(),
                     'error': f"{str(e)} | Expected size: {file['size']} | Got size: {_safe_size(part_path)}"
                 })
-                self.failed.emit(str(e), self.fetched_list)
+                self.failed.emit(str(e))
                 break
         else:
-            for item in self.fetched_list:
-                if item['size'] > -1:
-                    self.succeeded.emit(self.fetched_list)
-                    break
+            if not self._failed_flag:
+                self.succeeded.emit()
             else:
-                self.failed.emit("All files failed to download", self.fetched_list)
+                self.failed.emit("All files failed to download")
 
     def stop_worker(self):
         self._stop_flag = True
@@ -327,6 +361,39 @@ def _safe_size(path: Path) -> int:
         return path.stat().st_size
     except OSError:
         return 0
+
+def _write_log_file(fetched_file: dict) -> None:
+    log_file = paths.config_file_path(paths.ConfigFile.DOWNLOAD_LOG)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    if not fetched_file:
+        return
+    error_msg = fetched_file.get('error', "")
+    skipped = fetched_file.get('skipped', False)
+    log_time = time.strftime("%Y-%m-%dT%H:%M:%S")
+    filepath = str(fetched_file.get('filepath', ""))
+    if error_msg:
+        log_entry = f"[{log_time}] | {filepath} : {error_msg}"
+    elif skipped:
+        log_entry = f"[{log_time}] | {filepath} : Skipped | Already up to date"
+    else:
+        log_entry = f"[{log_time}] | {filepath} : Fetched {humanize.naturalsize(fetched_file.get('size',""))} | md5: {fetched_file.get('checksum', "")}"
+    try:
+        with open(log_file, 'a') as wp:
+            wp.write(log_entry + "\n")
+    except Exception as e:
+        print(f"Logging error: {e}\n {log_entry}")
+
+def _write_log_msg(message: str = "") -> None:
+    if not message:
+        return
+    log_file = paths.config_file_path(paths.ConfigFile.DOWNLOAD_LOG)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_entry = f"[{time.strftime("%Y-%m-%dT%H:%M:%S")}] : {message}\n"
+    try:
+        with open(log_file, 'a') as wp:
+            wp.write(log_entry)
+    except Exception as e:
+        print(f"Logging error: {e}\n {log_entry}")
     
 def _platform_helper(platforms: list[str]) -> list[str]:
     platform_filter = []
