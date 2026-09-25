@@ -160,6 +160,7 @@ class MainWindow(QMainWindow):
         self.fetch_thread.start()
 
     def on_auth_failure(self):
+        self.error_message.setWindowTitle("Login Error")
         self.error_message.showMessage("You are not logged in to GOG!")
         self._update_login_status()
         self.status_progress.setVisible(False)
@@ -175,15 +176,23 @@ class MainWindow(QMainWindow):
             elif item.column() == 1:
                 row_data['size'] = item.text()
             elif item.column() == 2:
-                self.download_window.add_to_queue(row_data.copy())
+                idx = self.download_window.add_to_queue(row_data.copy())
+                if idx == -1:
+                    self.error_message.setWindowTitle("Error Queuing")
+                    self.error_message.showMessage("Please wait for pending operations to complete before queuing downloads")
+                    break
                 row_data.clear()
+
 
     def doubleclick_game_list(self, row, _):
         row_data = {}
         row_data['product_id'] = self.games_list.item(row, 0).data(UserRole.PRODUCT_ID_ROLE.value)
         row_data['title'] = self.games_list.item(row, 0).text()
         row_data['size'] = self.games_list.item(row, 1).text()
-        self.download_window.add_to_queue(row_data.copy())
+        idx = self.download_window.add_to_queue(row_data.copy())
+        if idx == -1:
+            self.error_message.setWindowTitle("Error Queuing")
+            self.error_message.showMessage("Please wait for pending operations to complete before queuing downloads")
 
     def update_fetch_progress(self, progress: int):
         if not self.status_progress.isVisible():
@@ -193,6 +202,7 @@ class MainWindow(QMainWindow):
         return
 
     def fetch_failed_handler(self, error_message: str):
+        self.error_message.setWindowTitle("Library Error")
         self.error_message.showMessage(error_message)
         self._update_login_status()
         self.status_progress.setVisible(False)

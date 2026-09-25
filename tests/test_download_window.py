@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QPixmap
 
 from gogstash import library_db
+from gogstash.download_queue import DownloadScheduler
 from gogstash.download_window import DownloadWindow, UserRole
 from gogstash.settings import update_setting
 
@@ -117,12 +118,12 @@ def test_color_scheme_refresh_sets_the_reloaded_icon_on_each_button(mock_get_ico
         assert button.icon().cacheKey() == mock_get_icon.return_value.cacheKey()
 
 
-@patch("gogstash.download_window.DownloadScheduler")
+@patch.object(DownloadScheduler, "schedule")
 @patch("gogstash.download_window.estimate_download_size")
-def test_start_downloads_builds_scheduler_from_queued_rows(mock_estimate, mock_scheduler_cls):
-    # Regression: token-fetching moved out to DownloadWorkerThread, so this
-    # window shouldn't be lugging a token around anymore. Just the queue
-    # and a concurrency number, nothing fancier.
+def test_start_downloads_hands_the_queued_rows_and_concurrency_to_the_scheduler(mock_estimate, mock_schedule):
+    # The scheduler now lives as long as the window does, and rows get
+    # enqueued the moment they're added. Start just sets the concurrency and
+    # kicks the thing, no more rebuilding the whole shebang from the table.
     mock_estimate.return_value = 0
     update_setting("download_concurrency", 3)
     window = DownloadWindow()
@@ -131,9 +132,61 @@ def test_start_downloads_builds_scheduler_from_queued_rows(mock_estimate, mock_s
 
     window.start_downloads()
 
-    mock_scheduler_cls.assert_called_once_with(
-        [{"idx": 0, "product_id": 1}, {"idx": 1, "product_id": 2}], 3
-    )
+    queued = [(job["row_idx"], job["product_id"]) for job in window.scheduler.idle_queue]
+    assert queued == [(0, 1), (1, 2)]
+    assert window.scheduler.max_tokens == 3
+    mock_schedule.assert_called_once()
+    assert window.current_state == DownloadWindow.DownloadState.RUNNING
+
+
+@patch.object(DownloadScheduler, "schedule")
+@patch("gogstash.download_window.estimate_download_size")
+def test_start_turns_the_button_into_pause_and_keeps_the_icon_bookkeeping_on_the_right_button(mock_estimate, mock_schedule):
+    # Regression: the pause icon's name got slapped onto the *stop* button,
+    # so the next theme change handed Cancel a fucking pause icon.
+    mock_estimate.return_value = 0
+    window = DownloadWindow()
+    window.add_to_queue(_row())
+
+    window.start_downloads()
+
+    assert window.start_button.text() == "Pause Downloads"
+    assert window.start_button.isEnabled() is True
+    assert window.start_button.property("iconFile") == "pause.svg"
+    assert window.stop_button.property("iconFile") == "stop.svg"
+
+
+@patch.object(DownloadScheduler, "resume_all")
+@patch.object(DownloadScheduler, "pause_all")
+@patch.object(DownloadScheduler, "schedule")
+@patch("gogstash.download_window.estimate_download_size")
+def test_start_button_walks_through_start_pause_resume(mock_estimate, mock_schedule, mock_pause, mock_resume):
+    # One button, three jobs, zero raises. The overworked intern of
+    # QPushButtons.
+    mock_estimate.return_value = 0
+    window = DownloadWindow()
+    window.add_to_queue(_row())
+
+    window.start_button.click()
+    mock_schedule.assert_called_once()
+
+    window.start_button.click()
+    mock_pause.assert_called_once()
+    # Still RUNNING until the workers actually stop. The button chills tf
+    # out so nobody can spam their way into resuming a pause that
+    # hasn't even happened yet.
+    assert window.current_state == DownloadWindow.DownloadState.RUNNING
+    assert window.start_button.isEnabled() is False
+
+    window._on_paused()
+    assert window.current_state == DownloadWindow.DownloadState.PAUSED
+    assert window.start_button.text() == "Resume Downloads"
+    assert window.start_button.isEnabled() is True
+
+    window.start_button.click()
+    mock_resume.assert_called_once()
+    assert window.current_state == DownloadWindow.DownloadState.RUNNING
+    assert window.start_button.text() == "Pause Downloads"
 
 
 @patch("gogstash.download_window.DownloadScheduler")
@@ -161,22 +214,46 @@ def test_stop_downloads_does_not_crash_without_a_scheduler():
     window.stop_downloads()  # must not raise
 
 
-@patch("gogstash.download_window.DownloadScheduler")
+@patch.object(DownloadScheduler, "schedule")
 @patch("gogstash.download_window.estimate_download_size")
-def test_on_stopped_reenables_start_button_and_clears_scheduler(mock_estimate, mock_scheduler_cls):
-    # Regression: _on_stopped() forgot to re-enable start_pause_button, so
-    # one stopped download later, Start stayed disabled.
-    # "Have you tried turning it off and on again" is not a UX strategy.
+def test_on_stopped_puts_everything_back_like_start_was_never_clicked(mock_estimate, mock_schedule):
+    # Regression: _on_stopped() once forgot to re-enable the start button, and
+    # later tried to iterate over rowCount() itself, which is an int, you
+    # absolute walnut. Cancel means square one: fresh scheduler, every row
+    # queued again.
     mock_estimate.return_value = 0
     window = DownloadWindow()
-    window.add_to_queue(_row())
+    window.add_to_queue(_row(title="First Game", product_id=1))
+    window.add_to_queue(_row(title="Second Game", product_id=2))
     window.start_downloads()
-    assert window.start_button.isEnabled() is False
+    old_scheduler = window.scheduler
 
     window._on_stopped()
 
+    assert window.current_state == DownloadWindow.DownloadState.IDLE
     assert window.start_button.isEnabled() is True
-    assert window.scheduler is None
+    assert window.start_button.text() == "Start Downloads"
+    assert window.start_button.property("iconFile") == "start_download.svg"
+    assert window.scheduler is not old_scheduler
+    queued = [(job["row_idx"], job["product_id"]) for job in window.scheduler.idle_queue]
+    assert queued == [(0, 1), (1, 2)]
+
+
+@patch.object(DownloadScheduler, "schedule")
+@patch("gogstash.download_window.estimate_download_size")
+def test_on_finished_resets_the_button_and_requeues_every_row(mock_estimate, mock_schedule):
+    mock_estimate.return_value = 0
+    window = DownloadWindow()
+    window.add_to_queue(_row(title="First Game", product_id=1))
+    window.start_downloads()
+
+    window._on_finished()
+
+    assert window.current_state == DownloadWindow.DownloadState.IDLE
+    assert window.start_button.isEnabled() is True
+    assert window.start_button.text() == "Start Downloads"
+    queued = [(job["row_idx"], job["product_id"]) for job in window.scheduler.idle_queue]
+    assert queued == [(0, 1)]
 
 
 @patch("gogstash.download_window.estimate_download_size")
@@ -214,3 +291,49 @@ def test_on_game_failed_puts_the_reason_in_the_row_tooltip(mock_estimate):
     window._on_game_failed(0, "connection reset")
 
     assert window.game_queue_table.item(0, 0).toolTip() == "connection reset"
+
+
+@patch.object(DownloadScheduler, "pause_all")
+@patch.object(DownloadScheduler, "schedule")
+@patch("gogstash.download_window.estimate_download_size")
+def test_add_to_queue_says_hell_no_while_a_pause_is_landing(mock_estimate, mock_schedule, mock_pause):
+    # Workers are mid-pause and the button is disabled. Shoving a new game in
+    # right now gets you a -1 and jack shit else: no row, no scheduler entry.
+    mock_estimate.return_value = 0
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+    window.start_button.click()
+    window.start_button.click()  # pause, still waiting on the workers
+
+    assert window.add_to_queue(_row(product_id=2)) == -1
+    assert window.game_queue_table.rowCount() == 1
+    assert [j["product_id"] for j in window.scheduler.idle_queue] == [1]
+
+
+@patch.object(DownloadScheduler, "stop_all")
+@patch.object(DownloadScheduler, "schedule")
+@patch("gogstash.download_window.estimate_download_size")
+def test_add_to_queue_says_hell_no_while_a_stop_is_landing(mock_estimate, mock_schedule, mock_stop):
+    # Same deal mid-Cancel. Without this, a game added right then got
+    # dispatched and held the whole stop hostage until it finished.
+    mock_estimate.return_value = 0
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+    window.start_downloads()
+    window.stop_downloads()
+
+    assert window.add_to_queue(_row(product_id=2)) == -1
+    assert window.game_queue_table.rowCount() == 1
+
+
+@patch.object(DownloadScheduler, "schedule")
+@patch("gogstash.download_window.estimate_download_size")
+def test_add_to_queue_still_works_while_downloads_are_running(mock_estimate, mock_schedule):
+    # The -1 bouncer only works the pause/stop door. Mid-run adds are fine.
+    mock_estimate.return_value = 0
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+    window.start_downloads()
+
+    assert window.add_to_queue(_row(product_id=2)) == 1
+    assert window.game_queue_table.rowCount() == 2

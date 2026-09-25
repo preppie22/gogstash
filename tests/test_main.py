@@ -217,3 +217,46 @@ def test_color_scheme_refresh_reloads_each_toolbar_action_from_its_own_icon_file
 
     called_files = {call.args[0] for call in mock_get_icon.call_args_list}
     assert called_files == {"login.svg", "logout.svg", "fetch.svg", "settings.svg"}
+
+
+def test_doubleclick_while_queue_is_busy_tells_the_user_to_hold_their_horses():
+    window = MainWindow()
+    window.on_games_loaded([FAKE_GAME])
+    window.error_message.showMessage = MagicMock()
+    window.download_window.add_to_queue = MagicMock(return_value=-1)
+
+    window.doubleclick_game_list(0, 0)
+
+    window.error_message.showMessage.assert_called_once_with(
+        "Please wait for pending operations to complete before queuing downloads"
+    )
+    assert window.error_message.windowTitle() == "Error Queuing"
+
+
+def test_doubleclick_that_queues_fine_keeps_its_damn_mouth_shut():
+    window = MainWindow()
+    window.on_games_loaded([FAKE_GAME])
+    window.error_message.showMessage = MagicMock()
+    window.download_window.add_to_queue = MagicMock(return_value=0)
+
+    window.doubleclick_game_list(0, 0)
+
+    window.error_message.showMessage.assert_not_called()
+
+
+def test_toolbar_queue_while_busy_bitches_once_and_quits_trying():
+    # Two games selected, queue's in the middle of a pause. One error popup,
+    # not one per game, and no pointless retry on the second one.
+    window = MainWindow()
+    window.on_games_loaded([FAKE_GAME, FAKE_GAME_2])
+    window.games_list.selectAll()
+    window.error_message.showMessage = MagicMock()
+    window.download_window.add_to_queue = MagicMock(return_value=-1)
+
+    window.onclick_queue_download()
+
+    window.download_window.add_to_queue.assert_called_once()
+    window.error_message.showMessage.assert_called_once_with(
+        "Please wait for pending operations to complete before queuing downloads"
+    )
+    assert window.error_message.windowTitle() == "Error Queuing"

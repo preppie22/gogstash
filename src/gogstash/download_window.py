@@ -68,11 +68,26 @@ class RowItemDelegate(QStyledItemDelegate):
         )
 
 class DownloadWindow(QDockWidget):
+    class DownloadState(Enum):
+        IDLE = 0
+        RUNNING = 1
+        PAUSED = 2
+        
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.current_state = self.DownloadState.IDLE
         self.setWindowTitle("Download Queue")
         self.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
         # self.setMinimumHeight(400)
+        self.scheduler = DownloadScheduler()
+        self.scheduler.game_succeeded.connect(self._on_game_succeeded)
+        self.scheduler.game_failed.connect(self._on_game_failed)
+        self.scheduler.progress_updated.connect(self._on_progress)
+        self.scheduler.finished.connect(self._on_finished)
+        self.scheduler.game_stopped.connect(self._on_game_stopped)
+        self.scheduler.stopped.connect(self._on_stopped)
+        self.scheduler.paused.connect(self._on_paused)
+        self.scheduler.game_paused.connect(self._on_game_paused)
 
         self.main_widget = QWidget()
         self.window_layout = QVBoxLayout()
@@ -94,7 +109,7 @@ class DownloadWindow(QDockWidget):
         self.clear_queue_button.setIcon(get_icon('trash.svg'))
         self.clear_queue_button.setProperty('iconFile', 'trash.svg')
         self.start_button = QPushButton("Start Downloads")
-        self.start_button.clicked.connect(self.start_downloads)
+        self.start_button.clicked.connect(self._onclick_start_button)
         self.start_button.setIcon(get_icon('start_download.svg'))
         self.start_button.setProperty('iconFile', 'start_download.svg')
         self.stop_button = QPushButton("Cancel Downloads")
@@ -125,7 +140,20 @@ class DownloadWindow(QDockWidget):
             if not button.icon(): continue
             button.setIcon(get_icon(button.property('iconFile')))
 
+    def _reset_scheduler(self):
+        self.scheduler = DownloadScheduler()
+        self.scheduler.game_succeeded.connect(self._on_game_succeeded)
+        self.scheduler.game_failed.connect(self._on_game_failed)
+        self.scheduler.progress_updated.connect(self._on_progress)
+        self.scheduler.finished.connect(self._on_finished)
+        self.scheduler.game_stopped.connect(self._on_game_stopped)
+        self.scheduler.stopped.connect(self._on_stopped)
+        self.scheduler.paused.connect(self._on_paused)
+        self.scheduler.game_paused.connect(self._on_game_paused)
+
     def add_to_queue(self, row_data: dict) -> int:
+        if not self.start_button.isEnabled():
+            return -1
         row_idx = self.game_queue_table.rowCount()
         self.game_queue_table.insertRow(row_idx)
         estimated_size = estimate_download_size(row_data['product_id'])
@@ -139,32 +167,54 @@ class DownloadWindow(QDockWidget):
             self.game_queue_table.setItem(row_idx, i, column_data[i])
         self.set_progress(row_idx, 0)
         self.game_queue_table.selectRow(row_idx)
+        self.scheduler.enqueue({
+            'idx': row_idx,
+            'product_id': row_data['product_id']
+        })
         return row_idx
 
+    def _onclick_start_button(self):
+        if self.current_state == self.DownloadState.IDLE:
+            self.start_downloads()
+        elif self.current_state == self.DownloadState.RUNNING:
+            self.pause_downloads()
+        elif self.current_state == self.DownloadState.PAUSED:
+            self.start_downloads()
+
     def start_downloads(self):
+        if self.game_queue_table.rowCount() == 0 or self.current_state == self.DownloadState.RUNNING:
+            return
         concurrency = read_setting('download_concurrency')
-        product_queue = []
-        for idx in range(self.game_queue_table.rowCount()):
-            product_queue.append({
-                'idx': idx,
-                'product_id': self.game_queue_table.item(idx, 0).data(UserRole.PRODUCT_ID_ROLE.value)
-            })
-        self.scheduler = DownloadScheduler(product_queue, concurrency)
-        self.scheduler.game_succeeded.connect(self._on_game_succeeded)
-        self.scheduler.game_failed.connect(self._on_game_failed)
-        self.scheduler.progress_updated.connect(self._on_progress)
-        self.scheduler.finished.connect(self._on_finished)
-        self.scheduler.game_stopped.connect(self._on_game_stopped)
-        self.scheduler.stopped.connect(self._on_stopped)
-        self.start_button.setDisabled(True)
-        self.scheduler.schedule()
+        self.scheduler.set_concurrency(concurrency)
+        if self.current_state == self.DownloadState.PAUSED:
+            self.scheduler.resume_all()
+        else:
+            self.scheduler.schedule()
         self.downloads_status.setText("Downloading...")
+        self.current_state = self.DownloadState.RUNNING
+        self.start_button.setText('Pause Downloads')
+        self.start_button.setIcon(get_icon('pause.svg'))
+        self.start_button.setProperty('iconFile', 'pause.svg')
+
+    def pause_downloads(self):
+        if self.current_state == self.DownloadState.PAUSED:
+            return
+        self.start_button.setDisabled(True)
+        self.downloads_status.setText("Pausing. Please wait...")
+        try:
+            self.scheduler.pause_all()
+        except AttributeError:
+            return
 
     def stop_downloads(self):
+        if self.current_state == self.DownloadState.IDLE:
+            return
+        self.downloads_status.setText("Stopping. Please wait...")
         try:
             self.scheduler.stop_all()
         except AttributeError:
             return
+        self.start_button.setDisabled(True)
 
     def _on_progress(self, row_idx, fetched, total):
         self.set_progress(row_idx, fetched*100/total)
@@ -183,6 +233,7 @@ class DownloadWindow(QDockWidget):
 
     def _on_game_succeeded(self, row_idx):
         self.set_progress(row_idx, 100)
+        self.game_queue_table.item(row_idx ,0).setToolTip('Finished')
         total = self.game_queue_table.item(row_idx, 1).data(UserRole.TOTAL_SIZE.value)
         self.game_queue_table.item(row_idx, 1).setData(UserRole.FETCHED_SIZE.value, total)
         self.game_queue_table.item(row_idx, 1).setText(f"{humanize.naturalsize(total)} / {humanize.naturalsize(total)}")
@@ -196,21 +247,47 @@ class DownloadWindow(QDockWidget):
         self.game_queue_table.item(row_idx, 1).setText(f"0 / {humanize.naturalsize(total)}")
         self.game_queue_table.item(row_idx, 1).setData(UserRole.FETCHED_SIZE.value, 0)
 
+    def _on_game_paused(self, row_idx):
+        self.game_queue_table.item(row_idx,0).setToolTip('Paused')
+
+    def _reset_all(self):
+        self.start_button.setDisabled(False)
+        self.current_state = self.DownloadState.IDLE
+        self.start_button.setText("Start Downloads")
+        self.start_button.setIcon(get_icon('start_download.svg'))
+        self.start_button.setProperty('iconFile', 'start_download.svg')
+        self._reset_scheduler()
+        for row_idx in range(self.game_queue_table.rowCount()):
+            self.scheduler.enqueue({
+                'idx': row_idx,
+                'product_id': self.game_queue_table.item(row_idx, 0).data(UserRole.PRODUCT_ID_ROLE.value)
+            })
+
     def _on_stopped(self):
-        self.scheduler = None
         self.progress_bar.setValue(0)
         self.downloads_status.setText("Downloads stopped")
         QTimer().singleShot(5000, self._reset_status)
+        self._reset_all()
+
+    def _on_paused(self):
+        self.downloads_status.setText("Downloads paused")
+        self.current_state = self.DownloadState.PAUSED
+        self.start_button.setText('Resume Downloads')
+        self.start_button.setIcon(get_icon('resume.svg'))
+        self.start_button.setProperty('iconFile', 'resume.svg')
         self.start_button.setDisabled(False)
 
     def _on_finished(self):
-        self.start_button.setDisabled(False)
         self.progress_bar.setValue(self.progress_bar.maximum())
+        self.downloads_status.setText("Downloads complete")
+        QTimer().singleShot(5000, self._reset_status)
+        self._reset_all()
 
     def _reset_status(self):
         self.downloads_status.setText("Ready!")
 
     def set_progress(self, row, percent = 0):
+        self.game_queue_table.item(row ,0).setToolTip('Downloading')
         item = self.game_queue_table.item(row, 0)
         item.setData(UserRole.PROGRESS_ROLE.value, percent)
      

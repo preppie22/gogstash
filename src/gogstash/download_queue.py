@@ -30,7 +30,7 @@ class DownloadScheduler(QObject):
     _stopped_flag = False
     _paused_flag = False
 
-    def __init__(self, product_queue: list[dict], concurrency: int = 1, parent=None):
+    def __init__(self, product_queue: list[dict] | None = None, concurrency: int = 1, parent=None):
         super().__init__(parent)
         if concurrency < 1:
             raise ValueError("Concurrency must be more than 0")
@@ -39,15 +39,38 @@ class DownloadScheduler(QObject):
         self.idle_queue = []
         self.active_queue = []
         self.paused_queue = []
-        for product in product_queue:
-            queue_item = {
-                'row_idx': product['idx'],
-                'product_id': product['product_id'],
-                'worker': None,
-                'stopped': False,
-                'resume_link': {}
-            }
-            self.idle_queue.append(queue_item)
+        if product_queue:
+            for product in product_queue:
+                queue_item = {
+                    'row_idx': product['idx'],
+                    'product_id': product['product_id'],
+                    'worker': None,
+                    'stopped': False,
+                    'resume_link': {}
+                }
+                self.idle_queue.append(queue_item)
+
+    def set_concurrency(self, value):
+        if value < 1:
+            raise ValueError("Concurrency must be more than 0")
+        diff = value - self.max_tokens
+        self.tokens += diff
+        self.max_tokens = value
+
+    def enqueue(self, product: dict):
+        for item in self.idle_queue:
+            if item.get('row_idx') == product['idx']:
+                return
+        queue_item = {
+            'row_idx': product['idx'],
+            'product_id': product['product_id'],
+            'worker': None,
+            'stopped': False,
+            'resume_link': {}
+        }
+        self.idle_queue.append(queue_item)
+        if self.active_queue:
+            self.schedule()
 
     def stop_all(self):
         _write_log_msg("Downloads stopped")
@@ -96,6 +119,7 @@ class DownloadScheduler(QObject):
         if not self.idle_queue and not self.active_queue:
             if self._stopped_flag:
                 self.stopped.emit()
+                self._stopped_flag = False
             else:
                 self.finished.emit()
 
@@ -113,9 +137,10 @@ class DownloadScheduler(QObject):
 
     def _reap(self, job: dict):
         if job in self.active_queue:
-            job['worker'] = None
             self.active_queue.remove(job)
             self.tokens = self.tokens + 1
+            job['worker'].wait()
+            job['worker'] = None
 
     def _handle_fetched(self, fetched_file: dict) -> None:
         skipped = fetched_file.get('skipped', False)

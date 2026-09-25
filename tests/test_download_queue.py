@@ -795,6 +795,11 @@ class FakeWorker(QObject):
     def start(self):
         pass
 
+    def wait(self):
+        # Never actually ran, so there's jack shit to wait for.
+        self.waited = True
+        return True
+
 
 def make_scheduler(concurrency, count):
     product_queue = [{"idx": i, "product_id": i} for i in range(count)]
@@ -1343,3 +1348,156 @@ def test_stop_while_paused_deletes_the_part_file_a_real_worker_left_behind(mock_
         scheduler.stop_all()
 
     assert not part_path.exists()
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_enqueue_ignores_a_row_that_is_already_waiting():
+    # Double-clicking a game twice shouldn't mean downloading that shit
+    # twice.
+    scheduler = download_queue.DownloadScheduler()
+    scheduler.enqueue({"idx": 0, "product_id": 7})
+    scheduler.enqueue({"idx": 0, "product_id": 7})
+
+    assert [(j["row_idx"], j["product_id"]) for j in scheduler.idle_queue] == [(0, 7)]
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_enqueue_on_an_idle_scheduler_just_waits_for_start():
+    # Adding a game is not clicking Start. And an idle scheduler yelling
+    # "finished!" every time you add a row would be some unhinged shit.
+    scheduler = download_queue.DownloadScheduler()
+    finished_events = []
+    scheduler.finished.connect(lambda: finished_events.append(True))
+
+    scheduler.enqueue({"idx": 0, "product_id": 0})
+
+    assert scheduler.active_queue == []
+    assert [j["row_idx"] for j in scheduler.idle_queue] == [0]
+    assert finished_events == []
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_enqueue_mid_run_grabs_a_free_slot_right_away():
+    scheduler = make_scheduler(concurrency=2, count=1)
+    scheduler.schedule()
+
+    scheduler.enqueue({"idx": 1, "product_id": 1})
+
+    assert [j["row_idx"] for j in scheduler.active_queue] == [0, 1]
+    assert scheduler.idle_queue == []
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_enqueue_mid_run_waits_its_turn_when_every_slot_is_busy():
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+
+    scheduler.enqueue({"idx": 1, "product_id": 1})
+    assert [j["row_idx"] for j in scheduler.active_queue] == [0]
+
+    scheduler.active_queue[0]["worker"].succeeded.emit()
+
+    assert [j["row_idx"] for j in scheduler.active_queue] == [1]
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_enqueue_while_pausing_does_not_sneak_a_new_download_in():
+    # Pause was clicked and the active worker is still packing its shit up.
+    # A game added right then doesn't get to cut the line, it waits for
+    # Resume like everyone else.
+    scheduler = make_scheduler(concurrency=2, count=1)
+    scheduler.schedule()
+    scheduler.pause_all()
+
+    scheduler.enqueue({"idx": 1, "product_id": 1})
+
+    assert [j["row_idx"] for j in scheduler.active_queue] == [0]
+    assert [j["row_idx"] for j in scheduler.idle_queue] == [1]
+
+
+def test_set_concurrency_refuses_zero():
+    scheduler = download_queue.DownloadScheduler()
+
+    with pytest.raises(ValueError):
+        scheduler.set_concurrency(0)
+
+    assert scheduler.max_tokens == 1
+    assert scheduler.tokens == 1
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_set_concurrency_raised_mid_run_fills_the_new_slots_on_the_next_schedule():
+    scheduler = make_scheduler(concurrency=1, count=3)
+    scheduler.schedule()
+
+    scheduler.set_concurrency(3)
+    assert scheduler.tokens == 2
+
+    scheduler.active_queue[0]["worker"].succeeded.emit()
+
+    assert [j["row_idx"] for j in scheduler.active_queue] == [1, 2]
+    assert scheduler.tokens == 1
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_set_concurrency_lowered_mid_run_lets_the_extra_workers_drain_first():
+    # Nobody gets jacked for being over the new limit, but nobody new gets
+    # to start either until we're actually back under the damn thing.
+    scheduler = make_scheduler(concurrency=3, count=4)
+    scheduler.schedule()
+
+    scheduler.set_concurrency(1)
+    assert scheduler.tokens == -2
+
+    scheduler.active_queue[0]["worker"].succeeded.emit()
+    scheduler.active_queue[0]["worker"].succeeded.emit()
+    assert [j["row_idx"] for j in scheduler.active_queue] == [2]
+    assert [j["row_idx"] for j in scheduler.idle_queue] == [3]
+
+    scheduler.active_queue[0]["worker"].succeeded.emit()
+
+    assert [j["row_idx"] for j in scheduler.active_queue] == [3]
+    assert scheduler.tokens == 0
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_a_stop_does_not_haunt_the_next_run_on_the_same_scheduler():
+    # Regression: _stopped_flag never got cleared, so one Cancel turned every
+    # later run's "finished" into "stopped". One click and the scheduler held
+    # a grudge for the rest of its fucking life.
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+    scheduler.stop_all()
+    scheduler.active_queue[0]["worker"].stopped.emit()
+    finished_events, stopped_events = [], []
+    scheduler.finished.connect(lambda: finished_events.append(True))
+    scheduler.stopped.connect(lambda: stopped_events.append(True))
+
+    scheduler.enqueue({"idx": 1, "product_id": 1})
+    scheduler.schedule()
+    scheduler.active_queue[0]["worker"].succeeded.emit()
+
+    assert finished_events == [True]
+    assert stopped_events == []
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_reap_waits_for_the_thread_to_actually_die_before_dropping_it():
+    # Regression: _reap binned the only reference to a worker that had sent
+    # its last signal but hadn't finished unwinding run() yet. Qt saw a
+    # running QThread get destroyed and took the whole fucking app down
+    # with it, reliably on Cancel.
+    for signal in ("succeeded", "stopped", "failed", "paused"):
+        scheduler = make_scheduler(concurrency=1, count=1)
+        scheduler.schedule()
+        worker = scheduler.active_queue[0]["worker"]
+
+        emit = getattr(worker, signal).emit
+        if signal == "failed":
+            emit("boom")
+        elif signal == "paused":
+            emit({})
+        else:
+            emit()
+
+        assert getattr(worker, "waited", False), f"{signal} dropped the worker without waiting"
