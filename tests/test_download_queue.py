@@ -160,8 +160,9 @@ def test_platform_helper_maps_settings_labels_to_gog_os_values():
     assert download_queue._platform_helper([]) == []
 
 
-def make_streamed_response(chunks):
+def make_streamed_response(chunks, status_code=200):
     response = MagicMock()
+    response.status_code = status_code
     response.iter_content.return_value = chunks
     return response
 
@@ -249,7 +250,7 @@ def test_download_worker_resumes_a_part_file_with_a_range_request(mock_resolve, 
     part_path.write_bytes(old_bytes)
     mock_get.side_effect = [
         make_checksum_response(checksum),
-        make_streamed_response([new_bytes]),
+        make_streamed_response([new_bytes], status_code=206),
     ]
 
     thread = download_queue.DownloadWorkerThread(
@@ -266,6 +267,121 @@ def test_download_worker_resumes_a_part_file_with_a_range_request(mock_resolve, 
     written = game_dir / "setup_fake_game.exe"
     assert entry["checksum"] == checksum
     assert written.read_bytes() == old_bytes + new_bytes  # old half untouched, new half appended
+    assert not part_path.exists()
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_starts_over_when_the_cdn_ignores_the_range_request(mock_resolve, mock_get, tmp_path):
+    # We politely asked for bytes 400 onwards, the CDN shrugged and sent a 200
+    # with the whole file anyway. Appending that to the .part would give us a
+    # 1400 byte frankenfile, so the worker has to bin the old half and its hash.
+    game_dir = single_installer_setup(mock_resolve, tmp_path)
+    old_bytes = b"a" * 400
+    full_bytes = b"c" * 1000
+    checksum = hashlib.md5(full_bytes).hexdigest()
+    game_dir.mkdir(parents=True)
+    part_path = game_dir / "setup_fake_game.exe.part"
+    part_path.write_bytes(old_bytes)
+    mock_get.side_effect = [
+        make_checksum_response(checksum),
+        make_streamed_response([full_bytes], status_code=200),
+    ]
+
+    thread = download_queue.DownloadWorkerThread(
+        111, {"partpath": part_path, "downlink": "https://example.com/file1"}
+    )
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert mock_get.call_args_list[1].kwargs["headers"] == {"Range": "bytes=400-"}
+    assert events.failed == []
+    assert events.succeeded == 1
+    [entry] = events.fetched
+    assert entry["checksum"] == checksum
+    assert (game_dir / "setup_fake_game.exe").read_bytes() == full_bytes
+    # progress must not still be counting the 400 bytes we threw away
+    assert thread.fetched_size == 1000
+    assert not part_path.exists()
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_skips_a_renamed_bonus_file_instead_of_tripping_over_the_missing_original(mock_resolve, mock_get, tmp_path):
+    # Regression: check_exist hands back a manifest entry precisely *because*
+    # the file is not at its expected path (the user renamed it). Asking that
+    # missing path for its size is how you get a FileNotFoundError for a file
+    # we already have, just under a funnier name.
+    library_db.update_products([FAKE_PRODUCT])
+    settings.update_setting("download_path", str(tmp_path))
+    mock_resolve.return_value = {"downlink": "https://cdn.example.com/manual.zip", "checksum": ""}
+    bonus_file = {
+        "directory": "bonus_content", "category": "bonus_content", "file": "bonus1",
+        "os": None, "size": 10, "downlink": "https://example.com/bonus1",
+    }
+    game_dir = tmp_path / "fake-game"
+    bonus_dir = game_dir / "bonus_content"
+    bonus_dir.mkdir(parents=True)
+    renamed = bonus_dir / "manual (read me first).zip"
+    renamed.write_bytes(b"m" * 10)
+    manifest.add_file(game_dir, renamed, category="bonus_content", checksum="", timestamp=42.0)
+    response = MagicMock()
+    response.status_code = 200
+    response.headers = {"Content-Length": "10"}
+    response.iter_content.side_effect = AssertionError("should never read the byte stream when skipping")
+    mock_get.side_effect = [response]
+
+    thread = download_queue.DownloadWorkerThread(111)
+    events = Watcher(thread)
+
+    with patch("gogstash.download_queue.generate_download_list", return_value=[bonus_file]):
+        thread.run()
+
+    assert events.failed == []
+    assert events.succeeded == 1
+    [entry] = events.fetched
+    assert entry["skipped"] is True
+    assert entry["size"] == 10
+    assert not (bonus_dir / "manual.zip").exists()
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_resumes_a_bonus_file_and_checks_it_against_the_full_size(mock_resolve, mock_get, tmp_path):
+    # Regression: bonus content has no MD5, so it is verified by size. A real
+    # 206 reply reports Content-Length for the *remaining* bytes only, so
+    # comparing the finished .part file to that number failed every resumed
+    # bonus file even though all of its bytes were there, then binned it.
+    library_db.update_products([FAKE_PRODUCT])
+    settings.update_setting("download_path", str(tmp_path))
+    mock_resolve.return_value = {"downlink": "https://cdn.example.com/manual.zip", "checksum": ""}
+    bonus_file = {
+        "directory": "bonus_content", "category": "bonus_content", "file": "bonus1",
+        "os": None, "size": 10, "downlink": "https://example.com/bonus1",
+    }
+    bonus_dir = tmp_path / "fake-game" / "bonus_content"
+    bonus_dir.mkdir(parents=True)
+    part_path = bonus_dir / "manual.zip.part"
+    part_path.write_bytes(b"a" * 4)
+    response = MagicMock()
+    response.status_code = 206
+    response.iter_content.return_value = [b"b" * 6]
+    response.headers = {"Content-Length": "6"}  # just the remaining bytes, like a real 206
+    mock_get.side_effect = [response]
+
+    thread = download_queue.DownloadWorkerThread(
+        111, {"partpath": part_path, "downlink": "https://example.com/bonus1"}
+    )
+    events = Watcher(thread)
+
+    with patch("gogstash.download_queue.generate_download_list", return_value=[bonus_file]):
+        thread.run()
+
+    assert mock_get.call_args.kwargs["headers"] == {"Range": "bytes=4-"}
+    assert events.failed == []
+    assert events.succeeded == 1
+    assert (bonus_dir / "manual.zip").read_bytes() == b"a" * 4 + b"b" * 6
     assert not part_path.exists()
 
 

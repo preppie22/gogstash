@@ -234,6 +234,7 @@ class DownloadWorkerThread(QThread):
             try:
                 header_params = {}
                 file_hash = hashlib.md5()
+                fetched_bytes = 0
                 if self.resume_link == file['downlink']:
                     with open(part_path, 'rb') as fp:
                         while True:
@@ -243,28 +244,45 @@ class DownloadWorkerThread(QThread):
                             file_hash.update(chunk)
                         fetched_bytes = part_path.stat().st_size
                         header_params['Range'] = f"bytes={fetched_bytes}-"
-                        self.total_size += fetched_bytes
                         self.fetched_size += fetched_bytes
                         self.resume_link = ""
                 download_response = requests.get(cdn_link, headers=header_params, stream=True)
                 download_response.raise_for_status()
-                content_length = int(cl) if (cl:= download_response.headers.get('Content-Length')) else 0
-                existing_metadata = manifest.check_exist(download_path, save_path, content_length)
-                if existing_metadata and checksum == existing_metadata['checksum']:
-                    self.fetched.emit({
-                        'game_dir': download_path,
-                        'filepath': save_path,
-                        'category': file['category'],
-                        'size': existing_metadata['size'],
-                        'checksum': existing_metadata['checksum'],
-                        'skipped': True
-                    })
-                    self.fetched_size = self.fetched_size + existing_metadata['size']
-                    self.update_progress()
-                    continue
+                if download_response.status_code == 206:
+                    content_range = download_response.headers.get('Content-Range')
+                    if content_range:
+                        content_length = int(content_range.split('/')[-1])
+                    else:
+                        content_length = int(cl) if (cl:= download_response.headers.get('Content-Length')) else 0
+                        content_length += fetched_bytes
+                else:
+                    content_length = int(cl) if (cl:= download_response.headers.get('Content-Length')) else 0
+                existing_metadata = manifest.check_exist(download_path, save_path, content_length)                
+                if existing_metadata:
+                    if (
+                        (existing_metadata['category'] != 'bonus_content' and checksum == existing_metadata['checksum']) or
+                        (existing_metadata['category'] == 'bonus_content' and content_length == existing_metadata['size'])
+                       ):
+                        self.fetched.emit({
+                            'game_dir': download_path,
+                            'filepath': save_path,
+                            'category': file['category'],
+                            'size': existing_metadata['size'],
+                            'checksum': existing_metadata['checksum'],
+                            'skipped': True
+                        })
+                        self.fetched_size = self.fetched_size + existing_metadata['size']
+                        self.update_progress()
+                        continue
                 self.total_size += (content_length - file['size'])
 
-                with open(part_path, 'ab') as fp:
+                if download_response.status_code == 206:
+                    file_mode = 'ab'
+                else:
+                    file_mode = 'wb'
+                    self.fetched_size -= fetched_bytes
+                    file_hash = hashlib.md5()
+                with open(part_path, file_mode) as fp:
                     cleanup = False
                     for chunk in download_response.iter_content(chunk_size=1024*1024):
                         bytes_written = fp.write(chunk)
@@ -363,21 +381,24 @@ def _safe_size(path: Path) -> int:
         return 0
 
 def _write_log_file(fetched_file: dict) -> None:
-    log_file = paths.config_file_path(paths.ConfigFile.DOWNLOAD_LOG)
-    log_file.parent.mkdir(parents=True, exist_ok=True)
     if not fetched_file:
         return
+    log_file = paths.config_file_path(paths.ConfigFile.DOWNLOAD_LOG)
     error_msg = fetched_file.get('error', "")
     skipped = fetched_file.get('skipped', False)
     log_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     filepath = str(fetched_file.get('filepath', ""))
+    checksum = fetched_file.get('checksum', "")
     if error_msg:
         log_entry = f"[{log_time}] | {filepath} : {error_msg}"
     elif skipped:
         log_entry = f"[{log_time}] | {filepath} : Skipped | Already up to date"
     else:
-        log_entry = f"[{log_time}] | {filepath} : Fetched {humanize.naturalsize(fetched_file.get('size',""))} | md5: {fetched_file.get('checksum', "")}"
+        log_entry = f"[{log_time}] | {filepath} : Fetched {humanize.naturalsize(fetched_file.get('size',""))}"
+        if checksum:
+            log_entry += f" | md5: {checksum}"
     try:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(log_file, 'a') as wp:
             wp.write(log_entry + "\n")
     except Exception as e:
@@ -387,9 +408,9 @@ def _write_log_msg(message: str = "") -> None:
     if not message:
         return
     log_file = paths.config_file_path(paths.ConfigFile.DOWNLOAD_LOG)
-    log_file.parent.mkdir(parents=True, exist_ok=True)
     log_entry = f"[{time.strftime("%Y-%m-%dT%H:%M:%S")}] : {message}\n"
     try:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(log_file, 'a') as wp:
             wp.write(log_entry)
     except Exception as e:
