@@ -71,7 +71,6 @@ will have all of these features.
 - ✅ Skip re-downloading files that already exist and check out
 - ✅ Record fetched files in the local cache so the library view reflects what you actually have
 - ⬜ Remove or clear entries from the download queue without restarting the app
-- ⬜ Reorder the download queue
 - ✅ Ship a self-contained Linux AppImage
 - ⬜ Ship a Windows build (zipped, not an installer)
 - ⬜ Document the codebase beyond just the tests
