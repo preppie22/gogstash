@@ -35,8 +35,8 @@ The code is currently poorly documented (except for the tests). I'll probably do
 
 ## Download
 
-> [!CAUTION]
-> This application is currently in **alpha**. However, I have done everything possible to ensure it won't damage your system.
+> [!NOTE]
+> This application is currently in **beta**. All features are tested and working but there may be bugs.
 
 I'd appreciate your feedback on bugs, features, or improvements in the [issues section](https://github.com/preppie22/gogstash/issues).
 
