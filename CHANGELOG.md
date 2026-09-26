@@ -11,6 +11,7 @@ suffix while pre-1.0), not SemVer.
 ### Added
 - Windows build, shipped as a zip: unzip it anywhere and run `gogstash.exe`
 - About dialog showing the installed version, with links to the project page and bug tracker, license details, and Qt's own About page
+- The GPL and LGPL license texts now ship with the AppImage and the Windows build
 
 ### Changed
 - GogStash uses the same Fusion look on every platform, so Windows matches Linux
