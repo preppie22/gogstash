@@ -1,3 +1,5 @@
+"""Modal dialog for editing user settings."""
+
 import sys
 import humanize
 
@@ -36,9 +38,19 @@ from gogstash import library_db
 from gogstash import gog_auth
 
 class SettingsDialog(QDialog):
+    """Dialog for editing user settings and clearing the library cache.
+
+    Attributes:
+        cache_cleared (Signal): Emitted after the library cache is cleared.
+    """
     cache_cleared = Signal()
 
     def __init__(self, parent=None):
+        """Build the form and fill it with the saved settings.
+
+        Args:
+            parent (QWidget): Optional parent widget.
+        """
         super().__init__(parent)
         self.setWindowTitle("Settings")
 
@@ -126,12 +138,22 @@ class SettingsDialog(QDialog):
 
     @staticmethod
     def set_color_theme() -> None:
+        """Apply the saved theme setting to the application.
+
+        The ``'System'`` theme follows the operating system's color scheme.
+        """
         theme = settings.read_setting('theme')
         if theme == 'System': QApplication.instance().styleHints().setColorScheme(Qt.ColorScheme.Unknown)
         elif theme == 'Light': QApplication.instance().styleHints().setColorScheme(Qt.ColorScheme.Light)
         elif theme == 'Dark': QApplication.instance().styleHints().setColorScheme(Qt.ColorScheme.Dark)
 
     def load_settings(self, values: dict = None):
+        """Fill the form fields.
+
+        Args:
+            values (dict): Settings to show. The saved settings are used if
+                omitted.
+        """
         if values:
             form_settings = values
         else:
@@ -153,6 +175,16 @@ class SettingsDialog(QDialog):
                 checkbox[1].setChecked(False)
 
     def settings_buttons_handler(self, button):
+        """Handle clicks on the dialog buttons.
+
+        Save writes the form to disk, applies the theme and closes the dialog.
+        Discard Changes reloads the saved settings. Restore Defaults fills the
+        form with default values without saving. Close closes the dialog
+        without saving.
+
+        Args:
+            button (QAbstractButton): The clicked button.
+        """
         role = self.settings_form_buttons.buttonRole(button)
         if role == QDialogButtonBox.ButtonRole.AcceptRole:
             form_settings = {
@@ -176,12 +208,18 @@ class SettingsDialog(QDialog):
             self.reject()
 
     def onclick_browse_download_path(self):
+        """Pick a folder and put its path in the download directory field."""
         current_directory = settings.read_setting('download_path')
         folder_selection = QFileDialog.getExistingDirectory(dir=current_directory)
         if folder_selection:
             self.download_edit_path.setText(folder_selection)
 
     def onclick_clear_cache(self):
+        """Clear the library cache after asking for confirmation.
+
+        Emits ``cache_cleared`` if the cache was cleared, then refreshes the
+        displayed cache size.
+        """
         confirmation = QMessageBox()
         confirmation.setIcon(QMessageBox.Icon.Question)
         confirmation.setWindowTitle("Clear Cache")
@@ -197,6 +235,13 @@ class SettingsDialog(QDialog):
         self.current_cache_label.setText(f"Size: {humanize.naturalsize(library_db.get_cache_size())}")
 
     def on_concurrency_changed(self, value: int):
+        """Warn about high download concurrency.
+
+        Values of 5 or more tint the field red and add a warning tooltip.
+
+        Args:
+            value (int): The new concurrency value.
+        """
         color_palette = QPalette(self.download_concurrency_edit.parentWidget().palette())
         if value >= 5:
             color_palette.setColor(QPalette.ColorRole.Base, QColor(255, 0, 0, 60))

@@ -1,3 +1,10 @@
+"""Download queue dock widget.
+
+Attributes:
+    LIGHT_FILL_COLOR (QColor): Progress fill color in light mode.
+    DARK_FILL_COLOR (QColor): Progress fill color in dark mode.
+"""
+
 from enum import Enum, IntEnum
 import humanize
 
@@ -38,6 +45,16 @@ LIGHT_FILL_COLOR = QColor("#4CAF50")
 DARK_FILL_COLOR = QColor("#1B5E20")
 
 class UserRole(IntEnum):
+    """Custom item data roles used by the queue table.
+
+    Attributes:
+        STATUS_ROLE: Status dot color, stored on the status column.
+        PROGRESS_ROLE: Download percentage, stored on the title column.
+        PRODUCT_ID_ROLE: GOG product ID, stored on the title column.
+        TOTAL_SIZE: Total bytes to download, stored on the progress column.
+        FETCHED_SIZE: Bytes downloaded so far, stored on the progress
+            column.
+    """
     STATUS_ROLE = Qt.ItemDataRole.UserRole + 0
     PROGRESS_ROLE = Qt.ItemDataRole.UserRole + 1
     PRODUCT_ID_ROLE = Qt.ItemDataRole.UserRole + 2
@@ -45,20 +62,37 @@ class UserRole(IntEnum):
     FETCHED_SIZE = Qt.ItemDataRole.UserRole + 4
 
 class Column(IntEnum):
+    """Column indices of the queue table."""
     STATUS = 0
     TITLE = 1
     PROGRESS = 2
 
 class DownloadState(Enum):
+    """State of the download queue.
+
+    Attributes:
+        IDLE: No downloads are running.
+        RUNNING: Downloads are in progress.
+        PAUSED: Downloads are paused and can be resumed.
+    """
     IDLE = 0
     RUNNING = 1
     PAUSED = 2
 
 class RowItemDelegate(QStyledItemDelegate):
+    """Draws the title cell with a progress fill behind the text."""
     def __init__(self):
+        """Create the delegate."""
         super().__init__()
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        """Paint the progress fill and the title text.
+
+        Args:
+            painter (QPainter): The painter to draw with.
+            option (QStyleOptionViewItem): Style options for the cell.
+            index (QModelIndex): The cell being painted.
+        """
         progress = index.sibling(index.row(), Column.TITLE).data(UserRole.PROGRESS_ROLE) or 0
         fill_width = int(option.rect.width() * progress / 100)
         scheme = QApplication.instance().styleHints().colorScheme()
@@ -76,7 +110,24 @@ class RowItemDelegate(QStyledItemDelegate):
         )
 
 class DownloadWindow(QDockWidget):
+    """Dock widget showing the download queue.
+
+    Games added from the library list are handed to a
+    ``DownloadScheduler``. Scheduler signals update each row's status
+    dot, progress fill and size text, as well as the overall progress
+    bar.
+
+    Attributes:
+        current_state (DownloadState): State of the queue.
+        scheduler (DownloadScheduler): Scheduler running the downloads.
+        clear_queue (bool): Clear the table once a pending stop completes.
+    """
     def __init__(self, parent=None):
+        """Build the queue table, controls and scheduler.
+
+        Args:
+            parent (QWidget): Optional parent widget.
+        """
         super().__init__(parent)
 
         self.current_state = DownloadState.IDLE
@@ -140,6 +191,7 @@ class DownloadWindow(QDockWidget):
         self._color_scheme_refresh()
 
     def _color_scheme_refresh(self) -> None:
+        """Reload button icons and status dots for the current color scheme."""
         for button in self.dialog_buttons.buttons():
             if not button.icon(): continue
             button.setIcon(get_icon(button.property('iconFile')))
@@ -148,6 +200,7 @@ class DownloadWindow(QDockWidget):
                                 self.game_queue_table.item(row_idx, Column.STATUS).data(UserRole.STATUS_ROLE))
 
     def _reset_scheduler(self):
+        """Replace the scheduler with a new one and connect its signals."""
         self.scheduler = DownloadScheduler()
         self.scheduler.game_succeeded.connect(self._on_game_succeeded)
         self.scheduler.game_failed.connect(self._on_game_failed)
@@ -160,6 +213,17 @@ class DownloadWindow(QDockWidget):
         self.scheduler.game_started.connect(self._on_game_started)
 
     def add_to_queue(self, row_data: dict) -> int:
+        """Add a game to the queue.
+
+        If the game is already queued, its row is selected instead.
+
+        Args:
+            row_data (dict): Game with ``product_id`` and ``title``.
+
+        Returns:
+            int: The game's row index, or -1 if the queue is not accepting
+            games while downloads are pausing or stopping.
+        """
         if not self.start_button.isEnabled():
             return -1
         for row_idx in range(self.game_queue_table.rowCount()):
@@ -190,10 +254,17 @@ class DownloadWindow(QDockWidget):
         return row_idx
 
     def set_row_status(self, row: int, color: str):
+        """Set a row's status dot.
+
+        Args:
+            row (int): Row index.
+            color (str): Status color, see ``icon_utils.status_indicator``.
+        """
         self.game_queue_table.item(row, Column.STATUS).setData(UserRole.STATUS_ROLE, color)
         self.game_queue_table.item(row, Column.STATUS).setIcon(status_indicator(color))
 
     def _onclick_start_button(self):
+        """Start, pause or resume downloads depending on the current state."""
         if self.current_state == DownloadState.IDLE:
             self.start_downloads()
         elif self.current_state == DownloadState.RUNNING:
@@ -202,6 +273,12 @@ class DownloadWindow(QDockWidget):
             self.start_downloads()
 
     def start_downloads(self):
+        """Start or resume downloads.
+
+        When starting from idle, failed rows are reset and the user is asked
+        whether to remove completed rows. Does nothing if the queue is empty
+        or already running.
+        """
         completed_downloads = []
         if self.game_queue_table.rowCount() == 0 or self.current_state == DownloadState.RUNNING:
             return
@@ -242,6 +319,11 @@ class DownloadWindow(QDockWidget):
         self.start_button.setProperty('iconFile', 'pause.svg')
 
     def pause_downloads(self):
+        """Ask the scheduler to pause all downloads.
+
+        The buttons stay disabled until the scheduler reports that it has
+        paused.
+        """
         if self.current_state == DownloadState.PAUSED:
             return
         self.start_button.setDisabled(True)
@@ -250,6 +332,7 @@ class DownloadWindow(QDockWidget):
         self.scheduler.pause_all()
 
     def stop_downloads(self):
+        """Ask the scheduler to cancel all downloads. Does nothing while idle."""
         if self.current_state == DownloadState.IDLE:
             return
         self.downloads_status.setText("Stopping. Please wait...")
@@ -257,6 +340,7 @@ class DownloadWindow(QDockWidget):
         self.start_button.setDisabled(True)
 
     def _update_progress_bar(self):
+        """Recalculate the overall progress bar from all rows."""
         total_size = 0
         fetched_size = 0
         for idx in range(self.game_queue_table.rowCount()):
@@ -270,6 +354,13 @@ class DownloadWindow(QDockWidget):
             self.progress_bar.setValue(fetched_size * 100 / total_size)
 
     def _on_progress(self, row_idx, fetched, total):
+        """Update a row's progress.
+
+        Args:
+            row_idx (int): Row index.
+            fetched (float): Bytes downloaded so far.
+            total (float): Total bytes for the game.
+        """
         self.set_progress(row_idx, fetched*100/total)
         self.game_queue_table.item(row_idx, Column.PROGRESS).setText(f"{humanize.naturalsize(fetched)} / {humanize.naturalsize(total)}")
         self.game_queue_table.item(row_idx, Column.PROGRESS).setData(UserRole.FETCHED_SIZE, fetched)
@@ -278,10 +369,20 @@ class DownloadWindow(QDockWidget):
         return
 
     def _on_game_started(self, row_idx):
+        """Mark a row as downloading.
+
+        Args:
+            row_idx (int): Row index.
+        """
         self.set_row_status(row_idx, 'blue')
         self.game_queue_table.item(row_idx, Column.STATUS).setToolTip('Downloading')
 
     def _on_game_succeeded(self, row_idx):
+        """Mark a row as finished.
+
+        Args:
+            row_idx (int): Row index.
+        """
         self.set_progress(row_idx, 100)
         total = self.game_queue_table.item(row_idx, Column.PROGRESS).data(UserRole.TOTAL_SIZE)
         self.game_queue_table.item(row_idx, Column.PROGRESS).setData(UserRole.FETCHED_SIZE, total)
@@ -290,6 +391,12 @@ class DownloadWindow(QDockWidget):
         self.game_queue_table.item(row_idx, Column.STATUS).setToolTip('Finished')
 
     def _on_game_failed(self, row_idx, msg):
+        """Mark a row as failed and reset its progress.
+
+        Args:
+            row_idx (int): Row index.
+            msg (str): Error shown in the status tooltip.
+        """
         self.set_progress(row_idx, 0)
         total = self.game_queue_table.item(row_idx, Column.PROGRESS).data(UserRole.TOTAL_SIZE)
         self.game_queue_table.item(row_idx, Column.PROGRESS).setText(f"0 / {humanize.naturalsize(total)}")
@@ -298,6 +405,11 @@ class DownloadWindow(QDockWidget):
         self.game_queue_table.item(row_idx, Column.STATUS).setToolTip(f'Failed: {msg}')
 
     def _on_game_stopped(self, row_idx):
+        """Reset a row to the queued state.
+
+        Args:
+            row_idx (int): Row index.
+        """
         self.set_progress(row_idx, 0)
         total = self.game_queue_table.item(row_idx, Column.PROGRESS).data(UserRole.TOTAL_SIZE)
         self.game_queue_table.item(row_idx, Column.PROGRESS).setText(f"0 / {humanize.naturalsize(total)}")
@@ -306,10 +418,20 @@ class DownloadWindow(QDockWidget):
         self.game_queue_table.item(row_idx, Column.STATUS).setToolTip('Queued')
 
     def _on_game_paused(self, row_idx):
+        """Mark a row as paused.
+
+        Args:
+            row_idx (int): Row index.
+        """
         self.set_row_status(row_idx, 'yellow')
         self.game_queue_table.item(row_idx, Column.STATUS).setToolTip('Paused')
 
     def _reset_all(self):
+        """Return to the idle state with a new scheduler.
+
+        Re-enables the buttons and queues every row still in the table on
+        the new scheduler.
+        """
         self.start_button.setDisabled(False)
         self.clear_queue_button.setDisabled(False)
         self.current_state = DownloadState.IDLE
@@ -325,6 +447,11 @@ class DownloadWindow(QDockWidget):
         self._update_progress_bar()
 
     def clear_all(self):
+        """Remove all games from the queue.
+
+        If downloads are running or paused, asks for confirmation and stops
+        them first. The table is cleared once the scheduler has stopped.
+        """
         self.clear_queue_button.setDisabled(True)
         if self.current_state == DownloadState.RUNNING or self.current_state == DownloadState.PAUSED:
             confirmation = QMessageBox(self)
@@ -343,6 +470,7 @@ class DownloadWindow(QDockWidget):
             self._reset_all()
 
     def _on_stopped(self):
+        """Clear the table if requested and return to the idle state."""
         self.downloads_status.setText("Downloads stopped")
         QTimer.singleShot(5000, self._reset_status)
         if self.clear_queue:
@@ -351,6 +479,7 @@ class DownloadWindow(QDockWidget):
         self._reset_all()
 
     def _on_paused(self):
+        """Switch to the paused state once all active downloads have paused."""
         self.downloads_status.setText("Downloads paused")
         self.current_state = DownloadState.PAUSED
         self.start_button.setText('Resume Downloads')
@@ -360,6 +489,7 @@ class DownloadWindow(QDockWidget):
         self.clear_queue_button.setDisabled(False)
 
     def _on_finished(self):
+        """Show a summary of failed downloads and return to the idle state."""
         failed_count = 0
         for row_idx in range(self.game_queue_table.rowCount()):
             if self.game_queue_table.item(row_idx, Column.STATUS).data(UserRole.STATUS_ROLE) == 'red':
@@ -374,10 +504,17 @@ class DownloadWindow(QDockWidget):
         self._reset_all()
 
     def _reset_status(self):
+        """Show the ready message if the queue is idle."""
         if self.current_state == DownloadState.IDLE:
             self.downloads_status.setText("Ready!")
 
     def set_progress(self, row, percent = 0):
+        """Store a row's progress for the title cell delegate.
+
+        Args:
+            row (int): Row index.
+            percent (float): Progress from 0 to 100.
+        """
         item = self.game_queue_table.item(row, Column.TITLE)
         item.setData(UserRole.PROGRESS_ROLE, percent)
 

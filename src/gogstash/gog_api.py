@@ -1,3 +1,5 @@
+"""Wrappers around the GOG web API endpoints used by GogStash."""
+
 import requests
 from typing import Callable
 
@@ -8,6 +10,16 @@ LIBRARY_URL = "https://embed.gog.com/account/getFilteredProducts"
 PRODUCT_URL = "https://api.gog.com/products"
 
 def fetch_library() -> list[dict]:
+    """Fetch every product in the user's GOG library.
+
+    Walks through all pages of the library endpoint.
+
+    Returns:
+        list[dict]: Product entries as returned by GOG.
+
+    Raises:
+        PermissionError: If the user is not logged in.
+    """
     token = gog_auth.get_valid_token()
     if not token:
         raise PermissionError("Authentication failed. Login again.")
@@ -32,6 +44,21 @@ def fetch_library() -> list[dict]:
     return products
 
 def fetch_downloadables(product_ids: list, progress_callback: Callable[[int], None] = None) -> list[dict]:
+    """Fetch download metadata for a list of products.
+
+    Products are requested in batches of 50.
+
+    Args:
+        product_ids (list): GOG product IDs.
+        progress_callback (Callable[[int], None]): Optional callable that
+            receives the percentage of products fetched after each batch.
+
+    Returns:
+        list[dict]: Product details with the ``downloads`` field expanded.
+
+    Raises:
+        PermissionError: If the user is not logged in.
+    """
     token = gog_auth.get_valid_token()
     if not token:
         raise PermissionError("Authentication failed. Login again.")
@@ -53,6 +80,19 @@ def fetch_downloadables(product_ids: list, progress_callback: Callable[[int], No
     return product_info
 
 def resolve_downlink(downlink: str) -> dict:
+    """Resolve a GOG API downlink to its CDN location.
+
+    Args:
+        downlink (str): Downlink URL from the product download metadata.
+
+    Returns:
+        dict: Response with the CDN ``downlink`` and, for installers and
+        patches, a ``checksum`` URL.
+
+    Raises:
+        PermissionError: If the user is not logged in.
+        requests.HTTPError: If GOG returns an error status.
+    """
     token = gog_auth.get_valid_token()
     if not token:
         raise PermissionError("Authentication failed. Login again.")
@@ -62,9 +102,3 @@ def resolve_downlink(downlink: str) -> dict:
     )
     response.raise_for_status()
     return response.json()
-
-if __name__ == "__main__":
-    result = fetch_library()
-    print(f"Total Games: {result['totalProducts']}")
-    print(f"Products per Page: {result['productsPerPage']}")
-    print(f"Total pages: {result['totalPages']}")

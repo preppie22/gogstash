@@ -1,3 +1,9 @@
+"""OAuth login and token storage for the GOG API.
+
+Uses the public GOG Galaxy client credentials. The token is stored as
+JSON in the config directory with an added ``expiry`` Unix timestamp.
+"""
+
 import json
 import requests
 import time
@@ -14,10 +20,16 @@ AUTH_URL = "https://auth.gog.com/auth"
 TOKEN_URL = "https://auth.gog.com/token"
 
 class GrantType(StrEnum):
+    """OAuth grant types accepted by the GOG token endpoint."""
     AUTHORIZE = 'authorization_code'
     REFRESH = 'refresh_token'
 
 def build_auth_uri() -> str:
+    """Build the GOG login URL opened by the embedded browser.
+
+    Returns:
+        str: The authorization URL.
+    """
     return requests.Request('GET', AUTH_URL, params={
         'client_id': CLIENT_ID,
         'redirect_uri': REDIRECT_URI,
@@ -26,6 +38,18 @@ def build_auth_uri() -> str:
     }).prepare().url
 
 def fetch_token(code: str = None, type: GrantType = GrantType.AUTHORIZE, refresh_token: str = None) -> dict:
+    """Request an access token from GOG.
+
+    Args:
+        code (str): Authorization code from the login redirect. Used with
+            ``GrantType.AUTHORIZE``.
+        type (GrantType): The grant type to request.
+        refresh_token (str): Refresh token of an existing login. Used with
+            ``GrantType.REFRESH``.
+
+    Returns:
+        dict: The token response with an added ``expiry`` Unix timestamp.
+    """
     parameters = {
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
@@ -44,9 +68,24 @@ def fetch_token(code: str = None, type: GrantType = GrantType.AUTHORIZE, refresh
     return token_json
 
 def is_token_expired(token: dict) -> bool:
+    """Check whether a token has expired.
+
+    Args:
+        token (dict): Token with an ``expiry`` key.
+
+    Returns:
+        bool: True if the expiry time has passed.
+    """
     return time.time() >= token["expiry"]
 
 def get_valid_token() -> dict | None:
+    """Load the saved token, refreshing it if it has expired.
+
+    A refreshed token is saved to disk before it is returned.
+
+    Returns:
+        dict | None: A valid token, or None if the user is not logged in.
+    """
     token = _load_token()
     if not token:
         return None
@@ -57,16 +96,27 @@ def get_valid_token() -> dict | None:
     return token
 
 def save_token(token: dict) -> None:
+    """Save a token to the config directory.
+
+    Args:
+        token (dict): The token to save.
+    """
     save_file = paths.config_file_path(paths.ConfigFile.TOKEN)
     save_file.parent.mkdir(parents=True, exist_ok=True)
     with open(save_file, 'w') as f:
         json.dump(token, f)
 
 def clear_token() -> None:
+    """Delete the saved token, which logs the user out."""
     token_file = paths.config_file_path(paths.ConfigFile.TOKEN)
     token_file.unlink(missing_ok=True)
 
 def _load_token() -> dict:
+    """Load the saved token from disk.
+
+    Returns:
+        dict | None: The saved token, or None if no token file exists.
+    """
     save_file = paths.config_file_path(paths.ConfigFile.TOKEN)
     token_dict = None
     try:

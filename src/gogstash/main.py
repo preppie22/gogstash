@@ -1,3 +1,5 @@
+"""Application entry point and main window."""
+
 import sys
 import humanize
 from pathlib import Path
@@ -35,7 +37,14 @@ from gogstash.download_window import DownloadWindow, UserRole
 from gogstash.icon_utils import get_icon, get_logo
 
 class MainWindow(QMainWindow):
+    """Main application window.
+
+    Holds the toolbar, the library list in the left dock, the download
+    queue in the right dock and a status bar showing the login state and
+    fetch progress.
+    """
     def __init__(self):
+        """Build the window and load the cached library."""
         super().__init__()
         self.setWindowTitle("GogStash")
         self.setWindowIcon(get_logo())
@@ -124,6 +133,7 @@ class MainWindow(QMainWindow):
         self.on_games_loaded(library_db.get_product_listing())
 
     def _color_scheme_refresh(self) -> None:
+        """Reload toolbar and button icons for the current color scheme."""
         for button in self.main_toolbar.actions():
             icon_file = button.property('iconFile')
             if icon_file:
@@ -134,6 +144,10 @@ class MainWindow(QMainWindow):
                 button.setIcon(get_icon(icon_file))
     
     def _update_login_status(self):
+        """Update the login indicator in the status bar.
+
+        Refreshes the saved token if it has expired.
+        """
         token = gog_auth.get_valid_token()
         if token:
             self.status_text.setText("Logged in")
@@ -143,21 +157,25 @@ class MainWindow(QMainWindow):
             self.logged_in_indicator.setStyleSheet("background-color: red; border-radius: 5")
 
     def logout(self):
+        """Delete the saved token and update the login indicator."""
         gog_auth.clear_token()
         self._update_login_status()
 
     def open_login_window(self):
+        """Show the GOG login dialog and update the login indicator on success."""
         login_window = LoginWindow(self)
         if login_window.exec() == QDialog.DialogCode.Accepted:
             self._update_login_status()
 
     def open_settings(self):
+        """Show the settings dialog, then reload the library list."""
         settings_dialog = SettingsDialog(self)
         settings_dialog.exec()
         self.on_games_loaded(library_db.get_product_listing())
         settings_dialog.deleteLater()
 
     def fetch_games(self):
+        """Refresh the library from GOG in a background thread."""
         self.fetch_thread = library_db.LibraryFetchThread(force=True)
         self.fetch_thread.auth_failure.connect(self.on_auth_failure)
         self.fetch_thread.succeeded.connect(self.on_games_loaded)
@@ -168,6 +186,7 @@ class MainWindow(QMainWindow):
         self.fetch_thread.start()
 
     def on_auth_failure(self):
+        """Show a login error and re-enable the refresh button."""
         self.error_message.setWindowTitle("Login Error")
         self.error_message.showMessage("You are not logged in to GOG!")
         self._update_login_status()
@@ -175,6 +194,11 @@ class MainWindow(QMainWindow):
         self.fetch_games_button.setDisabled(False)
 
     def onclick_queue_download(self):
+        """Add the selected games to the download queue.
+
+        Shows an error if the queue is not accepting games while downloads
+        are pausing or stopping.
+        """
         selection_data = self.games_list.selectedItems()
         row_data = {}
         for item in selection_data:
@@ -193,6 +217,12 @@ class MainWindow(QMainWindow):
 
 
     def doubleclick_game_list(self, row, _):
+        """Add the double-clicked game to the download queue.
+
+        Args:
+            row (int): Row index of the clicked cell.
+            _ (int): Column index of the clicked cell, unused.
+        """
         row_data = {}
         row_data['product_id'] = self.games_list.item(row, 0).data(UserRole.PRODUCT_ID_ROLE.value)
         row_data['title'] = self.games_list.item(row, 0).text()
@@ -203,6 +233,11 @@ class MainWindow(QMainWindow):
             self.error_message.showMessage("Please wait for pending operations to complete before queuing downloads")
 
     def update_fetch_progress(self, progress: int):
+        """Show metadata fetch progress in the status bar.
+
+        Args:
+            progress (int): Percent of products fetched.
+        """
         if not self.status_progress.isVisible():
             self.status_progress.setVisible(True)
         self.status_text.setText(f"Fetching metadata ")
@@ -210,6 +245,11 @@ class MainWindow(QMainWindow):
         return
 
     def fetch_failed_handler(self, error_message: str):
+        """Show a library fetch error and re-enable the refresh button.
+
+        Args:
+            error_message (str): The error to show.
+        """
         self.error_message.setWindowTitle("Library Error")
         self.error_message.showMessage(error_message)
         self._update_login_status()
@@ -217,6 +257,15 @@ class MainWindow(QMainWindow):
         self.fetch_games_button.setDisabled(False)
 
     def on_games_loaded(self, result):
+        """Fill the library list, sorted by title.
+
+        The Fetched column shows whether the game's installers are recorded
+        in its manifest.
+
+        Args:
+            result (list[dict]): Products from
+                ``library_db.get_product_listing``.
+        """
         self._update_login_status()
         self.status_progress.setVisible(False)
         self.fetch_games_button.setDisabled(False)
@@ -235,6 +284,14 @@ class MainWindow(QMainWindow):
         self.games_list.setFocus()
 
     def _check_fetched(self, game_dir: Path) -> bool:
+        """Check whether a game's installers have been downloaded.
+
+        Args:
+            game_dir (Path): The game's download directory.
+
+        Returns:
+            bool: True if the manifest lists at least one installer file.
+        """
         manifest = read_manifest(game_dir)
         if 'error' in manifest:
             return False
@@ -243,6 +300,7 @@ class MainWindow(QMainWindow):
         return False
 
 def main():
+    """Start the application and show the main window."""
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

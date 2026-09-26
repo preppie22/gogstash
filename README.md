@@ -76,7 +76,7 @@ will have all of these features.
 - 🟡 Auto remove completed downloads from download queue before starting
 - ✅ Ship a self-contained Linux AppImage
 - ⬜ Ship a Windows build (zipped, not an installer)
-- ⬜ Document the codebase beyond just the tests
+- 🟡 Document the codebase beyond just the tests
 - ⬜ Add auto-update capability to AppImage (e.g. via GearLever/AppImageUpdate)
 
 I'll probably add more as I work through these.
@@ -132,15 +132,23 @@ gogstash
 
 ## AI Disclosure
 
-**All code has been written by the author of this project.** AI (Claude) was only used to assist
-in testing, debugging, and planning of this project. Basically, I used Claude to keep track of a to-do
-list, hunt down bugs (read only), and assist in writing test cases to ensure said bugs don't return.
+**All source code has been written by the author of this project.** 
+
+AI (Claude) was used for the following tasks:
+- Assist in writing test cases to cover a wide range of cases
+- Hunting down bugs in the code (read only). Fixes were not written by AI.
+- Maintaining a to do list of stuff that's pending and a log of stuff that was done.
+- Documentation in the code (docstrings only).
+- Updating the CHANGELOG file.
+- Descriptions in commit messages.
+
+Everything written by the AI was thoroughly vetted before inclusion.
 
 ## Attribution
 
 This project uses
-* PySide6, licensed under [LGPLv3](https://opensource.org/license/lgpl-3-0). See https://www.qt.io/licensing for details.
-* Freehand color icons by [Streamline](http://streamlinehq.com) licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 
+- PySide6, licensed under [LGPLv3](https://opensource.org/license/lgpl-3-0). See https://www.qt.io/licensing for details.
+- Freehand color icons by [Streamline](http://streamlinehq.com) licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 
 
 ## License
 

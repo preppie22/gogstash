@@ -1,3 +1,10 @@
+"""Icon helpers that follow the application's light or dark color scheme.
+
+Attributes:
+    material_dark (dict[str, QColor]): Status dot colors for dark mode.
+    material_light (dict[str, QColor]): Status dot colors for light mode.
+"""
+
 from importlib import resources
 
 from PySide6.QtWidgets import QApplication
@@ -27,15 +34,39 @@ material_light = {
 }
 
 def get_logo() -> QIcon:
+    """Return the GogStash application icon.
+
+    Returns:
+        QIcon: The application logo.
+    """
     return QIcon(str(resources.files('gogstash') / 'icons' / 'gogstash.svg'))
 
 def get_icon(icon_file: str) -> QIcon:
+    """Load an icon matching the current color scheme.
+
+    Args:
+        icon_file (str): File name of the icon inside ``icons/dark`` or
+            ``icons/light``.
+
+    Returns:
+        QIcon: The icon for the active color scheme.
+    """
     color_scheme =  QApplication.instance().styleHints().colorScheme()
     color_folder = 'dark' if color_scheme == Qt.ColorScheme.Dark else 'light'
     icon_path = str(resources.files('gogstash') / 'icons' / color_folder / icon_file)
     return QIcon(icon_path)
 
 def status_indicator(color: str = "") -> QIcon:
+    """Draw a filled circle used as a status dot.
+
+    Args:
+        color (str): One of ``'blue'``, ``'green'``, ``'red'`` or
+            ``'yellow'``. Any other value uses the neutral ``'base'``
+            color.
+
+    Returns:
+        QIcon: A 12x12 dot in the palette of the current color scheme.
+    """
     color_scheme = QApplication.instance().styleHints().colorScheme()
     if color_scheme == Qt.ColorScheme.Dark:
         icon_color = material_dark.get(color, material_dark['base'])
