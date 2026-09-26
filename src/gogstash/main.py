@@ -3,6 +3,7 @@
 import sys
 import humanize
 from pathlib import Path
+import importlib.metadata
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QProgressBar,
     QDialogButtonBox,
+    QMessageBox
 )
 from PySide6.QtGui import (
     QAction,
@@ -93,6 +95,11 @@ class MainWindow(QMainWindow):
         self.settings_button.setProperty('iconFile', 'settings.svg')
         self.settings_button.triggered.connect(self.open_settings)
         self.main_toolbar.addAction(self.settings_button)
+
+        self.about_button = QAction("About", self, icon=get_icon('question.svg'))
+        self.about_button.setProperty('iconFile', 'question.svg')
+        self.about_button.triggered.connect(self.open_about_page)
+        self.main_toolbar.addAction(self.about_button)
 
         self.left_dock = QDockWidget()
         self.library_widget = QWidget()
@@ -173,6 +180,34 @@ class MainWindow(QMainWindow):
         settings_dialog.exec()
         self.on_games_loaded(library_db.get_product_listing())
         settings_dialog.deleteLater()
+
+    def open_about_page(self):
+        """Show the about page."""
+        version = importlib.metadata.version("gogstash")
+        about_page = QMessageBox(self)
+        about_page.setWindowTitle("About GogStash")
+        about_page.setIconPixmap(get_logo().pixmap(64, 64))
+        about_page.setText(f"""
+        <h3>GogStash</h3>
+        <p>Version {version}</p>
+        <p>A desktop GUI for downloading and backing up your GOG.com game library.</p>
+        <p>
+        <a href="https://github.com/preppie22/gogstash">Project page</a> &middot;
+        <a href="https://github.com/preppie22/gogstash/issues">Report a bug</a>
+        </p>
+        <p>Copyright &copy; 2026 Piyush Puranik<br>
+        Released under the <a href="https://github.com/preppie22/gogstash/blob/main/LICENSE">MIT License</a>.</p>
+        <p><small>GogStash is not affiliated with or endorsed by GOG.com or CD PROJEKT.
+        Built with Qt via PySide6, licensed under the LGPL (see About Qt).</small></p>
+        """)
+        about_page.setTextFormat(Qt.TextFormat.RichText)
+        about_page.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        about_qt_button = QPushButton("About Qt")
+        about_page.addButton(about_qt_button, QMessageBox.ButtonRole.ActionRole)
+        about_qt_button.clicked.disconnect()
+        about_qt_button.clicked.connect(lambda: QMessageBox.aboutQt(self))
+        about_page.addButton(QMessageBox.StandardButton.Ok)
+        about_page.exec()
 
     def fetch_games(self):
         """Refresh the library from GOG in a background thread."""

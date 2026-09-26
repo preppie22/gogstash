@@ -15,7 +15,7 @@ Basically, I wanted to build a tool that can batch download installers/extras fo
 
 ## Status
 
-The project is in alpha stage right now and there's a lot of work to be done to get it fully working and polished. Please download the alpha and report any bugs you find.
+The project is in beta right now and there's some work left to get it polished. Please download and report any bugs that you encounter.
 
 What's working:
 - Login to GOG.com.

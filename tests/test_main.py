@@ -210,7 +210,8 @@ def test_onclick_queue_download_does_nothing_without_a_selection():
 @patch("gogstash.main.get_icon")
 def test_color_scheme_refresh_reloads_each_toolbar_action_and_button_from_its_own_icon_file(mock_get_icon):
     # The Queue Selection button got an icon too, so it gets a seat on the
-    # theme-change bus alongside the toolbar crew.
+    # theme-change bus alongside the toolbar crew. The About button hopped
+    # on later, question mark and all.
     mock_get_icon.return_value = _non_null_icon()
     window = MainWindow()
     mock_get_icon.reset_mock()
@@ -218,7 +219,7 @@ def test_color_scheme_refresh_reloads_each_toolbar_action_and_button_from_its_ow
     window._color_scheme_refresh()
 
     called_files = {call.args[0] for call in mock_get_icon.call_args_list}
-    assert called_files == {"login.svg", "logout.svg", "fetch.svg", "settings.svg", "enqueue.svg"}
+    assert called_files == {"login.svg", "logout.svg", "fetch.svg", "settings.svg", "question.svg", "enqueue.svg"}
 
 
 def test_theme_change_mid_construction_doesnt_trip_over_half_built_widgets(monkeypatch):
