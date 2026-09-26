@@ -93,8 +93,6 @@ class MainWindow(QMainWindow):
         self.settings_button.setProperty('iconFile', 'settings.svg')
         self.settings_button.triggered.connect(self.open_settings)
         self.main_toolbar.addAction(self.settings_button)
-        QApplication.instance().styleHints().colorSchemeChanged.connect(self._color_scheme_refresh)
-        SettingsDialog.set_color_theme()
 
         self.left_dock = QDockWidget()
         self.library_widget = QWidget()
@@ -129,6 +127,8 @@ class MainWindow(QMainWindow):
 
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea,self.left_dock)
         self._update_login_status()
+        QApplication.instance().styleHints().colorSchemeChanged.connect(self._color_scheme_refresh)
+        SettingsDialog.set_color_theme()
         self._color_scheme_refresh()
         self.on_games_loaded(library_db.get_product_listing())
 
@@ -302,6 +302,7 @@ class MainWindow(QMainWindow):
 def main():
     """Start the application and show the main window."""
     app = QApplication(sys.argv)
+    app.setStyle('Fusion')
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
