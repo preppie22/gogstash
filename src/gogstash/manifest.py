@@ -5,10 +5,12 @@ keyed by file path relative to the game directory. Every entry records
 the file's category, size, md5 checksum and fetch time.
 """
 
+import sys
 import json
 from pathlib import Path
 
 MANIFEST_FILE = ".gogstash.manifest"
+FILE_ATTRIBUTE_HIDDEN = 0x2
 
 def read_manifest(game_dir: Path) -> dict:
     """Read the manifest of a game directory.
@@ -58,9 +60,13 @@ def add_file(game_dir: Path, filepath: Path, category: str, checksum: str, times
         'fetched_at': timestamp
     }
     temp_file = Path(game_dir) / f"{MANIFEST_FILE}~"
+    manifest_file = Path(game_dir) / Path(MANIFEST_FILE)
     with open(temp_file, 'w') as wp:
         json.dump(manifest, wp)
-    temp_file.replace(Path(game_dir) / Path(MANIFEST_FILE))
+    temp_file.replace(manifest_file)
+    if sys.platform == 'win32':
+        import ctypes
+        ctypes.windll.kernel32.SetFileAttributesW(str(manifest_file), FILE_ATTRIBUTE_HIDDEN)
 
 def stat_file(game_dir: Path, filepath: Path) -> dict:
     """Look up a file's manifest entry.
