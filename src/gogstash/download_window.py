@@ -189,6 +189,7 @@ class DownloadWindow(QDockWidget):
         self.setWidget(self.main_widget)
         QApplication.instance().styleHints().colorSchemeChanged.connect(self._color_scheme_refresh)
         self._color_scheme_refresh()
+        self._update_progress_bar()
 
     def _color_scheme_refresh(self) -> None:
         """Reload button icons and status dots for the current color scheme."""
