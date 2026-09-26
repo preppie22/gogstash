@@ -67,16 +67,16 @@ will have all of these features.
 **Legend:** ✅ done & released · 🟡 done, merged but not yet released · ⬜ not started
 
 - ✅ Stop downloads once they're started
-- 🟡 Pause downloads once they're started
-- 🟡 Resume a paused or interrupted download instead of starting over
-- 🟡 Add downloads to queue without stopping or pausing started downloads
+- ✅ Pause downloads once they're started
+- ✅ Resume a paused or interrupted download instead of starting over
+- ✅ Add downloads to queue without stopping or pausing started downloads
 - ✅ Skip re-downloading files that already exist and check out
 - ✅ Record fetched files in the local cache so the library view reflects what you actually have
-- 🟡 Clear the download queue
-- 🟡 Auto remove completed downloads from download queue before starting
+- ✅ Clear the download queue
+- ✅ Auto remove completed downloads from download queue before starting
 - ✅ Ship a self-contained Linux AppImage
-- 🟡 Document the codebase beyond just the tests
-- 🟡 Add auto-update capability to AppImage (e.g. via GearLever/AppImageUpdate)
+- ✅ Document the codebase beyond just the tests
+- ✅ Add auto-update capability to AppImage (e.g. via GearLever/AppImageUpdate)
 - ⬜ Ship a Windows build (zipped, not an installer)
 
 I'll probably add more as I work through these.
