@@ -503,7 +503,7 @@ class DownloadWorkerThread(QThread):
                     if file_hash.hexdigest() == checksum:
                         verified = True
                 if verified:
-                    part_path.rename(save_path)
+                    part_path.replace(save_path)
                     self.fetched.emit({
                         'game_dir': download_path,
                         'filepath': save_path,
