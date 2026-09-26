@@ -9,6 +9,12 @@
 A desktop GUI application for downloading local backups
 of your GOG.com game library.
 
+<p align="center">
+  <picture>
+    <img src="docs/demo.gif" alt="GogStash queueing and downloading games"/>
+  </picture>
+</p>
+
 ## Why
 
 Basically, I wanted to build a tool that can batch download installers/extras for your GOG game library. There are some CLI tools, but I didn't really like those because they were clunky for batch downloads and mostly single threaded. So, I built this application to do better than that. The program code is not AI generated (see [AI Disclosure](#ai-disclosure)). This program batch downloads content only when it hasn't already been downloaded or if the downloaded content is stale.
@@ -101,6 +107,7 @@ This section is for developers and tinkerers.
 
 ```
 GogStash/
+├── docs/                # README demo and screenshots
 ├── src/
 │   └── gogstash/
 │       └── ...          # GUI + GOG API client code
