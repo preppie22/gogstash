@@ -84,6 +84,72 @@ def test_add_file_rejects_a_file_that_is_not_under_game_dir(tmp_path):
         manifest.add_file(tmp_path, outside_file, category="installers", checksum="x", timestamp=1.0)
 
 
+class _FakeKernel32:
+    """Stand-in for ctypes.windll.kernel32 that writes down every hiding attempt,
+    plus whether the manifest was actually on disk yet when it happened."""
+
+    def __init__(self):
+        self.calls = []
+
+    def SetFileAttributesW(self, path, attributes):
+        self.calls.append((path, attributes, Path(path).exists()))
+        return 1
+
+
+@pytest.fixture
+def fake_windows(monkeypatch):
+    # Cosplaying as Windows without having to actually suffer it.
+    import ctypes
+    kernel32 = _FakeKernel32()
+    monkeypatch.setattr(manifest.sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "windll", type("windll", (), {"kernel32": kernel32}), raising=False)
+    return kernel32
+
+
+def test_add_file_hides_the_manifest_on_windows_after_every_single_write(tmp_path, fake_windows):
+    # Regression: Windows couldn't care less about the leading dot. And since
+    # replace() swaps in the temp file's attributes, hiding it once isn't
+    # enough; every write has to re-hide it or it pops right back into view.
+    file_a = tmp_path / "a.exe"
+    file_b = tmp_path / "b.exe"
+    file_a.write_bytes(b"aaa")
+    file_b.write_bytes(b"bbbb")
+
+    manifest.add_file(tmp_path, file_a, category="installers", checksum="a", timestamp=1.0)
+    manifest.add_file(tmp_path, file_b, category="bonus_content", checksum="", timestamp=2.0)
+
+    manifest_path = str(tmp_path / manifest.MANIFEST_FILE)
+    assert fake_windows.calls == [
+        (manifest_path, manifest.FILE_ATTRIBUTE_HIDDEN, True),
+        (manifest_path, manifest.FILE_ATTRIBUTE_HIDDEN, True),
+    ]
+
+
+def test_add_file_leaves_the_temp_file_visible_so_a_leftover_cant_jam_future_writes(tmp_path, fake_windows):
+    # open(path, 'w') on a hidden file is a PermissionError on Windows. A
+    # hidden temp file left behind by a crash would brick every later write.
+    game_file = tmp_path / "setup.exe"
+    game_file.write_bytes(b"hello")
+
+    manifest.add_file(tmp_path, game_file, category="installers", checksum="x", timestamp=1.0)
+
+    hidden_paths = [path for path, _, _ in fake_windows.calls]
+    assert str(tmp_path / f"{manifest.MANIFEST_FILE}~") not in hidden_paths
+
+
+def test_add_file_keeps_its_hands_off_the_windows_api_everywhere_else(tmp_path, monkeypatch):
+    import ctypes
+    kernel32 = _FakeKernel32()
+    monkeypatch.setattr(manifest.sys, "platform", "linux")
+    monkeypatch.setattr(ctypes, "windll", type("windll", (), {"kernel32": kernel32}), raising=False)
+    game_file = tmp_path / "setup.exe"
+    game_file.write_bytes(b"hello")
+
+    manifest.add_file(tmp_path, game_file, category="installers", checksum="x", timestamp=1.0)
+
+    assert kernel32.calls == []
+
+
 # --- stat_file ---
 
 def test_stat_file_returns_the_recorded_entry_for_a_known_file(tmp_path):

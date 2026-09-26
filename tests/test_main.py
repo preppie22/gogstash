@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import humanize
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import QDialog
+from PySide6.QtWidgets import QApplication, QDialog
 
 from gogstash import gog_auth, manifest
 from gogstash.main import MainWindow
@@ -219,6 +219,25 @@ def test_color_scheme_refresh_reloads_each_toolbar_action_and_button_from_its_ow
 
     called_files = {call.args[0] for call in mock_get_icon.call_args_list}
     assert called_files == {"login.svg", "logout.svg", "fetch.svg", "settings.svg", "enqueue.svg"}
+
+
+def test_theme_change_mid_construction_doesnt_trip_over_half_built_widgets(monkeypatch):
+    # Regression: on Windows, setColorScheme() fires colorSchemeChanged on the
+    # spot, and the refresh used to be wired up before button_layout was even
+    # born. Linux never emitted there, so it took Windows to notice. Here we
+    # play the part of Windows. Qt swallows slot exceptions and hands them to
+    # sys.excepthook, so that's where the evidence ends up.
+    slot_errors = []
+    monkeypatch.setattr("sys.excepthook", lambda _type, value, _tb: slot_errors.append(value))
+
+    def set_color_theme_like_windows():
+        hints = QApplication.instance().styleHints()
+        hints.colorSchemeChanged.emit(Qt.ColorScheme.Dark)
+
+    with patch("gogstash.main.SettingsDialog.set_color_theme", side_effect=set_color_theme_like_windows):
+        MainWindow()
+
+    assert slot_errors == []
 
 
 def test_doubleclick_while_queue_is_busy_tells_the_user_to_hold_their_horses():
