@@ -43,5 +43,6 @@ RUN mkdir -p /build/AppDir/usr/bin \
     && cp -r /build/dist/gogstash /build/AppDir/usr/bin/ \
     && cp -r /build/packaging/appimage/* /build/AppDir/ \
     && chmod +x /build/AppDir/AppRun
-RUN appimagetool --appimage-extract-and-run /build/AppDir /build/gogstash-x86_64.AppImage \
+RUN appimagetool -u 'gh-releases-zsync|preppie22|gogstash|latest|gogstash-*x86_64.AppImage.zsync' \
+    --appimage-extract-and-run /build/AppDir /build/gogstash-x86_64.AppImage \
     && chmod +x /build/gogstash-x86_64.AppImage

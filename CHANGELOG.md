@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Version numbers are CalVer-based (`YYYY.M.D` plus an `-alpha`/`-beta`/`-rc` stage
 suffix while pre-1.0), not SemVer.
 
-## [Unreleased]
+## [2026.9.26-beta] - 2026-09-26
 
 ### Added
 - Pause downloads and resume them later, picking up each file from where it stopped instead of starting over
@@ -15,20 +15,28 @@ suffix while pre-1.0), not SemVer.
 - Clear the whole download queue without restarting the application, including while downloads are running or paused
 - Colored status dot on each queued game showing whether it's queued, downloading, paused, finished, or failed
 - Starting a new run offers to remove games that already finished from the queue
+- The AppImage can update itself through GearLever or AppImageUpdate, downloading only the parts that changed
 
 ### Changed
 - The download log records pause, resume and stop, with timestamps on every entry
+- Each file is recorded in the game's manifest and the download log as soon as it finishes, instead of when the whole game is done, so a crash partway through no longer loses track of files already downloaded
 - A failed game's error message now shows when hovering over its red status dot
-- A run that ends with failed games reports how many failed instead of saying downloads are complete
+- The "Add to Download Queue" button is now "Queue Selection", and the "Show Download Queue" buttons are gone since the queue is always visible
+- Docstrings for every module, class and function in the source, for contributors
 
 ### Fixed
 - Queuing the same game twice no longer downloads it twice at the same time
 - Opening the Settings dialog no longer leaves a copy of it in memory each time
 - Pausing or stopping just as a file finishes no longer marks the game as failed or throws away the finished file
+- A game where only some files failed no longer reports that all of its files failed
+- The status line no longer stays on "Downloading..." after a run ends, and says how many games failed if any did
+- Bonus content that GOG replaces with a different file is downloaded again instead of being skipped as up to date
+- A problem writing the download log no longer interrupts downloads
 
 ### Known Issues
 - Individual games can't be removed from the download queue, only the whole queue can be cleared
-- The download queue can't be reordered
+- ~~The download queue can't be reordered~~ (not planned)
+- AppImages from earlier releases can't update themselves, so this release has to be downloaded by hand once
 
 ## [2026.9.13-alpha] - 2026-09-13
 

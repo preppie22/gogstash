@@ -75,9 +75,9 @@ will have all of these features.
 - 🟡 Clear the download queue
 - 🟡 Auto remove completed downloads from download queue before starting
 - ✅ Ship a self-contained Linux AppImage
-- ⬜ Ship a Windows build (zipped, not an installer)
 - 🟡 Document the codebase beyond just the tests
-- ⬜ Add auto-update capability to AppImage (e.g. via GearLever/AppImageUpdate)
+- 🟡 Add auto-update capability to AppImage (e.g. via GearLever/AppImageUpdate)
+- ⬜ Ship a Windows build (zipped, not an installer)
 
 I'll probably add more as I work through these.
 
