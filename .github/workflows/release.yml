@@ -1,0 +1,62 @@
+name: "Build and Release"
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -f packaging/docker/Dockerfile -t gogstash-builder .
+      - run: |
+          docker create --name extract gogstash-builder
+          docker cp extract:/build/gogstash-x86_64.AppImage .
+          docker cp extract:/build/gogstash-x86_64.AppImage.zsync .
+          docker rm extract
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gogstash-appimage
+          path: |
+            gogstash-*x86_64.AppImage
+            gogstash-*x86_64.AppImage.zsync
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install ".[packaging]"
+      - run: pyinstaller --add-data "src\gogstash\icons:gogstash/icons" --copy-metadata gogstash --onedir --windowed --noconfirm --name gogstash --icon packaging\icons\logo.ico packaging\pyinstaller\launch_gogstash.py
+      - run: Compress-Archive -Path dist\gogstash -DestinationPath gogstash-x86_64-windows.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gogstash-windows
+          path: gogstash-x86_64-windows.zip
+
+  release:
+    needs: [build-linux, build-windows]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+      - run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v heading="## [$version]" '/^## /{p = index($0, heading) == 1} p' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for [$version]"
+            exit 1
+          fi
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create ${{ github.ref_name }} gogstash-*x86_64.AppImage* gogstash-x86_64-windows.zip --notes-file release_notes.md

@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Version numbers are CalVer-based (`YYYY.M.D` plus an `-alpha`/`-beta`/`-rc` stage
 suffix while pre-1.0), not SemVer.
 
+## [2026.9.26-beta2] - 2026-09-26
+
+### Added
+- Windows build, shipped as a zip: unzip it anywhere and run `gogstash.exe`
+- About dialog showing the installed version, with links to the project page and bug tracker, license details, and Qt's own About page
+
+### Changed
+- GogStash uses the same Fusion look on every platform, so Windows matches Linux
+
+### Fixed
+- The download progress bar shows 0% at startup instead of being blank
+- Windows: toolbar and button icons no longer show up blank
+- Windows: GogStash no longer throws an error at startup when the theme is applied
+- Windows: downloading a file that already exists in the game folder no longer fails
+- Windows: the game manifest file is now hidden, like it is on Linux
+
+### Known Issues
+- Individual games can't be removed from the download queue, only the whole queue can be cleared
+- Windows: in dark mode, alternating rows in the games list and download queue are tinted with the Windows accent color
+- Windows: the app isn't code-signed, so SmartScreen may warn about an unknown publisher on first launch
+
 ## [2026.9.26-beta] - 2026-09-26
 
 ### Added
