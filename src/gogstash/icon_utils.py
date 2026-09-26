@@ -18,6 +18,8 @@ from PySide6.QtCore import (
     Qt,
     QSize,
 )
+import PySide6.QtSvg # preloads Qt6Svg.dll for Windows targets. No effect on Linux.
+
 material_dark = {
     'blue': QColor('#64B5F6'),
     'green': QColor('#81C784'),
