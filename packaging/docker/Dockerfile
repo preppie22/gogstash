@@ -38,7 +38,7 @@ COPY . /build/
 
 RUN python3.12 -m venv /build/.venv
 RUN /build/.venv/bin/pip install ".[dev,packaging]"
-RUN /build/.venv/bin/pyinstaller --add-data "/build/src/gogstash/icons:gogstash/icons" --copy-metadata gogstash --onedir --windowed --name gogstash /build/packaging/pyinstaller/launch_gogstash.py
+RUN /build/.venv/bin/pyinstaller --add-data "/build/src/gogstash/icons:gogstash/icons" --add-data "/build/packaging/licenses:gogstash/licenses" --copy-metadata gogstash --onedir --windowed --name gogstash /build/packaging/pyinstaller/launch_gogstash.py
 RUN mkdir -p /build/AppDir/usr/bin \
     && cp -r /build/dist/gogstash /build/AppDir/usr/bin/ \
     && cp -r /build/packaging/appimage/* /build/AppDir/ \

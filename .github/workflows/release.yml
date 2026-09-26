@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ".[packaging]"
-      - run: pyinstaller --add-data "src\gogstash\icons:gogstash/icons" --copy-metadata gogstash --onedir --windowed --noconfirm --name gogstash --icon packaging\icons\logo.ico packaging\pyinstaller\launch_gogstash.py
+      - run: pyinstaller --add-data "src\gogstash\icons:gogstash/icons" --add-data "packaging\licenses:gogstash\licenses" --copy-metadata gogstash --onedir --windowed --noconfirm --name gogstash --icon packaging\icons\logo.ico packaging\pyinstaller\launch_gogstash.py
       - run: Compress-Archive -Path dist\gogstash -DestinationPath gogstash-x86_64-windows.zip
       - uses: actions/upload-artifact@v7
         with:
