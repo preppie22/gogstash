@@ -20,10 +20,12 @@ The project is in alpha stage right now and there's a lot of work to be done to 
 What's working:
 - Login to GOG.com.
 - Fetching your game library.
-- Adding games to queue and downloading them to disk.
+- Dynamically adding games to queue and downloading them to disk.
 - Concurrent downloads.
 - Select what categories to download.
 - Settings menu.
+- Pause/Resume downloads.
+- Clear download queue.
 
 What's not working: see [To Do](#to-do)
 
@@ -53,9 +55,9 @@ I'd appreciate your feedback on bugs, features, or improvements in the [issues s
 
 1. Click on the Login button in the toolbar and login to your GOG account.
 2. Once the status changes to "Logged in", click on the `Refresh Games List` button to fetch your library.
-3. Select the games you want to download and click on the `Add to Download Queue` button. Optionally, double clicking on a game also adds it to the queue.
-4. Click on the `Show Download Queue` button on the right or in the toolbar.
-5. Click on `Start Downloads`.
+3. Select the games you want to download and click on the `Queue Selection` button. Optionally, double clicking on a game also adds it to the queue.
+4. Queued games appear in the download queue on the right.
+5. Click on `Start Downloads` to begin downloading.
 
 ## To Do
 
@@ -70,7 +72,8 @@ will have all of these features.
 - 🟡 Add downloads to queue without stopping or pausing started downloads
 - ✅ Skip re-downloading files that already exist and check out
 - ✅ Record fetched files in the local cache so the library view reflects what you actually have
-- ⬜ Remove or clear entries from the download queue without restarting the app
+- 🟡 Clear the download queue
+- 🟡 Auto remove completed downloads from download queue before starting
 - ✅ Ship a self-contained Linux AppImage
 - ⬜ Ship a Windows build (zipped, not an installer)
 - ⬜ Document the codebase beyond just the tests

@@ -19,6 +19,7 @@ from PySide6.QtCore import (
 )
 class DownloadScheduler(QObject):
     game_succeeded = Signal(int)
+    game_started = Signal(int)
     game_failed = Signal(int, str)
     game_stopped = Signal(int)
     game_paused = Signal(int)
@@ -134,6 +135,7 @@ class DownloadScheduler(QObject):
         self.active_queue.append(job)
         self.tokens = self.tokens - 1
         job['worker'].start()
+        self.game_started.emit(job['row_idx'])
 
     def _reap(self, job: dict):
         if job in self.active_queue:

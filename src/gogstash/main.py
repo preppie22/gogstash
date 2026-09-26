@@ -107,7 +107,9 @@ class MainWindow(QMainWindow):
         self.games_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.games_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
 
-        self.queue_download_button = QPushButton("Queue Selected")
+        self.queue_download_button = QPushButton("Queue Selection")
+        self.queue_download_button.setIcon(get_icon('enqueue.svg'))
+        self.queue_download_button.setProperty('iconFile', 'enqueue.svg')
         self.queue_download_button.clicked.connect(self.onclick_queue_download)
 
         self.button_layout = QDialogButtonBox()
@@ -123,8 +125,13 @@ class MainWindow(QMainWindow):
 
     def _color_scheme_refresh(self) -> None:
         for button in self.main_toolbar.actions():
-            if not button.icon(): continue
-            button.setIcon(get_icon(button.property('iconFile')))
+            icon_file = button.property('iconFile')
+            if icon_file:
+                button.setIcon(get_icon(icon_file))
+        for button in self.button_layout.buttons():
+            icon_file = button.property('iconFile')
+            if icon_file:
+                button.setIcon(get_icon(icon_file))
     
     def _update_login_status(self):
         token = gog_auth.get_valid_token()
@@ -148,6 +155,7 @@ class MainWindow(QMainWindow):
         settings_dialog = SettingsDialog(self)
         settings_dialog.exec()
         self.on_games_loaded(library_db.get_product_listing())
+        settings_dialog.deleteLater()
 
     def fetch_games(self):
         self.fetch_thread = library_db.LibraryFetchThread(force=True)

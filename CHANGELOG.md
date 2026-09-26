@@ -12,15 +12,21 @@ suffix while pre-1.0), not SemVer.
 - Pause downloads and resume them later, picking up each file from where it stopped instead of starting over
 - Add games to the download queue while downloads are running
 - Download queue docked next to the games list in the main window
+- Clear the whole download queue without restarting the application, including while downloads are running or paused
+- Colored status dot on each queued game showing whether it's queued, downloading, paused, finished, or failed
+- Starting a new run offers to remove games that already finished from the queue
 
 ### Changed
 - The download log records pause, resume and stop, with timestamps on every entry
+- A failed game's error message now shows when hovering over its red status dot
+- A run that ends with failed games reports how many failed instead of saying downloads are complete
 
 ### Fixed
 - Queuing the same game twice no longer downloads it twice at the same time
+- Opening the Settings dialog no longer leaves a copy of it in memory each time
 
 ### Known Issues
-- Removing or clearing the download queue requires restarting the application
+- Individual games can't be removed from the download queue, only the whole queue can be cleared
 - The download queue can't be reordered
 
 ## [2026.9.13-alpha] - 2026-09-13

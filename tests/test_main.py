@@ -208,7 +208,9 @@ def test_onclick_queue_download_does_nothing_without_a_selection():
 
 
 @patch("gogstash.main.get_icon")
-def test_color_scheme_refresh_reloads_each_toolbar_action_from_its_own_icon_file(mock_get_icon):
+def test_color_scheme_refresh_reloads_each_toolbar_action_and_button_from_its_own_icon_file(mock_get_icon):
+    # The Queue Selection button got an icon too, so it gets a seat on the
+    # theme-change bus alongside the toolbar crew.
     mock_get_icon.return_value = _non_null_icon()
     window = MainWindow()
     mock_get_icon.reset_mock()
@@ -216,7 +218,7 @@ def test_color_scheme_refresh_reloads_each_toolbar_action_from_its_own_icon_file
     window._color_scheme_refresh()
 
     called_files = {call.args[0] for call in mock_get_icon.call_args_list}
-    assert called_files == {"login.svg", "logout.svg", "fetch.svg", "settings.svg"}
+    assert called_files == {"login.svg", "logout.svg", "fetch.svg", "settings.svg", "enqueue.svg"}
 
 
 def test_doubleclick_while_queue_is_busy_tells_the_user_to_hold_their_horses():
@@ -260,3 +262,18 @@ def test_toolbar_queue_while_busy_bitches_once_and_quits_trying():
         "Please wait for pending operations to complete before queuing downloads"
     )
     assert window.error_message.windowTitle() == "Error Queuing"
+
+
+def test_opening_settings_over_and_over_doesnt_hoard_dead_dialogs():
+    # Regression: the main window parents each SettingsDialog, so dropping
+    # the Python name did nothing and every open left one more behind.
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from gogstash.main import SettingsDialog
+    window = MainWindow()
+
+    with patch.object(SettingsDialog, "exec", return_value=0):
+        for _ in range(3):
+            window.open_settings()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    assert window.findChildren(SettingsDialog) == []

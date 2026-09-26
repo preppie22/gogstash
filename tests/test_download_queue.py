@@ -1501,3 +1501,19 @@ def test_reap_waits_for_the_thread_to_actually_die_before_dropping_it():
             emit()
 
         assert getattr(worker, "waited", False), f"{signal} dropped the worker without waiting"
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+def test_game_started_announces_the_row_not_the_product_id():
+    # Regression: it emitted the product id, so the window went looking for
+    # row 1207658924 and found a None instead of a dot to paint blue.
+    # make_scheduler uses idx == product_id, which would hide exactly this.
+    scheduler = download_queue.DownloadScheduler(
+        [{"idx": 0, "product_id": 1207658924}, {"idx": 1, "product_id": 1207664663}], 2
+    )
+    started = []
+    scheduler.game_started.connect(started.append)
+
+    scheduler.schedule()
+
+    assert started == [0, 1]
