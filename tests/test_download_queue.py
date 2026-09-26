@@ -160,10 +160,13 @@ def test_platform_helper_maps_settings_labels_to_gog_os_values():
     assert download_queue._platform_helper([]) == []
 
 
-def make_streamed_response(chunks, status_code=200):
+def make_streamed_response(chunks, status_code=200, headers=None):
+    # A real dict for headers, since a bare MagicMock's Content-Length int()s
+    # to 1 and every fake file would swear it's a single byte long.
     response = MagicMock()
     response.status_code = status_code
     response.iter_content.return_value = chunks
+    response.headers = headers if headers is not None else {"Content-Length": str(sum(len(c) for c in chunks))}
     return response
 
 
@@ -739,6 +742,108 @@ def test_download_worker_pause_after_full_download_saves_the_file_and_only_pause
     written = tmp_path / "fake-game" / "installer_windows_en" / "setup_fake_game.exe"
     assert [entry["filepath"] for entry in events.fetched] == [written]
     assert written.read_bytes() == chunk_a + chunk_b
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_pause_landing_on_the_last_chunk_finishes_the_file_instead_of_pausing_on_it(
+    mock_resolve, mock_get, tmp_path
+):
+    # Regression, caught in a live run: the pause landed right as the last
+    # chunk hit the disk, so the worker paused holding a .part that was
+    # already whole. Resume then asked the CDN for "bytes=<size>-", got a
+    # 416 Range Not Satisfiable for its trouble, marked a perfectly good
+    # download as failed and left the .part lying around like a sock
+    # under the bed.
+    game_dir = single_installer_setup(mock_resolve, tmp_path)
+    chunk_a = b"a" * 400
+    chunk_b = b"b" * 600
+    checksum = hashlib.md5(chunk_a + chunk_b).hexdigest()
+    mock_get.side_effect = [make_checksum_response(checksum), make_streamed_response([chunk_a, chunk_b])]
+    thread = download_queue.DownloadWorkerThread(111)
+    thread.update_progress = lambda: thread.pause_worker() if thread.fetched_size == 1000 else None
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert events.failed == []
+    assert events.succeeded == 0
+    assert events.paused == [{}]  # paused between files, nothing to resume mid-way
+    written = game_dir / "setup_fake_game.exe"
+    assert written.read_bytes() == chunk_a + chunk_b
+    assert not (game_dir / "setup_fake_game.exe.part").exists()
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_stop_landing_on_the_last_chunk_keeps_the_finished_file(
+    mock_resolve, mock_get, tmp_path
+):
+    # Same timing, Stop edition: the whole file was on disk and would have
+    # passed its checksum, and the worker binned it anyway. Bandwidth isn't
+    # free, keep the thing.
+    game_dir = single_installer_setup(mock_resolve, tmp_path)
+    chunk_a = b"a" * 400
+    chunk_b = b"b" * 600
+    checksum = hashlib.md5(chunk_a + chunk_b).hexdigest()
+    mock_get.side_effect = [make_checksum_response(checksum), make_streamed_response([chunk_a, chunk_b])]
+    thread = download_queue.DownloadWorkerThread(111)
+    thread.update_progress = lambda: thread.stop_worker() if thread.fetched_size == 1000 else None
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert events.failed == []
+    assert events.succeeded == 0
+    assert events.stopped == 1
+    written = game_dir / "setup_fake_game.exe"
+    assert [entry["filepath"] for entry in events.fetched] == [written]
+    assert written.read_bytes() == chunk_a + chunk_b
+    assert not (game_dir / "setup_fake_game.exe.part").exists()
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_can_still_pause_mid_file_when_the_server_wont_say_how_big_it_is(
+    mock_resolve, mock_get, tmp_path
+):
+    # No Content-Length means content_length is 0, and "0 bytes left"
+    # must not read as "done, ignore the pause button" for the whole file.
+    game_dir = single_installer_setup(mock_resolve, tmp_path)
+    mock_get.side_effect = [
+        make_checksum_response("irrelevant"),
+        make_streamed_response([b"a" * 400, b"b" * 600], headers={}),
+    ]
+    thread = download_queue.DownloadWorkerThread(111)
+    thread.update_progress = lambda: thread.pause_worker()
+    events = Watcher(thread)
+
+    thread.run()
+
+    part_path = game_dir / "setup_fake_game.exe.part"
+    assert events.paused == [{"partpath": part_path, "downlink": "https://example.com/file1"}]
+    assert part_path.read_bytes() == b"a" * 400
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_can_still_stop_mid_file_when_the_server_wont_say_how_big_it_is(
+    mock_resolve, mock_get, tmp_path
+):
+    game_dir = single_installer_setup(mock_resolve, tmp_path)
+    mock_get.side_effect = [
+        make_checksum_response("irrelevant"),
+        make_streamed_response([b"a" * 400, b"b" * 600], headers={}),
+    ]
+    thread = download_queue.DownloadWorkerThread(111)
+    thread.update_progress = lambda: thread.stop_worker()
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert events.stopped == 1
+    assert not (game_dir / "setup_fake_game.exe.part").exists()
+    assert not (game_dir / "setup_fake_game.exe").exists()
 
 
 @patch("gogstash.download_queue.requests.get")

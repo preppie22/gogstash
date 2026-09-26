@@ -313,19 +313,21 @@ class DownloadWorkerThread(QThread):
                     cleanup = False
                     for chunk in download_response.iter_content(chunk_size=1024*1024):
                         bytes_written = fp.write(chunk)
+                        current_size = fp.tell()
                         self.fetched_size += bytes_written
                         if file['directory'] != 'bonus_content':
                             file_hash.update(chunk)
                         self.update_progress()
-                        if self._stop_flag:
-                            cleanup = True
-                            break
-                        if self._pause_flag:
-                            self.paused.emit({
-                                'partpath': part_path,
-                                'downlink': file['downlink']
-                            })
-                            return
+                        if current_size < content_length or content_length == 0:
+                            if self._stop_flag:
+                                cleanup = True
+                                break
+                            if self._pause_flag:
+                                self.paused.emit({
+                                    'partpath': part_path,
+                                    'downlink': file['downlink']
+                                })
+                                return
                 if self._stop_flag and cleanup:
                     part_path.unlink()  
                     self.stopped.emit()

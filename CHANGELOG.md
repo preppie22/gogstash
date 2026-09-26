@@ -24,6 +24,7 @@ suffix while pre-1.0), not SemVer.
 ### Fixed
 - Queuing the same game twice no longer downloads it twice at the same time
 - Opening the Settings dialog no longer leaves a copy of it in memory each time
+- Pausing or stopping just as a file finishes no longer marks the game as failed or throws away the finished file
 
 ### Known Issues
 - Individual games can't be removed from the download queue, only the whole queue can be cleared
