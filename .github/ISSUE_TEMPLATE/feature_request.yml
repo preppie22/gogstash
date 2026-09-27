@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest a new feature or an improvement to an existing one.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion! If the idea is still fuzzy and you'd like to talk it through first, [Discussions](https://github.com/preppie22/gogstash/discussions) is a good place for that.
+
+  - type: textarea
+    id: feature
+    attributes:
+      label: What would you like GogStash to do?
+      description: Describe the feature or change.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why would it help you?
+      description: What problem does it solve, or what's annoying about how things work right now?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Anything else?
+      description: Workarounds you're using now, how other tools handle it, mockups, etc.
+    validations:
+      required: false

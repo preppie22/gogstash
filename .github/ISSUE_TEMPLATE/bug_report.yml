@@ -1,0 +1,75 @@
+name: Bug report
+description: Something crashed, broke, or didn't behave the way it should.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this! The more detail you give, the faster I can track it down.
+        Got a question rather than a bug? Try [Discussions](https://github.com/preppie22/gogstash/discussions) instead.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release you downloaded, as shown on the [Releases page](https://github.com/preppie22/gogstash/releases).
+      placeholder: e.g. 2026.9.26-beta2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux (AppImage)
+        - Windows (zip)
+        - Running from source
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Distro and version for Linux, or Windows version.
+      placeholder: e.g. Fedora 44, Windows 11 24H2
+    validations:
+      required: false
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you do right before it happened?
+      placeholder: |
+        1. Queue a game
+        2. Click Start Downloads
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: false
+
+  - type: textarea
+    id: errors
+    attributes:
+      label: Error messages or terminal output
+      description: Copy the text of any error dialog, or run the app from a terminal and paste what it prints. Screenshots can go in the "What happened?" box.
+      render: text
+    validations:
+      required: false
