@@ -4,6 +4,17 @@
   </picture>
 </p>
 
+<p align="center">
+  <a href="https://github.com/preppie22/gogstash/releases/latest"><img src="https://img.shields.io/github/v/release/preppie22/gogstash?include_prereleases" alt="Latest release"/></a>
+  <a href="https://github.com/preppie22/gogstash/releases"><img src="https://img.shields.io/github/downloads/preppie22/gogstash/total" alt="Total downloads"/></a>
+  <a href="#status"><img src="https://img.shields.io/badge/status-beta-orange" alt="Status: beta"/></a>
+  <a href="https://github.com/preppie22/gogstash/commits/dev"><img src="https://img.shields.io/github/last-commit/preppie22/gogstash/dev" alt="Last commit on dev"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/preppie22/gogstash" alt="License"/></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.12%2B-blue?logo=python&logoColor=white" alt="Python 3.12+"/></a>
+  <a href="#download"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey" alt="Platforms: Linux | Windows"/></a>
+  <a href="https://doc.qt.io/qtforpython-6/"><img src="https://img.shields.io/badge/built%20with-Qt%20(PySide6)-41CD52?logo=qt&logoColor=white" alt="Built with Qt (PySide6)"/></a>
+</p>
+
 # GogStash
 
 A desktop GUI application for downloading local backups
