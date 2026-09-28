@@ -91,22 +91,15 @@ Run the AppImage file. You can use AppImageUpdate or GearLever to manage this ap
 
 ## To Do
 
-This list tracks the functionality expected in the program.
-
-**Legend:** ✅ done & released · 🟡 done, merged but not yet released · ⬜ not started
-
-- ⬜ Trim unnecessary packages to reduce build size
-- ⬜ Option to remove individual entries from download queue
-- ⬜ Option to pause individual games
-
-**Breaking changes to be tackled later:**
-
-- ⬜ Replace QtWebEngine login with a simpler/lighter alternative
+This list tracks the functionality expected in the program. Features and bugs will
+be tracked in the [issues section](https://github.com/preppie22/gogstash/issues) from now on.
 
 **Beta Release:**
 <details>
 
 <summary> Features </summary>
+
+**Legend:** ✅ done & released · 🟡 done, merged but not yet released · ⬜ not started
 
 - ✅ Stop downloads once they're started
 - ✅ Pause downloads once they're started

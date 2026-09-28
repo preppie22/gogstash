@@ -36,7 +36,7 @@ body:
       description: Distro and version for Linux, or Windows version.
       placeholder: e.g. Fedora 44, Windows 11 24H2
     validations:
-      required: false
+      required: true
 
   - type: textarea
     id: what-happened
