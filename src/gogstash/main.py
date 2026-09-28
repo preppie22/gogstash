@@ -205,7 +205,7 @@ class MainWindow(QMainWindow):
         about_qt_button = QPushButton("About Qt")
         about_page.addButton(about_qt_button, QMessageBox.ButtonRole.ActionRole)
         about_qt_button.clicked.disconnect()
-        about_qt_button.clicked.connect(lambda: QMessageBox.aboutQt(self))
+        about_qt_button.clicked.connect(lambda: QMessageBox.aboutQt(about_page))
         about_page.addButton(QMessageBox.StandardButton.Ok)
         about_page.exec()
 
