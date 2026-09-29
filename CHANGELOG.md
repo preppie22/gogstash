@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Version numbers are CalVer-based (`YYYY.M.D` plus an `-alpha`/`-beta`/`-rc` stage
 suffix while pre-1.0), not SemVer.
 
+## [Unreleased]
+
+### Fixed
+- The About Qt dialog no longer opens behind the About box, where it couldn't be dismissed (#9)
+
 ## [2026.9.26-beta2] - 2026-09-26
 
 ### Added

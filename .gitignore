@@ -40,3 +40,6 @@ appimage-build/
 
 # LLM Tooling
 .claude/
+
+# Custom
+scratch/
