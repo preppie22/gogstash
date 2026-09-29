@@ -11,6 +11,9 @@ suffix until the first stable release), not SemVer.
 ### Added
 - Pick which languages to download in Settings. Games that don't come in any of your languages fall back to English
 
+### Changed
+- The status indicators in the download queue now have a different shape for each state (ring, triangle, check mark, X, pause bars) and colors that are easier to tell apart, including for color blindness (#22)
+
 ### Fixed
 - Installers and patches are no longer downloaded in every language a game ships in, only the ones you picked (#10)
 - Game sizes in the library now match what will actually be downloaded, following your platform, language, patch and bonus content settings (#5)

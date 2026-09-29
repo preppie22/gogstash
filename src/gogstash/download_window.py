@@ -152,7 +152,7 @@ class DownloadWindow(QDockWidget):
         self.game_queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.game_queue_table.verticalHeader().setVisible(False)
         self.game_queue_table.horizontalHeader().setMinimumSectionSize(16)
-        self.game_queue_table.setColumnWidth(Column.STATUS, 20)
+        self.game_queue_table.setColumnWidth(Column.STATUS, 24)
         self.game_queue_table.horizontalHeader().setSectionResizeMode(Column.STATUS, QHeaderView.ResizeMode.Fixed)
         self.game_queue_table.horizontalHeader().setSectionResizeMode(Column.TITLE, QHeaderView.ResizeMode.Stretch)  
         self.game_queue_table.horizontalHeader().setSectionResizeMode(Column.PROGRESS, QHeaderView.ResizeMode.ResizeToContents)  

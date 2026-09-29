@@ -1,8 +1,8 @@
 """Icon helpers that follow the application's light or dark color scheme.
 
 Attributes:
-    material_dark (dict[str, QColor]): Status dot colors for dark mode.
-    material_light (dict[str, QColor]): Status dot colors for light mode.
+    material_dark (dict[str, QColor]): Status indicator colors for dark mode.
+    material_light (dict[str, QColor]): Status indicator colors for light mode.
 """
 
 from importlib import resources
@@ -12,26 +12,30 @@ from PySide6.QtGui import (
     QIcon,
     QPainter,
     QColor,
-    QPixmap
+    QPixmap,
+    QPen,
+    QPolygonF
 )
 from PySide6.QtCore import (
     Qt,
     QSize,
+    QRectF,
+    QPointF
 )
 import PySide6.QtSvg # preloads Qt6Svg.dll for Windows targets. No effect on Linux.
 
 material_dark = {
-    'blue': QColor('#64B5F6'),
-    'green': QColor('#81C784'),
-    'red': QColor('#EF5350'),
-    'yellow': QColor('#FFD54F'),
+    'blue': QColor('#56B4E9'),
+    'green': QColor('#009E73'),
+    'red': QColor('#D55E00'),
+    'yellow': QColor('#F0E442'),
     'base': QColor('#FDFDFD')
 }
 material_light = {
-    'blue': QColor('#1E88E5'),
-    'green': QColor('#43A047'),
-    'red': QColor('#E53935'),
-    'yellow': QColor('#F9A825'),
+    'blue': QColor('#0072B2'),
+    'green': QColor('#009E73'),
+    'red': QColor('#D55E00'),
+    'yellow': QColor('#C9A800'),
     'base': QColor('#020202')
 }
 
@@ -59,28 +63,68 @@ def get_icon(icon_file: str) -> QIcon:
     return QIcon(icon_path)
 
 def status_indicator(color: str = "") -> QIcon:
-    """Draw a filled circle used as a status dot.
+    """Draw a status indicator whose shape and color both show the state.
+
+    Each state has its own shape, so it can be told apart without relying
+    on color alone: a ring for ``'base'`` (queued), a downward triangle for
+    ``'blue'`` (downloading), a check mark for ``'green'`` (done), an X for
+    ``'red'`` (failed) and two vertical bars for ``'yellow'`` (paused).
 
     Args:
         color (str): One of ``'blue'``, ``'green'``, ``'red'`` or
-            ``'yellow'``. Any other value uses the neutral ``'base'``
-            color.
+            ``'yellow'``. Any other value draws the neutral ``'base'``
+            ring.
 
     Returns:
-        QIcon: A 12x12 dot in the palette of the current color scheme.
+        QIcon: A 16x16 indicator in the palette of the current color
+        scheme.
     """
     color_scheme = QApplication.instance().styleHints().colorScheme()
     if color_scheme == Qt.ColorScheme.Dark:
         icon_color = material_dark.get(color, material_dark['base'])
     else:
         icon_color = material_light.get(color, material_light['base'])
-    indicator = QPixmap(QSize(12,12))
+    indicator = QPixmap(QSize(16,16))
     indicator.fill(Qt.GlobalColor.transparent)
     painter = QPainter(indicator)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(icon_color)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawEllipse(indicator.rect())
+    match color:
+        case 'blue':
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(icon_color)
+            painter.drawPolygon(QPolygonF([
+                QPointF(2,4),
+                QPointF(14,4),
+                QPointF(8,13)
+            ]))
+        case 'green':
+            pen = QPen(icon_color, 2)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPolyline([
+                QPointF(2.5,8.5),
+                QPointF(6.5,12.5),
+                QPointF(13.5,3.5)
+            ])
+        case 'red':
+            pen = QPen(icon_color, 2)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawLine(QPointF(3,3),QPointF(13,13))
+            painter.drawLine(QPointF(13,3),QPointF(3,13))
+        case 'yellow':
+            painter.setBrush(icon_color)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRect(QRectF(3, 2, 4, 12))
+            painter.drawRect(QRectF(9, 2, 4, 12))
+        case _:
+            pen = QPen(icon_color, 2)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(pen)
+            painter.drawEllipse(indicator.rect().adjusted(1, 1, -1, -1))
     painter.end()
     return QIcon(indicator)
-    
