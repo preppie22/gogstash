@@ -1,10 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import copy_metadata
 import os
+import sys
 
 
 datas = [(os.path.join(SPECPATH, '..', '..', 'src', 'gogstash', 'icons'), 'gogstash/icons'), (os.path.join(SPECPATH, '..', 'licenses'), 'gogstash/licenses')]
 datas += copy_metadata('gogstash')
+
+# Exclude "libstdc++.so.6", "libgcc_s.so.1", "libgbm.so.1" to fix #1
+excluded_files_linux = {
+    "libstdc++.so.6", "libgcc_s.so.1", "libgbm.so.1"  
+}
 
 a = Analysis(
     ['launch_gogstash.py'],
@@ -20,6 +26,12 @@ a = Analysis(
     optimize=0,
 )
 pyz = PYZ(a.pure)
+
+if sys.platform.startswith('linux'):
+    for entry in a.binaries.copy():
+        filename = os.path.basename(entry[0])
+        if filename in excluded_files_linux:
+            a.binaries.remove(entry)
 
 exe = EXE(
     pyz,
