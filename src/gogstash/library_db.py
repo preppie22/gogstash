@@ -9,6 +9,7 @@ group.
 import sqlite3
 from gogstash import paths
 from gogstash.gog_api import fetch_library, fetch_downloadables
+from gogstash import settings
 
 from PySide6.QtCore import QThread, Signal
 
@@ -224,30 +225,29 @@ def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
             SELECT
                 p.product_id,
                 p.title,
-                p.slug,
-                COALESCE(dg.download_size, 0) as download_size
+                p.slug
             FROM product p
-            LEFT JOIN (
-                SELECT product_id, SUM(total_size) AS download_size
-                FROM download_group
-                GROUP BY product_id
-            ) dg ON dg.product_id = p.product_id
             {where_block}
         """, product_id)
-    products = [{
+    files = get_downloadables(product_id, filtered=True)
+    product_sizes = {}
+    for file in files:
+        product_sizes[file['product_id']] = product_sizes.get(file['product_id'], 0) + file['file_size']
+    return [{
         'product_id': p[0],
         'title': p[1],
         'slug': p[2],
-        'download_size': p[3],
+        'download_size': product_sizes.get(p[0], 0),
     } for p in query_result]
-    return products
 
-def get_downloadables(product_id: tuple[int] = ()) -> list[dict]:
+def get_downloadables(product_id: tuple[int] = (), filtered: bool = False) -> list[dict]:
     """Return cached downloadable files.
 
     Args:
         product_id (tuple[int]): Product IDs to filter by. Empty returns
             files for all products.
+        filtered (bool): Only return files that match user settings and
+            filters.
 
     Returns:
         list[dict]: Entries with ``product_id``, ``category``,
@@ -278,7 +278,7 @@ def get_downloadables(product_id: tuple[int] = ()) -> list[dict]:
                 df.group_id = dg.group_id
             {where_block}
         """, product_id)
-       
+
     downloadables = [{
         'product_id': p[0],
         'category': p[1],
@@ -289,7 +289,53 @@ def get_downloadables(product_id: tuple[int] = ()) -> list[dict]:
         'language': p[6],
         'downlink': p[7]
     } for p in query_result]
-    return downloadables
+
+    if not filtered:
+        return downloadables
+    
+    bonus_content = settings.read_setting('bonus_content')
+    platforms = _platform_helper(settings.read_setting('platform_filter'))
+    patches = settings.read_setting('patches')
+    languages = settings.read_setting('languages') or ['en']
+    filtered_files = []
+    language_filter = {}
+    for item in downloadables:
+        if (item['category'] == 'installers' and 
+            (item['os'] in platforms or not item['os']) and
+            item['language'] in languages
+        ):
+            language_filter.setdefault((item['product_id'], item['os']), set()).add(item['language'])
+    for item in downloadables:
+        if (
+            (item['os'] not in platforms and item['os']) or
+            (item['language'] not in language_filter.get((item['product_id'], item['os']), {'en'}) and item['language']) or
+            (item['category'] == 'patches' and not patches) or
+            (item['category'] == 'bonus_content' and not bonus_content) or
+            (item['category'] == 'language_packs')
+        ):
+            continue
+        filtered_files.append(item)
+    return filtered_files
+
+
+def _platform_helper(platforms: list[str]) -> list[str]:
+    """Convert platform filter names to GOG OS identifiers.
+
+    Args:
+        platforms (list[str]): Names from the ``platform_filter`` setting.
+
+    Returns:
+        list[str]: The matching ``'linux'``, ``'windows'`` and ``'mac'``
+        identifiers.
+    """
+    platform_filter = []
+    if 'Linux' in platforms:
+        platform_filter.append('linux')
+    if 'Windows' in platforms:
+        platform_filter.append('windows')
+    if 'MacOS' in platforms:
+        platform_filter.append('mac')
+    return platform_filter
 
 def get_cache_size() -> int:
     """Return the size of the cache database.

@@ -629,25 +629,6 @@ def _write_log_msg(message: str = "") -> None:
             wp.write(log_entry)
     except Exception as e:
         print(f"Logging error: {e}\n {log_entry}")
-    
-def _platform_helper(platforms: list[str]) -> list[str]:
-    """Convert platform filter names to GOG OS identifiers.
-
-    Args:
-        platforms (list[str]): Names from the ``platform_filter`` setting.
-
-    Returns:
-        list[str]: The matching ``'linux'``, ``'windows'`` and ``'mac'``
-        identifiers.
-    """
-    platform_filter = []
-    if 'Linux' in platforms:
-        platform_filter.append('linux')
-    if 'Windows' in platforms:
-        platform_filter.append('windows')
-    if 'MacOS' in platforms:
-        platform_filter.append('mac')
-    return platform_filter
 
 def estimate_download_size(product_id: int) -> int:
     """Estimate a game's download size under the current settings.
@@ -684,41 +665,15 @@ def generate_download_list(product_ids: tuple[int]) -> list[dict] | None:
     """
     if not product_ids:
         return
-    downloadables = library_db.get_downloadables(product_ids)
-    bonus_content = settings.read_setting('bonus_content')
-    platforms = _platform_helper(settings.read_setting('platform_filter'))
-    patches = settings.read_setting('patches')
-    languages = settings.read_setting('languages') or ['en']
-    files = []
-    language_filter = {}
-    for item in downloadables:
-        if item['category'] == 'installers':
-            if item['os'] in platforms or not item['os']:
-                if item['language'] in languages:
-                    language_filter.setdefault(item['os'], set()).add(item['language'])
-    for item in downloadables:
-        if not item['os'] in platforms and item['os']:
-            continue
-        if item['language'] not in language_filter.get(item['os'], {'en'}) and item['language']:
-            continue
-        file_info = {
-            'directory': "",
+    downloadables = library_db.get_downloadables(product_ids, filtered=True)
+    return [{
+            'directory': item['group_id'] if item['category'] == 'installers' else item['category'],
             'category': item['category'],
             'file': item['file_id'],
             'os': item['os'],
             'size': item['file_size'],
             'downlink': item['downlink'],
-        }
-        if item['category'] == 'installers':
-            file_info['directory'] = item['group_id']
-        elif item['category'] == 'patches' and patches:
-            file_info['directory'] = 'patches'
-        elif item['category'] == 'bonus_content' and bonus_content:
-            file_info['directory'] = 'bonus_content'
-        else:
-            continue
-        files.append(file_info)
-    return files
+    } for item in downloadables]
 
 if __name__ == "__main__":
     file_list = generate_download_list((1929434313,))

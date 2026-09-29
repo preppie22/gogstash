@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gogstash import library_db, paths
+from gogstash import library_db, paths, settings
 
 FAKE_PRODUCT = {
     "id": 111,
@@ -258,16 +258,41 @@ def test_get_product_listing_with_no_downloads():
 
 
 def test_get_product_listing_sums_download_size_across_groups():
-    # Product 111 has TWO download_group rows (installer + bonus_content).
-    # The subquery pre-sums total_size per product_id before the outer join
-    # ever sees it, so this stays a clean 2500 instead of a doubled total
-    # from the join fanning out across both group rows.
+    # Product 111 has TWO download groups (installer + bonus_content), with
+    # the installer split across two files. Every one of them has to make
+    # it into the total, not just whichever file got there first.
+    settings.update_setting("bonus_content", True)
     library_db.update_products([FAKE_PRODUCT])
-    library_db.update_downloadables([FAKE_DOWNLOADABLE])  # groups: 2000 + 500
+    library_db.update_downloadables([FAKE_DOWNLOADABLE])  # files: 1000 + 1000 + 500
 
     listing = library_db.get_product_listing()
 
     assert listing[0]["download_size"] == 2500
+
+
+def test_get_product_listing_size_follows_the_download_filters():
+    # The list used to quote the whole buffet while the queue only served
+    # what you ordered (#5). Bonus content is off by default, so the
+    # 500-byte manual stays off the bill.
+    library_db.update_products([FAKE_PRODUCT])
+    library_db.update_downloadables([FAKE_DOWNLOADABLE])
+
+    listing = library_db.get_product_listing()
+
+    assert listing[0]["download_size"] == 2000
+
+
+def test_get_product_listing_shows_zero_when_the_filters_leave_nothing():
+    # A Windows-only game on a Linux-only setup has nothing left to
+    # download. That's a zero in the size column, not a KeyError that
+    # takes the whole game list down with it.
+    settings.update_setting("platform_filter", ["Linux"])
+    library_db.update_products([FAKE_PRODUCT, FAKE_PRODUCT_2])
+    library_db.update_downloadables([FAKE_DOWNLOADABLE, FAKE_DOWNLOADABLE_2])
+
+    listing = library_db.get_product_listing()
+
+    assert [p["download_size"] for p in listing] == [0, 0]
 
 
 def test_get_product_listing_filters_by_product_id():
@@ -278,6 +303,16 @@ def test_get_product_listing_filters_by_product_id():
     assert len(listing) == 1
     assert listing[0]["product_id"] == 222
     assert listing[0]["title"] == "Second Fake Game"
+
+
+def test_platform_helper_maps_settings_labels_to_gog_os_values():
+    assert library_db._platform_helper(["Linux", "Windows", "MacOS"]) == [
+        "linux",
+        "windows",
+        "mac",
+    ]
+    assert library_db._platform_helper(["Linux"]) == ["linux"]
+    assert library_db._platform_helper([]) == []
 
 
 def test_get_downloadables_returns_empty_list_when_db_missing():
@@ -378,8 +413,10 @@ def test_library_fetch_thread_bootstraps_when_db_empty(mock_fetch_library, mock_
     mock_fetch_library.assert_called_once_with()
     mock_fetch_downloadables.assert_called_once_with([111], thread.update_progress)
     assert len(received) == 1
+    # 2000, not 2500: bonus content is off by default, so the manual
+    # doesn't count toward the size.
     assert received[0] == [
-        {"product_id": 111, "title": "Fake Game", "slug": "fake-game", "download_size": 2500}
+        {"product_id": 111, "title": "Fake Game", "slug": "fake-game", "download_size": 2000}
     ]
 
 

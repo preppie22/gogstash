@@ -267,14 +267,36 @@ def test_bonus_content_ignores_the_language_filter():
     assert "polyglot_bonus" in files
 
 
-def test_platform_helper_maps_settings_labels_to_gog_os_values():
-    assert download_queue._platform_helper(["Linux", "Windows", "MacOS"]) == [
-        "linux",
-        "windows",
-        "mac",
-    ]
-    assert download_queue._platform_helper(["Linux"]) == ["linux"]
-    assert download_queue._platform_helper([]) == []
+def test_language_fallback_is_decided_per_game_in_a_batch():
+    # Two games, one call, the way the game list asks. If the chosen
+    # languages were pooled across the batch, the polyglot's German Linux
+    # build would convince everyone Linux speaks German, and the
+    # monoglot's only Linux installer would quietly vanish.
+    monoglot = {
+        "id": 444,
+        "downloads": {
+            "installers": [
+                {
+                    "id": "installer_linux_en_mono",
+                    "name": "Monoglot Game",
+                    "os": "linux",
+                    "language": "en",
+                    "total_size": 1000,
+                    "files": [
+                        {"id": "mono_linux_en", "size": 1000, "downlink": "https://example.com/mono_linux_en"},
+                    ],
+                }
+            ],
+        },
+    }
+    library_db.update_downloadables([FAKE_MULTILINGUAL, monoglot])
+    settings.update_setting("languages", ["de"])
+
+    files = {f["file"] for f in download_queue.generate_download_list((333, 444))}
+
+    assert "linux_de" in files
+    assert "linux_en" not in files
+    assert "mono_linux_en" in files
 
 
 def make_streamed_response(chunks, status_code=200, headers=None):
