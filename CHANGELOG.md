@@ -4,7 +4,7 @@ All notable changes to GogStash will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Version numbers are CalVer-based (`YYYY.M.D` plus an `-alpha`/`-beta`/`-rc` stage
-suffix while pre-1.0), not SemVer.
+suffix until the first stable release), not SemVer.
 
 ## [Unreleased]
 
