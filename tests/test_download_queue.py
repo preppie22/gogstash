@@ -150,6 +150,123 @@ def test_language_packs_are_never_included():
     assert by_file(result, "lang1") is None
 
 
+# Shaped like Iratus: Lord of the Dead, where Linux speaks German but
+# Windows only ever learned English.
+FAKE_MULTILINGUAL = {
+    "id": 333,
+    "downloads": {
+        "installers": [
+            {
+                "id": f"installer_{os}_{lang}",
+                "name": "Polyglot Game",
+                "os": os,
+                "language": lang,
+                "total_size": 1000,
+                "files": [
+                    {"id": f"{os}_{lang}", "size": 1000, "downlink": f"https://example.com/{os}_{lang}"},
+                ],
+            }
+            for os, lang in [("linux", "en"), ("linux", "de"), ("windows", "en")]
+        ],
+        "patches": [
+            {
+                "id": f"patch_{os}_{lang}",
+                "name": "Patch",
+                "os": os,
+                "language": lang,
+                "total_size": 100,
+                "files": [
+                    {"id": f"patch_{os}_{lang}", "size": 100, "downlink": f"https://example.com/patch_{os}_{lang}"},
+                ],
+            }
+            for os, lang in [("linux", "en"), ("linux", "de"), ("windows", "en")]
+        ],
+        "bonus_content": [
+            {
+                "id": "polyglot_bonus",
+                "name": "soundtrack",
+                "type": "audio",
+                "total_size": 50,
+                # No "language" key, same as GOG's real bonus content.
+                "files": [
+                    {"id": "polyglot_bonus", "size": 50, "downlink": "https://example.com/polyglot_bonus"},
+                ],
+            }
+        ],
+    },
+}
+
+
+def polyglot_files(languages):
+    library_db.update_downloadables([FAKE_MULTILINGUAL])
+    settings.update_setting("languages", languages)
+    settings.update_setting("bonus_content", True)
+    return {f["file"] for f in download_queue.generate_download_list((333,))}
+
+
+def test_default_languages_download_english_only():
+    # DEFAULT_SETTINGS has languages: ['en']
+    library_db.update_downloadables([FAKE_MULTILINGUAL])
+
+    files = {f["file"] for f in download_queue.generate_download_list((333,))}
+
+    assert {"linux_en", "windows_en", "patch_linux_en", "patch_windows_en"} <= files
+    assert "linux_de" not in files
+    assert "patch_linux_de" not in files
+
+
+def test_chosen_language_replaces_english_when_available():
+    # English is the fallback, not a chaperone. Letting it tag along with
+    # every chosen language is how a 12 GB game grows toward 118 GB (#10).
+    files = polyglot_files(["de"])
+
+    assert "linux_de" in files
+    assert "linux_en" not in files
+
+
+def test_os_without_the_chosen_language_falls_back_to_english():
+    # German on Linux doesn't mean Windows sprechen Deutsch. If the fallback
+    # is decided per game instead of per OS, Windows downloads nothing.
+    files = polyglot_files(["de"])
+
+    assert "windows_en" in files
+
+
+def test_game_without_any_chosen_language_falls_back_to_english():
+    files = polyglot_files(["pl"])
+
+    assert {"linux_en", "windows_en"} <= files
+    assert "linux_de" not in files
+
+
+def test_multiple_chosen_languages_are_all_downloaded():
+    files = polyglot_files(["de", "en"])
+
+    assert {"linux_de", "linux_en", "windows_en"} <= files
+
+
+def test_empty_language_setting_falls_back_to_english():
+    files = polyglot_files([])
+
+    assert {"linux_en", "windows_en"} <= files
+    assert "linux_de" not in files
+
+
+def test_patches_follow_the_installer_language_of_their_os():
+    files = polyglot_files(["de"])
+
+    assert "patch_linux_de" in files
+    assert "patch_linux_en" not in files
+    assert "patch_windows_en" in files  # rides along with the Windows fallback
+
+
+def test_bonus_content_ignores_the_language_filter():
+    # Bonus content has no language. A soundtrack is a soundtrack in any tongue.
+    files = polyglot_files(["de"])
+
+    assert "polyglot_bonus" in files
+
+
 def test_platform_helper_maps_settings_labels_to_gog_os_values():
     assert download_queue._platform_helper(["Linux", "Windows", "MacOS"]) == [
         "linux",

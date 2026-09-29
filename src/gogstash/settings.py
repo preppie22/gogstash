@@ -18,6 +18,7 @@ DEFAULT_SETTINGS = {
     'installers': True,
     'bonus_content': False,
     'patches': True,
+    'languages': ['en'],
     'theme': 'System'
 }
 

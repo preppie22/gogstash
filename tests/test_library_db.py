@@ -296,7 +296,9 @@ def test_get_downloadables_returns_files_with_category():
     assert by_file_id["file1"]["category"] == "installers"
     assert by_file_id["file1"]["group_id"] == "installer_windows_en"
     assert by_file_id["file1"]["downlink"] == "https://example.com/file1"
+    assert by_file_id["file1"]["language"] == "en"
     assert by_file_id["bonus1"]["category"] == "bonus_content"
+    assert by_file_id["bonus1"]["language"] is None
 
 
 def test_get_downloadables_filters_by_product_id():

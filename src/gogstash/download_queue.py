@@ -669,6 +669,11 @@ def generate_download_list(product_ids: tuple[int]) -> list[dict] | None:
     included when enabled in settings. Files for platforms outside the
     platform filter are skipped. Files with no OS are kept.
 
+    Installers and patches are also filtered by the ``languages``
+    setting, separately for each OS. If a game has no installer in any
+    of the chosen languages for an OS, that OS falls back to English.
+    Files with no language, such as bonus content, are kept.
+
     Args:
         product_ids (tuple[int]): GOG product IDs.
 
@@ -683,9 +688,18 @@ def generate_download_list(product_ids: tuple[int]) -> list[dict] | None:
     bonus_content = settings.read_setting('bonus_content')
     platforms = _platform_helper(settings.read_setting('platform_filter'))
     patches = settings.read_setting('patches')
+    languages = settings.read_setting('languages') or ['en']
     files = []
+    language_filter = {}
+    for item in downloadables:
+        if item['category'] == 'installers':
+            if item['os'] in platforms or not item['os']:
+                if item['language'] in languages:
+                    language_filter.setdefault(item['os'], set()).add(item['language'])
     for item in downloadables:
         if not item['os'] in platforms and item['os']:
+            continue
+        if item['language'] not in language_filter.get(item['os'], {'en'}) and item['language']:
             continue
         file_info = {
             'directory': "",
