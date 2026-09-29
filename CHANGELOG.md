@@ -8,7 +8,12 @@ suffix until the first stable release), not SemVer.
 
 ## [Unreleased]
 
+### Added
+- Pick which languages to download in Settings. Games that don't come in any of your languages fall back to English
+
 ### Fixed
+- Installers and patches are no longer downloaded in every language a game ships in, only the ones you picked (#10)
+- Game sizes in the library now match what will actually be downloaded, following your platform, language, patch and bonus content settings (#5)
 - Linux: logging in no longer crashes on newer distros such as openSUSE Tumbleweed and Kubuntu 25.10 (#1)
 - The About Qt dialog no longer opens behind the About box, where it couldn't be dismissed (#9)
 

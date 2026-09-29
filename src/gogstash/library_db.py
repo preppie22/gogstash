@@ -328,6 +328,8 @@ def _platform_helper(platforms: list[str]) -> list[str]:
         list[str]: The matching ``'linux'``, ``'windows'`` and ``'mac'``
         identifiers.
     """
+    if platforms is None:
+        return _platform_helper(settings.DEFAULT_SETTINGS['platform_filter'])
     platform_filter = []
     if 'Linux' in platforms:
         platform_filter.append('linux')

@@ -21,7 +21,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QSpacerItem,
     QSizePolicy,
-    QStyle
+    QStyle,
+    QListWidget,
+    QListWidgetItem,
 )
 from PySide6.QtCore import (
     Qt,
@@ -107,6 +109,19 @@ class SettingsDialog(QDialog):
             self.download_categories_layout.addWidget(checkbox[1])
         self.window_layout.addRow("Download Categories", self.download_categories_layout)
 
+        # Download Languages
+        self.language_picker = QListWidget()
+        for code, description in settings.GOG_LANGUAGES.items():
+            entry = QListWidgetItem(description, self.language_picker)
+            entry.setCheckState(Qt.CheckState.Unchecked)
+            entry.setData(Qt.ItemDataRole.UserRole, code)
+        self.language_picker.setMaximumHeight(
+            self.language_picker.sizeHintForRow(0) * 6 + self.language_picker.frameWidth() * 2
+        )
+        self.language_picker.setAlternatingRowColors(True)
+        self.language_picker.itemChanged.connect(self.on_language_changed)
+        self.window_layout.addRow("Download Languages", self.language_picker)
+
         # Spacer
         self.window_layout.addItem(QSpacerItem(0, 16, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
 
@@ -160,7 +175,7 @@ class SettingsDialog(QDialog):
             form_settings = settings.read_settings()
         self.download_edit_path.setText(form_settings.get('download_path'))
         self.download_concurrency_edit.setValue(form_settings.get('download_concurrency'))
-        platform_filters = form_settings.get('platform_filter')
+        platform_filters = form_settings.get('platform_filter') or settings.DEFAULT_SETTINGS['platform_filter']
         for checkbox in self.platform_filter_check.items():
             if checkbox[0] in platform_filters:
                 checkbox[1].setChecked(True)
@@ -173,6 +188,13 @@ class SettingsDialog(QDialog):
                 checkbox[1].setChecked(True)
             else:
                 checkbox[1].setChecked(False)
+        languages = form_settings.get('languages') or settings.DEFAULT_SETTINGS['languages']
+        for row_idx in range(self.language_picker.count()):
+            entry = self.language_picker.item(row_idx)
+            if entry.data(Qt.ItemDataRole.UserRole) in languages:
+                entry.setCheckState(Qt.CheckState.Checked)
+            else:
+                entry.setCheckState(Qt.CheckState.Unchecked)
 
     def settings_buttons_handler(self, button):
         """Handle clicks on the dialog buttons.
@@ -197,6 +219,19 @@ class SettingsDialog(QDialog):
                 'patches': self.download_categories_check['patches'].isChecked(),
                 'theme': self.theme_select.currentText()
             }
+            languages = []
+            for row_idx in range(self.language_picker.count()):
+                entry = self.language_picker.item(row_idx)
+                if entry.checkState() == Qt.CheckState.Checked:
+                    languages.append(entry.data(Qt.ItemDataRole.UserRole))
+            form_settings['languages'] = languages or settings.DEFAULT_SETTINGS['languages']
+            if not form_settings['platform_filter']:
+                QMessageBox.warning(
+                    self,
+                    "Invalid Settings",
+                    "Pick at least one platform"
+                )
+                return
             settings.update_settings(form_settings)
             self.set_color_theme()
             self.accept()
@@ -252,6 +287,24 @@ class SettingsDialog(QDialog):
             self.download_concurrency_edit.setPalette(color_palette)
             self.download_concurrency_edit.setStyleSheet("")
             self.download_concurrency_edit.setToolTip("")
+
+    def on_language_changed(self, item: QListWidgetItem):
+        checked_count = 0
+        for row_idx in range(self.language_picker.count()):
+            if self.language_picker.item(row_idx).checkState() == Qt.CheckState.Checked:
+                checked_count += 1
+        color_palette = QPalette(self.language_picker.parentWidget().palette())
+        if checked_count == 0:
+            color_palette.setColor(QPalette.ColorRole.Base, QColor(255, 0, 0, 60))
+            color_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(255, 0, 0, 60))
+            self.language_picker.setPalette(color_palette)
+            self.language_picker.setToolTip("At least one language must be picked")
+            self.settings_form_buttons.button(QDialogButtonBox.StandardButton.Save).setDisabled(True)
+        else:
+            self.language_picker.setPalette(color_palette)
+            self.language_picker.setStyleSheet("")
+            self.language_picker.setToolTip("")
+            self.settings_form_buttons.button(QDialogButtonBox.StandardButton.Save).setDisabled(False)
 
 
         

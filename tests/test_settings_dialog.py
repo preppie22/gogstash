@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialogButtonBox, QMessageBox
 
 from gogstash import library_db, paths, settings
@@ -14,6 +15,7 @@ SAVED_SETTINGS = {
     "bonus_content": True,
     "patches": False,
     "theme": "Dark",
+    "languages": ["de", "fr"],
 }
 
 
@@ -29,6 +31,23 @@ def click(dialog, standard_button):
             if dialog.settings_form_buttons.buttonRole(b) == QDialogButtonBox.ButtonRole.DestructiveRole
         )
     button.click()
+
+
+def language_items(dialog):
+    picker = dialog.language_picker
+    return {picker.item(i).data(Qt.ItemDataRole.UserRole): picker.item(i) for i in range(picker.count())}
+
+
+def ticked_languages(dialog):
+    return {code for code, item in language_items(dialog).items() if item.checkState() == Qt.CheckState.Checked}
+
+
+def set_language(dialog, code, checked):
+    language_items(dialog)[code].setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+
+
+def save_button(dialog):
+    return dialog.settings_form_buttons.button(QDialogButtonBox.StandardButton.Save)
 
 
 def test_dialog_loads_saved_settings_on_construction():
@@ -182,3 +201,106 @@ def test_clear_cache_button_keeps_db_file_when_cancelled(mock_exec):
     dialog.clear_cache_button.click()
 
     assert db_path.exists()
+
+
+# --- Download languages ---
+
+def test_language_picker_lists_every_gog_language_with_english_on_top():
+    dialog = SettingsDialog()
+
+    assert list(language_items(dialog)) == list(settings.GOG_LANGUAGES)
+    assert dialog.language_picker.item(0).text() == "English"
+
+
+def test_dialog_ticks_the_saved_languages():
+    settings.update_settings(SAVED_SETTINGS)
+
+    dialog = SettingsDialog()
+
+    assert ticked_languages(dialog) == {"de", "fr"}
+
+
+def test_save_persists_the_ticked_language_codes():
+    # The picker shows "Deutsch" but settings.json wants "de". Saving the
+    # label instead of the code would filter for a language GOG has never
+    # heard of and quietly fall back to English every time.
+    dialog = SettingsDialog()
+    set_language(dialog, "en", False)
+    set_language(dialog, "de", True)
+    set_language(dialog, "jp", True)
+
+    click(dialog, QDialogButtonBox.StandardButton.Save)
+
+    assert sorted(settings._read_settings()["languages"]) == ["de", "jp"]
+
+
+def test_restore_defaults_unticks_languages_that_are_not_default():
+    settings.update_settings(SAVED_SETTINGS)
+    dialog = SettingsDialog()
+
+    click(dialog, QDialogButtonBox.StandardButton.RestoreDefaults)
+
+    assert ticked_languages(dialog) == set(settings.DEFAULT_SETTINGS["languages"])
+
+
+def test_discard_restores_the_saved_languages():
+    settings.update_settings(SAVED_SETTINGS)
+    dialog = SettingsDialog()
+    set_language(dialog, "de", False)
+    set_language(dialog, "pl", True)
+
+    click(dialog, QDialogButtonBox.StandardButton.Discard)
+
+    assert ticked_languages(dialog) == {"de", "fr"}
+
+
+def test_unticking_every_language_disables_save_until_one_comes_back():
+    # Zero languages would be a very efficient downloader. It would also
+    # never download anything, so Save sits this one out.
+    dialog = SettingsDialog()
+    assert ticked_languages(dialog) == {"en"}
+
+    set_language(dialog, "en", False)
+
+    assert save_button(dialog).isEnabled() is False
+    assert dialog.language_picker.toolTip() != ""
+
+    set_language(dialog, "de", True)
+
+    assert save_button(dialog).isEnabled() is True
+    assert dialog.language_picker.toolTip() == ""
+
+
+def test_a_mangled_language_setting_opens_with_the_default_ticked():
+    # Hand-edited settings.json with languages set to [] or null. The
+    # dialog should show what the downloader will actually use, not a
+    # blank list, and definitely not a TypeError.
+    for mangled in ([], None):
+        settings.update_setting("languages", mangled)
+
+        dialog = SettingsDialog()
+
+        assert ticked_languages(dialog) == set(settings.DEFAULT_SETTINGS["languages"])
+
+
+def test_a_mangled_platform_setting_opens_with_the_defaults_ticked():
+    settings.update_setting("platform_filter", None)
+
+    dialog = SettingsDialog()
+
+    ticked = [name for name, box in dialog.platform_filter_check.items() if box.isChecked()]
+    assert ticked == settings.DEFAULT_SETTINGS["platform_filter"]
+
+
+@patch("gogstash.settings_dialog.QMessageBox.warning")
+def test_save_refuses_when_no_platform_is_ticked(mock_warning):
+    # Every game at 0 bytes is technically a very fast library. Not saved.
+    settings.update_settings(SAVED_SETTINGS)  # platform_filter: ["Linux"]
+    dialog = SettingsDialog()
+    dialog.platform_filter_check["Linux"].setChecked(False)
+
+    click(dialog, QDialogButtonBox.StandardButton.Save)
+
+    mock_warning.assert_called_once()
+    assert settings._read_settings()["platform_filter"] == ["Linux"]
+    assert dialog.result() != dialog.DialogCode.Accepted

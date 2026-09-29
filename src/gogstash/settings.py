@@ -10,6 +10,39 @@ from typing import Any
 
 from gogstash import paths
 
+GOG_LANGUAGES = {
+    'en': 'English',                   # English
+    'ar': 'العربية',                   # Arabic
+    'br': 'Português do Brasil',       # Brazilian Portuguese
+    'cn': '中文(简体)',                 # Chinese (Simplified)
+    'cz': 'Čeština',                   # Czech
+    'da': 'Dansk',                     # Danish
+    'de': 'Deutsch',                   # German
+    'es': 'Español',                   # Spanish (Spain)
+    'es_mx': 'Español (Latinoamérica)',  # Spanish (Latin America)
+    'fi': 'Suomi',                     # Finnish
+    'fr': 'Français',                  # French
+    'gk': 'Ελληνικά',                  # Greek
+    'hr': 'Hrvatski',                  # Croatian
+    'hu': 'Magyar',                    # Hungarian
+    'id': 'Bahasa Indonesia',          # Indonesian
+    'it': 'Italiano',                  # Italian
+    'jp': '日本語',                     # Japanese
+    'ko': '한국어',                     # Korean
+    'nl': 'Nederlands',                # Dutch
+    'no': 'Norsk',                     # Norwegian
+    'pl': 'Polski',                    # Polish
+    'pt': 'Português',                 # Portuguese (Portugal)
+    'ro': 'Română',                    # Romanian
+    'ru': 'Русский',                   # Russian
+    'sv': 'Svenska',                   # Swedish
+    'th': 'ไทย',                       # Thai
+    'tr': 'Türkçe',                    # Turkish
+    'uk': 'Українська',                # Ukrainian
+    'vi': 'Tiếng Việt',                # Vietnamese
+    'zh': '中文(繁體)',                 # Chinese (Traditional)
+}
+
 DEFAULT_SETTINGS = {
     'download_path': str(paths.default_download_path()),
     'download_concurrency': 2,

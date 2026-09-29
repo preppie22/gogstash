@@ -312,6 +312,18 @@ def test_platform_helper_maps_settings_labels_to_gog_os_values():
         "mac",
     ]
     assert library_db._platform_helper(["Linux"]) == ["linux"]
+
+
+def test_platform_helper_falls_back_to_the_defaults_for_a_mangled_config():
+    # Someone hand-edited settings.json and left platform_filter as null.
+    # Better to download everything than to crash the game list before it
+    # even loads.
+    assert library_db._platform_helper(None) == ["linux", "windows", "mac"]
+
+
+def test_platform_helper_takes_an_empty_filter_at_its_word():
+    # Unticking every platform in Settings is a choice, not a typo. No
+    # platforms means no platforms, not "surprise, all three".
     assert library_db._platform_helper([]) == []
 
 
