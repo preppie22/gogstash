@@ -16,6 +16,7 @@ suffix until the first stable release), not SemVer.
 - The status indicators in the download queue now have a different shape for each state (ring, triangle, check mark, X, pause bars) and colors that are easier to tell apart, including for color blindness (#22)
 - The download queue shows how much is left to download for each game, leaving out files you already have
 - Games you've already fully downloaded finish right away, instead of checking every file with GOG again
+- Dialogs in the download queue now have a title and an icon, so warnings like clearing the whole queue stand out from routine questions
 
 ### Fixed
 - Installers and patches are no longer downloaded in every language a game ships in, only the ones you picked (#10)

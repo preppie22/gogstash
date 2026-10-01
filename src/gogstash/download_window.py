@@ -291,10 +291,12 @@ class DownloadWindow(QDockWidget):
                     self._on_game_stopped(row_idx)
             if completed_downloads:
                 confirmation = QMessageBox(self)
+                confirmation.setWindowTitle("Start Downloads")
                 confirmation.setText("Remove completed downloads from the queue?")
                 confirmation.setInformativeText("This will remove completed downloads from queue before starting.")
                 confirmation.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
                 confirmation.setDefaultButton(QMessageBox.StandardButton.Yes)
+                confirmation.setIcon(QMessageBox.Icon.Information)
                 ans = confirmation.exec()
                 if ans == QMessageBox.StandardButton.Yes:
                     completed_downloads.sort(reverse=True)
@@ -463,10 +465,12 @@ class DownloadWindow(QDockWidget):
         self.clear_queue_button.setDisabled(True)
         if self.current_state == DownloadState.RUNNING or self.current_state == DownloadState.PAUSED:
             confirmation = QMessageBox(self)
-            confirmation.setText("Are you sure?")
+            confirmation.setWindowTitle("Clear Queue")
+            confirmation.setText("Are you sure you want to clear the queue?")
             confirmation.setInformativeText("This action will stop all downloads and clear the download queue.")
             confirmation.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             confirmation.setDefaultButton(QMessageBox.StandardButton.No)
+            confirmation.setIcon(QMessageBox.Icon.Warning)
             ans = confirmation.exec()
             if ans == QMessageBox.StandardButton.No:
                 self.clear_queue_button.setDisabled(False)
@@ -529,7 +533,8 @@ class DownloadWindow(QDockWidget):
             return
         self._disk_space_error = True
         disk_space_error = QMessageBox(self)
-        disk_space_error.setText("Low Disk Space. Pause?")
+        disk_space_error.setWindowTitle("Low Disk Space")
+        disk_space_error.setText("The queue doesn't fit on disk.")
         disk_space_error.setInformativeText(f"The download folder has {humanize.naturalsize(free)} free but the "
                                             f"queued downloads require {humanize.naturalsize(required)}. "
                                             "Ignore this error and download anyway, or pause while you free "
@@ -538,6 +543,7 @@ class DownloadWindow(QDockWidget):
         disk_space_error.button(QMessageBox.StandardButton.Yes).setText("&Download anyway")
         disk_space_error.button(QMessageBox.StandardButton.No).setText("&Pause")
         disk_space_error.setDefaultButton(QMessageBox.StandardButton.No)
+        disk_space_error.setIcon(QMessageBox.Icon.Warning)
         ans = disk_space_error.exec()
         if ans == QMessageBox.StandardButton.No:
             self.pause_downloads()
