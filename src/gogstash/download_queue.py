@@ -190,7 +190,7 @@ class DownloadScheduler(QObject):
         """Ask all active workers to pause.
 
         No new jobs start while paused. Emits ``paused`` once the last active
-        job has paused.
+        job has paused, or right away if no jobs are active.
         """
         if self._paused_flag:
             return
@@ -198,6 +198,7 @@ class DownloadScheduler(QObject):
         self._paused_flag = True
         for job in self.active_queue:
             job['worker'].pause_worker()
+        self.schedule()
 
     def resume_all(self):
         """Move paused jobs back to the idle queue and resume scheduling."""
@@ -214,11 +215,14 @@ class DownloadScheduler(QObject):
 
         Counts every waiting job that is not stopped, plus the bytes that
         active jobs have not downloaded yet. 2% of the free space is kept
-        in reserve. The download directory is created if it does not exist.
+        in reserve. Nothing left to download always fits, without looking
+        at the disk. Otherwise the download directory is created if it does
+        not exist.
 
         Returns:
             FreeCheckReturn: Whether the downloads fit, the bytes required
-            and the bytes free.
+            and the bytes free. The bytes free are 0 when there is nothing
+            to download.
         """
         dl_size = 0
         for job in self.idle_queue:
@@ -229,6 +233,8 @@ class DownloadScheduler(QObject):
         for job in self.active_queue:
             remaining_size = job['worker'].total_size - job['worker'].fetched_size
             dl_size += remaining_size
+        if dl_size == 0:
+            return FreeCheckReturn(True, 0, 0)
         dl_path = Path(settings.read_setting('download_path'))
         try:
             dl_path.mkdir(parents=True, exist_ok=True)

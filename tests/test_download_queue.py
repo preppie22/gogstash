@@ -2052,6 +2052,22 @@ def test_pause_on_a_full_disk_still_announces_paused():
 
 
 @with_fake_workers
+def test_pause_all_with_nothing_running_announces_paused_right_away():
+    # Regression: "paused" only ever came from the last active worker
+    # checking in. No active workers, no check-ins, no "paused", and the
+    # window kept waiting by the phone.
+    scheduler = make_scheduler(concurrency=1, count=1)
+    paused_events = []
+    scheduler.paused.connect(lambda: paused_events.append(True))
+
+    scheduler.pause_all()
+
+    assert paused_events == [True]
+    assert scheduler.active_queue == []
+    assert [j["row_idx"] for j in scheduler.idle_queue] == [0]  # still waiting its turn
+
+
+@with_fake_workers
 def test_turning_the_free_space_check_off_lets_the_queue_run_anyway():
     # The "download anyway" escape hatch for when the user knows better.
     scheduler = make_scheduler(concurrency=1, count=1)
@@ -2076,6 +2092,40 @@ def test_free_space_check_fails_safe_when_the_download_folder_cant_be_made(tmp_p
 
     assert events == [(1, 0)]
     assert scheduler.active_queue == []
+
+
+def _up_to_date_scheduler(count):
+    with patch("gogstash.download_queue.generate_download_list", lambda ids: []):
+        return make_scheduler(concurrency=1, count=count)
+
+
+@with_fake_workers
+def test_a_queue_with_nothing_to_download_fits_on_even_the_fullest_disk():
+    # Regression: 0 bytes needed, 0 bytes free, and 0 < 0 * 0.98 said no,
+    # so the user got warned that nothing wouldn't fit.
+    scheduler = _up_to_date_scheduler(count=2)
+    events = _low_space_events(scheduler)
+    succeeded = []
+    scheduler.game_succeeded.connect(succeeded.append)
+
+    with _disk_with(free=0):
+        scheduler.schedule()
+
+    assert events == []
+    assert succeeded == [0, 1]
+
+
+@with_fake_workers
+def test_a_queue_with_nothing_to_download_doesnt_care_about_the_download_folder(tmp_path):
+    settings.update_setting("download_path", str(tmp_path / "locked"))  # settings file exists before mkdir is sabotaged
+    scheduler = _up_to_date_scheduler(count=1)
+    events = _low_space_events(scheduler)
+
+    with patch("pathlib.Path.mkdir", side_effect=PermissionError("nope")) as mock_mkdir:
+        scheduler.schedule()
+
+    assert events == []
+    mock_mkdir.assert_not_called()  # nothing to save, nowhere needed
 
 
 @with_fake_workers

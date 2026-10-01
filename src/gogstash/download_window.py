@@ -310,6 +310,7 @@ class DownloadWindow(QDockWidget):
         concurrency = read_setting('download_concurrency')
         self.scheduler.set_concurrency(concurrency)
         if self.current_state == DownloadState.PAUSED:
+            self._disk_space_error = False
             self.scheduler.resume_all()
         else:
             self.scheduler.schedule()
@@ -514,10 +515,11 @@ class DownloadWindow(QDockWidget):
         """Ask whether to download anyway when the queue does not fit on the disk.
 
         Connected as a queued connection, so it runs after the current
-        start or schedule call has finished. Only the first warning of a
-        run shows a dialog. Yes turns off the free space check for the
-        rest of the run and starts the waiting downloads. No stops all
-        downloads, including the ones already running.
+        start or schedule call has finished. Only the first warning after
+        a start or a resume shows a dialog. Download anyway turns off the
+        free space check for the rest of the run and starts the waiting
+        downloads. Pause pauses all downloads and keeps their partial
+        files, so they can be resumed once there is more space.
 
         Args:
             required (float): Bytes still to be downloaded.
@@ -527,15 +529,18 @@ class DownloadWindow(QDockWidget):
             return
         self._disk_space_error = True
         disk_space_error = QMessageBox(self)
-        disk_space_error.setText("Low Disk Space. Continue?")
+        disk_space_error.setText("Low Disk Space. Pause?")
         disk_space_error.setInformativeText(f"The download folder has {humanize.naturalsize(free)} free but the "
                                             f"queued downloads require {humanize.naturalsize(required)}. "
-                                            "Clicking Yes will ignore this error and continue anyway.")
+                                            "Ignore this error and download anyway, or pause while you free "
+                                            "up some space?")
         disk_space_error.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        disk_space_error.button(QMessageBox.StandardButton.Yes).setText("&Download anyway")
+        disk_space_error.button(QMessageBox.StandardButton.No).setText("&Pause")
         disk_space_error.setDefaultButton(QMessageBox.StandardButton.No)
         ans = disk_space_error.exec()
         if ans == QMessageBox.StandardButton.No:
-            self.stop_downloads()
+            self.pause_downloads()
         else:
             self.scheduler.free_space_check = False
             self.scheduler.schedule()
