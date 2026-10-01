@@ -14,6 +14,7 @@ from gogstash import paths
 import humanize
 from pathlib import Path
 import shutil
+import errno
 
 import urllib
 import requests
@@ -185,11 +186,7 @@ class DownloadScheduler(QObject):
             self.game_stopped.emit(job['row_idx'])
             part_path : Path = job['resume_link'].get('partpath', None)
             if part_path: 
-                try:
-                    part_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                _cleanup_dirs(part_path.parent.parent)
+                _discard_partial_downloads(part_path.parent.parent)
         self.schedule()
             
     def pause_all(self):
@@ -301,6 +298,7 @@ class DownloadScheduler(QObject):
         job['worker'].stopped.connect(lambda t=job: self._handle_stopped(t))
         job['worker'].paused.connect(lambda resume_link, t=job: self._handle_paused(t, resume_link))
         job['worker'].fetched.connect(self._handle_fetched)
+        job['worker'].disk_full.connect(lambda resume_link, t=job: self._handle_disk_full(t, resume_link))
         self.active_queue.append(job)
         self.tokens = self.tokens - 1
         job['worker'].start()
@@ -384,6 +382,38 @@ class DownloadScheduler(QObject):
         self._reap(job)
         self.schedule()
 
+    def _handle_disk_full(self, job: dict, resume_link: dict) -> None:
+        """Pause all downloads after a worker ran out of disk space.
+
+        The job goes to the paused queue with its resume information, so
+        it continues from its ``.part`` file once there is space again.
+        Every other active job is asked to pause and no new jobs start. If
+        a stop was already in progress, the job is reported as stopped and
+        its partial downloads are discarded instead.
+
+        Args:
+            job (dict): The job whose worker ran out of space.
+            resume_link (dict): Resume information from the worker, with
+                ``partpath`` and ``downlink`` of the partial file.
+        """
+        if self._stopped_flag:
+            _write_log_msg("Download folder ran out of space while stopping")
+            if job in self.active_queue:
+                self.game_stopped.emit(job['row_idx'])
+                part_path : Path = resume_link.get('partpath', None)
+                if part_path: 
+                    _discard_partial_downloads(part_path.parent.parent)
+        else:
+            _write_log_msg("Download folder full: downloads paused")
+            self.pause_all()
+            self.game_paused.emit(job['row_idx'])
+            if job in self.active_queue:
+                paused_job = job.copy()
+                paused_job['resume_link'] = resume_link
+                self.paused_queue.append(paused_job)
+        self._reap(job)
+        self.schedule()
+
     def _handle_failure(self, job: dict, msg: str) -> None:
         """Report a failed game and schedule the next job.
 
@@ -412,7 +442,8 @@ class DownloadWorkerThread(QThread):
     verified against its md5 checksum (or its size, for bonus content)
     and then renamed into place. Files already recorded in the manifest
     are skipped. A paused file is resumed from its ``.part`` file with an
-    HTTP range request.
+    HTTP range request. Running out of disk space mid-file keeps the
+    ``.part`` file so the download can be resumed the same way.
 
     Attributes:
         succeeded (Signal): All files were downloaded or skipped.
@@ -421,6 +452,8 @@ class DownloadWorkerThread(QThread):
         stopped (Signal): The worker stopped after ``stop_worker``.
         paused (Signal(dict)): The worker paused, with resume information.
         fetched (Signal(dict)): A file was downloaded, skipped or failed.
+        disk_full (Signal(dict)): The disk filled up while writing a file.
+            Carries the same resume information as ``paused``.
         resume_link (str): Downlink of the file to resume, if any.
         product_id (int): GOG product ID of the game.
         file_queue (list[dict]): Files to download, from
@@ -436,6 +469,7 @@ class DownloadWorkerThread(QThread):
     stopped = Signal()
     paused = Signal(dict)
     fetched = Signal(dict)
+    disk_full = Signal(dict)
 
     _stop_flag = False
     _pause_flag = False
@@ -476,6 +510,8 @@ class DownloadWorkerThread(QThread):
         single file is reported through ``fetched`` and the worker moves on
         to the next file. Errors that affect the whole game, such as a login
         failure or an unwritable directory, end the run with ``failed``.
+        Running out of disk space ends the run with ``disk_full`` instead,
+        keeping the ``.part`` file.
         """
         try:
             if not self.file_queue:
@@ -538,16 +574,19 @@ class DownloadWorkerThread(QThread):
                 file_hash = hashlib.md5()
                 fetched_bytes = 0
                 if self.resume_link == file['downlink']:
-                    with open(part_path, 'rb') as fp:
-                        while True:
-                            chunk = fp.read(1024*1024)
-                            if not chunk:
-                                break
-                            file_hash.update(chunk)
-                        fetched_bytes = part_path.stat().st_size
-                        header_params['Range'] = f"bytes={fetched_bytes}-"
-                        self.__fetched_size += fetched_bytes
-                        self.resume_link = ""
+                    try:
+                        with open(part_path, 'rb') as fp:
+                            while True:
+                                chunk = fp.read(1024*1024)
+                                if not chunk:
+                                    break
+                                file_hash.update(chunk)
+                            fetched_bytes = part_path.stat().st_size
+                            header_params['Range'] = f"bytes={fetched_bytes}-"
+                            self.__fetched_size += fetched_bytes
+                    except FileNotFoundError:
+                        pass
+                    self.resume_link = ""
                 # download_response = requests.get(cdn_link, headers=header_params, stream=True)
                 with requests.get(cdn_link, headers=header_params, stream=True) as download_response:
                     download_response.raise_for_status()
@@ -587,31 +626,37 @@ class DownloadWorkerThread(QThread):
                         file_mode = 'wb'
                         self.__fetched_size -= fetched_bytes
                         file_hash = hashlib.md5()
-                    with open(part_path, file_mode) as fp:
-                        cleanup = False
-                        for chunk in download_response.iter_content(chunk_size=1024*1024):
-                            bytes_written = fp.write(chunk)
-                            current_size = fp.tell()
-                            self.__fetched_size += bytes_written
-                            if file['directory'] != 'bonus_content':
-                                file_hash.update(chunk)
-                            self.update_progress()
-                            if current_size < content_length or content_length == 0:
-                                if self._stop_flag:
-                                    cleanup = True
-                                    break
-                                if self._pause_flag:
-                                    self.paused.emit({
-                                        'partpath': part_path,
-                                        'downlink': file['downlink']
-                                    })
-                                    return
-                if self._stop_flag and cleanup:
                     try:
-                        part_path.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                    _cleanup_dirs(download_path)
+                        with open(part_path, file_mode) as fp:
+                            cleanup = False
+                            for chunk in download_response.iter_content(chunk_size=1024*1024):
+                                bytes_written = fp.write(chunk)
+                                current_size = fp.tell()
+                                self.__fetched_size += bytes_written
+                                if file['directory'] != 'bonus_content':
+                                    file_hash.update(chunk)
+                                self.update_progress()
+                                if current_size < content_length or content_length == 0:
+                                    if self._stop_flag:
+                                        cleanup = True
+                                        break
+                                    if self._pause_flag:
+                                        self.paused.emit({
+                                            'partpath': part_path,
+                                            'downlink': file['downlink']
+                                        })
+                                        return
+                    except OSError as e:
+                        if e.errno == errno.ENOSPC or e.errno == errno.EDQUOT:
+                            self.disk_full.emit({
+                                'partpath': part_path,
+                                'downlink': file['downlink']                                
+                            })
+                            return
+                        raise
+
+                if self._stop_flag and cleanup:
+                    _discard_partial_downloads(download_path)
                     self.stopped.emit()
                     return
                 verified = False
@@ -757,7 +802,7 @@ def _write_log_msg(message: str = "") -> None:
     except Exception as e:
         print(f"Logging error: {e}\n {log_entry}")
 
-def _cleanup_dirs(game_dir: Path) -> None:
+def _discard_partial_downloads(game_dir: Path) -> None:
     """Tidy up a game's download directory after a download is stopped.
 
     Deletes leftover ``.part`` files and removes every directory that ends

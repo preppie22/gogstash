@@ -790,6 +790,7 @@ class _IdleWorker(QObject):
     stopped = Signal()
     paused = Signal(dict)
     fetched = Signal(dict)
+    disk_full = Signal(dict)
 
     def __init__(self, product_id, file_queue=None, resume_link=None):
         super().__init__()

@@ -1,4 +1,6 @@
+import errno
 import hashlib
+import os
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -340,6 +342,8 @@ class Watcher:
         self.paused = []
         self.fetched = []
         self.progress = []
+        self.disk_full = []
+        thread.disk_full.connect(lambda resume_link: self.disk_full.append(resume_link))
         thread.succeeded.connect(lambda: setattr(self, "succeeded", self.succeeded + 1))
         thread.stopped.connect(lambda: setattr(self, "stopped", self.stopped + 1))
         thread.failed.connect(lambda msg: self.failed.append(msg))
@@ -847,6 +851,149 @@ def test_stopping_a_game_with_earlier_downloads_only_tidies_what_is_empty(mock_r
     assert not (game_dir / "extras").exists()
 
 
+# --- disk fills up mid-download ---
+
+class _FillingFile:
+    """Wraps a real .part file and runs out of disk after a set number of
+    writes, or on close. Python buffers writes, so a real full disk can
+    surface either way: from a write() or from the flush on close."""
+
+    def __init__(self, fp, writes_that_fit, error_errno, on_close):
+        self._fp = fp
+        self._writes_left = writes_that_fit
+        self._errno = error_errno
+        self._on_close = on_close
+
+    def write(self, data):
+        if self._writes_left == 0:
+            raise OSError(self._errno, os.strerror(self._errno))
+        self._writes_left -= 1
+        return self._fp.write(data)
+
+    def __getattr__(self, name):
+        return getattr(self._fp, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._fp.close()
+        if self._on_close and exc[0] is None:
+            raise OSError(self._errno, os.strerror(self._errno))
+        return False
+
+
+def _disk_fills_up(writes_that_fit=1, error_errno=errno.ENOSPC, on_close=False):
+    real_open = open
+
+    def fake_open(path, mode="r", *args, **kwargs):
+        fp = real_open(path, mode, *args, **kwargs)
+        if str(path).endswith(".part") and "r" not in mode:
+            return _FillingFile(fp, writes_that_fit, error_errno, on_close)
+        return fp
+
+    return patch("gogstash.download_queue.open", fake_open, create=True)
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_a_full_disk_mid_file_reports_disk_full_and_keeps_the_part_file(mock_resolve, mock_get, tmp_path):
+    # Regression: errno 28 fell into the catch-all and came out as a plain
+    # "failed", the next game got sent straight into the same full disk, and
+    # the user never found out the fix was "delete some memes and resume".
+    game_dir = single_installer_setup(mock_resolve, tmp_path)
+    mock_get.side_effect = [
+        make_checksum_response("irrelevant"),
+        make_streamed_response([b"a" * 400, b"b" * 600]),
+    ]
+    thread = make_worker()
+    events = Watcher(thread)
+
+    with _disk_fills_up(writes_that_fit=1):
+        thread.run()
+
+    part_path = game_dir / "setup_fake_game.exe.part"
+    assert events.disk_full == [{"partpath": part_path, "downlink": "https://example.com/file1"}]
+    assert events.failed == []
+    assert events.paused == []
+    assert events.succeeded == 0
+    assert events.fetched == []  # nothing to log yet, it isn't over
+    assert part_path.read_bytes() == b"a" * 400
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_a_full_disk_that_only_shows_up_when_the_file_closes_is_still_disk_full(mock_resolve, mock_get, tmp_path):
+    # Every write() "worked" because it only went into Python's buffer. The
+    # bill arrives at close(), and it still shouldn't be paid as a failure.
+    game_dir = single_installer_setup(mock_resolve, tmp_path)
+    mock_get.side_effect = [
+        make_checksum_response("irrelevant"),
+        make_streamed_response([b"a" * 400, b"b" * 600]),
+    ]
+    thread = make_worker()
+    events = Watcher(thread)
+
+    with _disk_fills_up(writes_that_fit=2, on_close=True):
+        thread.run()
+
+    assert len(events.disk_full) == 1
+    assert events.failed == []
+    assert (game_dir / "setup_fake_game.exe.part").exists()
+    assert not (game_dir / "setup_fake_game.exe").exists()  # never renamed into place
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_other_write_errors_still_fail_the_game(mock_resolve, mock_get, tmp_path):
+    # A dying USB stick is not a full one. EIO keeps its old, sadder path.
+    single_installer_setup(mock_resolve, tmp_path)
+    mock_get.side_effect = [
+        make_checksum_response("irrelevant"),
+        make_streamed_response([b"a" * 400, b"b" * 600]),
+    ]
+    thread = make_worker()
+    events = Watcher(thread)
+
+    with _disk_fills_up(writes_that_fit=1, error_errno=errno.EIO):
+        thread.run()
+
+    assert events.disk_full == []
+    assert len(events.failed) == 1
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_a_download_cut_short_by_a_full_disk_resumes_into_a_correct_file(mock_resolve, mock_get, tmp_path):
+    # The promise behind keeping the .part: hand its payload to a fresh
+    # worker once there's room again, and the finished file checksums clean.
+    game_dir = single_installer_setup(mock_resolve, tmp_path)
+    full = b"a" * 400 + b"b" * 600
+    checksum = hashlib.md5(full).hexdigest()
+    mock_get.side_effect = [
+        make_checksum_response(checksum),
+        make_streamed_response([full[:400], full[400:]]),
+    ]
+    first = make_worker()
+    first_events = Watcher(first)
+    with _disk_fills_up(writes_that_fit=1):
+        first.run()
+    [payload] = first_events.disk_full
+
+    mock_get.side_effect = [
+        make_checksum_response(checksum),
+        make_streamed_response([full[400:]], status_code=206),
+    ]
+    second = make_worker(payload)
+    second_events = Watcher(second)
+    second.run()
+
+    assert mock_get.call_args_list[-1].kwargs["headers"] == {"Range": "bytes=400-"}
+    assert second_events.failed == []
+    assert second_events.succeeded == 1
+    assert (game_dir / "setup_fake_game.exe").read_bytes() == full
+
+
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
 def test_download_worker_stop_after_full_download_still_saves_the_file(
@@ -1095,6 +1242,7 @@ class FakeWorker(QObject):
     stopped = Signal()
     paused = Signal(dict)
     fetched = Signal(dict)
+    disk_full = Signal(dict)
 
     def __init__(self, product_id, file_queue=None, resume_link=None):
         super().__init__()
@@ -2197,3 +2345,103 @@ def test_free_space_check_creates_a_download_folder_that_isnt_there_yet(tmp_path
 
     assert download_dir.is_dir()
     assert [j["row_idx"] for j in scheduler.active_queue] == [0]
+
+
+# --- the disk fills up mid-run ---
+
+def _part_file(tmp_path):
+    part_path = tmp_path / "game" / "installer" / "setup.exe.part"
+    part_path.parent.mkdir(parents=True)
+    part_path.write_bytes(b"most of a game")
+    return part_path
+
+
+def _run_out_of_space(job, part_path):
+    payload = {"partpath": part_path, "downlink": "https://example.com/f"}
+    job["worker"].disk_full.emit(payload)
+    return payload
+
+
+@with_fake_workers
+def test_a_full_disk_pauses_the_queue_and_keeps_the_game_resumable(tmp_path):
+    # Regression: the full-disk game failed, and the scheduler cheerfully
+    # sent the next game into the very same full disk to fail too. Then the
+    # next. Dominoes, but sad.
+    scheduler = make_scheduler(concurrency=1, count=2)
+    scheduler.schedule()
+    job = scheduler.active_queue[0]
+    part_path = _part_file(tmp_path)
+    paused_rows, paused_events, failed_rows = [], [], []
+    scheduler.game_paused.connect(paused_rows.append)
+    scheduler.paused.connect(lambda: paused_events.append(True))
+    scheduler.game_failed.connect(lambda row, msg: failed_rows.append(row))
+
+    payload = _run_out_of_space(job, part_path)
+
+    assert paused_rows == [0]
+    assert paused_events == [True]
+    assert failed_rows == []
+    assert [(j["row_idx"], j["resume_link"]) for j in scheduler.paused_queue] == [(0, payload)]
+    assert [j["row_idx"] for j in scheduler.idle_queue] == [1]  # not thrown into the fire
+    assert scheduler.active_queue == []
+    assert scheduler.tokens == 1
+    assert part_path.exists()
+    assert "Download folder full: downloads paused" in [line.split(" : ", 1)[1] for line in _log_lines()]
+
+
+@with_fake_workers
+def test_a_full_disk_pauses_the_other_downloads_too(tmp_path):
+    # One full disk is everyone's full disk. The neighbour gets asked to
+    # pause, and "paused" waits until it actually has.
+    scheduler = make_scheduler(concurrency=2, count=2)
+    scheduler.schedule()
+    full_job, other_job = scheduler.active_queue
+    paused_events = []
+    scheduler.paused.connect(lambda: paused_events.append(True))
+
+    _run_out_of_space(full_job, _part_file(tmp_path))
+
+    other_job["worker"].pause_worker.assert_called_once()
+    assert paused_events == []
+    _pause_active_worker(other_job)
+    assert paused_events == [True]
+    assert sorted(j["row_idx"] for j in scheduler.paused_queue) == [0, 1]
+
+
+@with_fake_workers
+def test_resuming_after_a_full_disk_picks_the_part_file_back_up(tmp_path):
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+    payload = _run_out_of_space(scheduler.active_queue[0], _part_file(tmp_path))
+
+    with _disk_with(free=10**9):  # someone finally emptied the recycle bin
+        scheduler.resume_all()
+
+    [resumed] = scheduler.active_queue
+    assert resumed["worker"].resume_link == payload
+
+
+@with_fake_workers
+def test_a_stop_that_races_a_full_disk_still_stops_and_cleans_up(tmp_path):
+    # Stop was clicked, but the worker hit the full disk before it noticed.
+    # The user asked for a stop, so they get a stop, not a surprise pause
+    # and a window stuck on "Stopping. Please wait...".
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+    job = scheduler.active_queue[0]
+    part_path = _part_file(tmp_path)
+    stopped_rows, events = [], []
+    scheduler.game_stopped.connect(stopped_rows.append)
+    scheduler.stopped.connect(lambda: events.append("stopped"))
+    scheduler.paused.connect(lambda: events.append("paused"))
+    scheduler.stop_all()
+
+    _run_out_of_space(job, part_path)
+
+    assert stopped_rows == [0]
+    assert events == ["stopped"]
+    assert scheduler.paused_queue == []
+    assert not (tmp_path / "game").exists()
+    messages = [line.split(" : ", 1)[1] for line in _log_lines()]
+    assert messages.count("Downloads stopped") == 1
+    assert "Download folder ran out of space while stopping" in messages
