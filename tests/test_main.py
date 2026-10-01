@@ -138,7 +138,7 @@ def test_on_games_loaded_marks_fetched_when_an_installer_is_in_the_manifest(tmp_
     installer = game_dir / "installer_windows_en" / "setup.exe"
     installer.parent.mkdir(parents=True)
     installer.write_bytes(b"hello")
-    manifest.add_file(game_dir, installer, category="installers", checksum="abc", timestamp=1.0)
+    manifest.add_file(game_dir, installer, category="installers", downlink="https://example.com/installer", db_size=1, checksum="abc", timestamp=1.0)
     window = MainWindow()
 
     window.on_games_loaded([FAKE_GAME])
@@ -155,7 +155,7 @@ def test_on_games_loaded_does_not_mark_fetched_for_bonus_content_alone(tmp_path)
     manual = game_dir / "bonus_content" / "manual.pdf"
     manual.parent.mkdir(parents=True)
     manual.write_bytes(b"doc")
-    manifest.add_file(game_dir, manual, category="bonus_content", checksum="xyz", timestamp=1.0)
+    manifest.add_file(game_dir, manual, category="bonus_content", downlink="https://example.com/manual", db_size=1, checksum="xyz", timestamp=1.0)
     window = MainWindow()
 
     window.on_games_loaded([FAKE_GAME])

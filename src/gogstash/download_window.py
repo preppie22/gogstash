@@ -37,7 +37,7 @@ from PySide6.QtGui import (
     QColor,
 )
 from gogstash.icon_utils import get_icon, status_indicator
-from gogstash.download_queue import DownloadScheduler, estimate_download_size
+from gogstash.download_queue import DownloadScheduler
 from gogstash.settings import read_setting
 
 
@@ -233,24 +233,22 @@ class DownloadWindow(QDockWidget):
                 return row_idx
         row_idx = self.game_queue_table.rowCount()
         self.game_queue_table.insertRow(row_idx)
-        estimated_size = estimate_download_size(row_data['product_id'])
         column_data = []
         column_data.append(QTableWidgetItem(''))
         column_data[Column.STATUS].setToolTip('Queued')
         column_data.append(QTableWidgetItem(row_data['title']))
         column_data[Column.TITLE].setData(UserRole.PRODUCT_ID_ROLE, row_data['product_id'])
-        column_data.append(QTableWidgetItem(f"0 / {humanize.naturalsize(estimated_size)}"))
-        column_data[Column.PROGRESS].setData(UserRole.TOTAL_SIZE, estimated_size)
-        column_data[Column.PROGRESS].setData(UserRole.FETCHED_SIZE, 0)
+        column_data.append(QTableWidgetItem(""))
         for i in range(len(column_data)):
             self.game_queue_table.setItem(row_idx, i, column_data[i])
         self.set_progress(row_idx, 0)
         self.set_row_status(row_idx, 'base')
         self.game_queue_table.selectRow(row_idx)
-        self.scheduler.enqueue({
+        estimated_size = self.scheduler.enqueue({
             'idx': row_idx,
             'product_id': row_data['product_id']
         })
+        self._on_progress(row_idx, 0, estimated_size)
         self._update_progress_bar()
         return row_idx
 
@@ -362,7 +360,10 @@ class DownloadWindow(QDockWidget):
             fetched (float): Bytes downloaded so far.
             total (float): Total bytes for the game.
         """
-        self.set_progress(row_idx, fetched*100/total)
+        if total == 0:
+            self.set_progress(row_idx, 0)
+        else:
+            self.set_progress(row_idx, fetched*100/total)
         self.game_queue_table.item(row_idx, Column.PROGRESS).setText(f"{humanize.naturalsize(fetched)} / {humanize.naturalsize(total)}")
         self.game_queue_table.item(row_idx, Column.PROGRESS).setData(UserRole.FETCHED_SIZE, fetched)
         self.game_queue_table.item(row_idx, Column.PROGRESS).setData(UserRole.TOTAL_SIZE, total)
@@ -400,7 +401,7 @@ class DownloadWindow(QDockWidget):
         """
         self.set_progress(row_idx, 0)
         total = self.game_queue_table.item(row_idx, Column.PROGRESS).data(UserRole.TOTAL_SIZE)
-        self.game_queue_table.item(row_idx, Column.PROGRESS).setText(f"0 / {humanize.naturalsize(total)}")
+        self.game_queue_table.item(row_idx, Column.PROGRESS).setText(f"{humanize.naturalsize(0)} / {humanize.naturalsize(total)}")
         self.game_queue_table.item(row_idx, Column.PROGRESS).setData(UserRole.FETCHED_SIZE, 0)
         self.set_row_status(row_idx, 'red')
         self.game_queue_table.item(row_idx, Column.STATUS).setToolTip(f'Failed: {msg}')
@@ -413,7 +414,7 @@ class DownloadWindow(QDockWidget):
         """
         self.set_progress(row_idx, 0)
         total = self.game_queue_table.item(row_idx, Column.PROGRESS).data(UserRole.TOTAL_SIZE)
-        self.game_queue_table.item(row_idx, Column.PROGRESS).setText(f"0 / {humanize.naturalsize(total)}")
+        self.game_queue_table.item(row_idx, Column.PROGRESS).setText(f"{humanize.naturalsize(0)} / {humanize.naturalsize(total)}")
         self.game_queue_table.item(row_idx, Column.PROGRESS).setData(UserRole.FETCHED_SIZE, 0)
         self.set_row_status(row_idx, 'base')
         self.game_queue_table.item(row_idx, Column.STATUS).setToolTip('Queued')
@@ -441,10 +442,12 @@ class DownloadWindow(QDockWidget):
         self.start_button.setProperty('iconFile', 'start_download.svg')
         self._reset_scheduler()
         for row_idx in range(self.game_queue_table.rowCount()):
-            self.scheduler.enqueue({
+            estimated_size = self.scheduler.enqueue({
                 'idx': row_idx,
                 'product_id': self.game_queue_table.item(row_idx, Column.TITLE).data(UserRole.PRODUCT_ID_ROLE)
             })
+            if self.game_queue_table.item(row_idx, Column.STATUS).data(UserRole.STATUS_ROLE) != 'green':
+                self._on_progress(row_idx, 0, estimated_size)
         self._update_progress_bar()
 
     def clear_all(self):
@@ -503,6 +506,11 @@ class DownloadWindow(QDockWidget):
             self.downloads_status.setText("Downloads complete")
         QTimer.singleShot(5000, self._reset_status)
         self._reset_all()
+
+    # def _on_low_disk_space(self):
+    #     disk_space_error = QMessageBox(self)
+    #     disk_space_error.setText("Low Disk Space. Continue?")
+    #     disk_space_error.setInformativeText("")
 
     def _reset_status(self):
         """Show the ready message if the queue is idle."""

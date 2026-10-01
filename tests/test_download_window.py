@@ -27,6 +27,34 @@ def db():
     library_db.update_products([FAKE_PRODUCT])
 
 
+class SizedDownloadList:
+    """Stands in for generate_download_list, since the queue's sizes now come
+    from enqueue() adding up the game's file list. Every game is one file of
+    `return_value` bytes, so tests can keep saying how big a game is the same
+    way they used to."""
+
+    def __init__(self):
+        self.return_value = 0
+
+    def __call__(self, product_ids):
+        return [{
+            "directory": "installer_windows_en", "category": "installers", "file": f"file_{pid}",
+            "os": "windows", "size": self.return_value, "downlink": f"https://example.com/{pid}",
+        } for pid in product_ids]
+
+
+def sized_downloads():
+    return patch("gogstash.download_queue.generate_download_list", new_callable=SizedDownloadList)
+
+
+@pytest.fixture(autouse=True)
+def default_download_sizes():
+    # Tests that don't care how big anything is still shouldn't go digging
+    # through the DB and manifests for games that only exist as product ids.
+    with sized_downloads():
+        yield
+
+
 def _non_null_icon():
     # A plain QIcon() is null, and _color_scheme_refresh's "skip icon-less
     # entries" guard would then treat every recolored button as icon-less too.
@@ -37,7 +65,7 @@ def _row(title="Some Game", size="2 GB", product_id=42):
     return {"title": title, "size": size, "product_id": product_id}
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_add_to_queue_inserts_row_with_title_and_size(mock_estimate):
     mock_estimate.return_value = 2_000_000_000  # 2.0 GB
     window = DownloadWindow()
@@ -46,7 +74,7 @@ def test_add_to_queue_inserts_row_with_title_and_size(mock_estimate):
 
     assert window.game_queue_table.rowCount() == 1
     assert window.game_queue_table.item(0, Column.TITLE).text() == "Some Game"
-    assert window.game_queue_table.item(0, Column.PROGRESS).text() == "0 / 2.0 GB"
+    assert window.game_queue_table.item(0, Column.PROGRESS).text() == "0 Bytes / 2.0 GB"
 
 
 def test_add_to_queue_stores_the_product_id_on_the_title_item():
@@ -120,7 +148,7 @@ def test_color_scheme_refresh_sets_the_reloaded_icon_on_each_button(mock_get_ico
 
 
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_start_downloads_hands_the_queued_rows_and_concurrency_to_the_scheduler(mock_estimate, mock_schedule):
     # The scheduler now lives as long as the window does, and rows get
     # enqueued the moment they're added. Start just sets the concurrency and
@@ -141,7 +169,7 @@ def test_start_downloads_hands_the_queued_rows_and_concurrency_to_the_scheduler(
 
 
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_start_turns_the_button_into_pause_and_keeps_the_icon_bookkeeping_on_the_right_button(mock_estimate, mock_schedule):
     # Regression: the pause icon's name got slapped onto the *stop* button,
     # so the next theme change handed Cancel a fucking pause icon.
@@ -160,7 +188,7 @@ def test_start_turns_the_button_into_pause_and_keeps_the_icon_bookkeeping_on_the
 @patch.object(DownloadScheduler, "resume_all")
 @patch.object(DownloadScheduler, "pause_all")
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_start_button_walks_through_start_pause_resume(mock_estimate, mock_schedule, mock_pause, mock_resume):
     # One button, three jobs, zero raises. The overworked intern of
     # QPushButtons.
@@ -191,7 +219,7 @@ def test_start_button_walks_through_start_pause_resume(mock_estimate, mock_sched
 
 
 @patch("gogstash.download_window.DownloadScheduler")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_start_downloads_does_not_require_a_stored_token(mock_estimate, mock_scheduler_cls):
     # Regression: this used to puke ValueError("Invalid
     # access token") the moment nothing was on disk. Not this window's
@@ -216,7 +244,7 @@ def test_stop_downloads_does_not_crash_without_a_scheduler():
 
 
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_on_stopped_puts_everything_back_like_start_was_never_clicked(mock_estimate, mock_schedule):
     # Regression: _on_stopped() once forgot to re-enable the start button, and
     # later tried to iterate over rowCount() itself, which is an int, you
@@ -241,7 +269,7 @@ def test_on_stopped_puts_everything_back_like_start_was_never_clicked(mock_estim
 
 
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_on_finished_resets_the_button_and_requeues_every_row(mock_estimate, mock_schedule):
     mock_estimate.return_value = 0
     window = DownloadWindow()
@@ -257,7 +285,7 @@ def test_on_finished_resets_the_button_and_requeues_every_row(mock_estimate, moc
     assert queued == [(0, 1)]
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_on_game_stopped_resets_row_progress_and_size_text(mock_estimate):
     mock_estimate.return_value = 2_000_000_000  # 2.0 GB
     window = DownloadWindow()
@@ -267,10 +295,10 @@ def test_on_game_stopped_resets_row_progress_and_size_text(mock_estimate):
     window._on_game_stopped(0)
 
     assert window.game_queue_table.item(0, Column.TITLE).data(UserRole.PROGRESS_ROLE) == 0
-    assert window.game_queue_table.item(0, Column.PROGRESS).text() == "0 / 2.0 GB"
+    assert window.game_queue_table.item(0, Column.PROGRESS).text() == "0 Bytes / 2.0 GB"
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_on_game_succeeded_fills_the_row_to_one_hundred_percent(mock_estimate):
     mock_estimate.return_value = 2_000_000_000  # 2.0 GB
     window = DownloadWindow()
@@ -283,7 +311,7 @@ def test_on_game_succeeded_fills_the_row_to_one_hundred_percent(mock_estimate):
     assert window.game_queue_table.item(0, Column.PROGRESS).data(UserRole.FETCHED_SIZE) == 2_000_000_000
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_on_game_failed_puts_the_reason_on_the_red_dot(mock_estimate):
     mock_estimate.return_value = 0
     window = DownloadWindow()
@@ -297,7 +325,7 @@ def test_on_game_failed_puts_the_reason_on_the_red_dot(mock_estimate):
 
 @patch.object(DownloadScheduler, "pause_all")
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_add_to_queue_says_hell_no_while_a_pause_is_landing(mock_estimate, mock_schedule, mock_pause):
     # Workers are mid-pause and the button is disabled. Shoving a new game in
     # right now gets you a -1 and jack shit else: no row, no scheduler entry.
@@ -314,7 +342,7 @@ def test_add_to_queue_says_hell_no_while_a_pause_is_landing(mock_estimate, mock_
 
 @patch.object(DownloadScheduler, "stop_all")
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_add_to_queue_says_hell_no_while_a_stop_is_landing(mock_estimate, mock_schedule, mock_stop):
     # Same deal mid-Cancel. Without this, a game added right then got
     # dispatched and held the whole stop hostage until it finished.
@@ -329,7 +357,7 @@ def test_add_to_queue_says_hell_no_while_a_stop_is_landing(mock_estimate, mock_s
 
 
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_add_to_queue_still_works_while_downloads_are_running(mock_estimate, mock_schedule):
     # The -1 bouncer only works the pause/stop door. Mid-run adds are fine.
     mock_estimate.return_value = 0
@@ -341,7 +369,7 @@ def test_add_to_queue_still_works_while_downloads_are_running(mock_estimate, moc
     assert window.game_queue_table.rowCount() == 2
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_add_to_queue_wont_queue_the_same_damn_game_twice(mock_estimate):
     # Regression: nothing stopped a game from being queued twice, and with
     # concurrency 2 both copies downloaded into the same .part files at once.
@@ -360,7 +388,7 @@ def test_add_to_queue_wont_queue_the_same_damn_game_twice(mock_estimate):
 
 
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_double_clicking_a_game_thats_already_downloading_doesnt_start_a_second_copy(mock_estimate, mock_schedule):
     # The mid-run version, a.k.a. the impatient double-clicker.
     mock_estimate.return_value = 0
@@ -374,7 +402,7 @@ def test_double_clicking_a_game_thats_already_downloading_doesnt_start_a_second_
     assert [j["product_id"] for j in window.scheduler.idle_queue] == [1]
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_add_to_queue_still_takes_a_different_game_after_bouncing_a_duplicate(mock_estimate):
     mock_estimate.return_value = 0
     window = DownloadWindow()
@@ -385,7 +413,7 @@ def test_add_to_queue_still_takes_a_different_game_after_bouncing_a_duplicate(mo
     assert window.game_queue_table.rowCount() == 2
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_queuing_a_game_with_nothing_to_download_doesnt_divide_by_fucking_zero(mock_estimate):
     # A Mac-only game with the filter set to Linux/Windows estimates to 0
     # bytes. As the first row in the queue, that made the overall bar divide
@@ -397,7 +425,7 @@ def test_queuing_a_game_with_nothing_to_download_doesnt_divide_by_fucking_zero(m
     assert window.progress_bar.value() == 0  # nothing to measure means nothing done, not "whatever it said before"
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_adding_a_game_after_a_finish_drags_the_overall_bar_back_to_reality(mock_estimate):
     # _on_finished pins the bar at 100%. Queue another game afterwards and the
     # bar used to keep bragging about 100% until someone hit Start.
@@ -431,7 +459,7 @@ def _status(window, row):
     return window.game_queue_table.item(row, Column.STATUS).data(UserRole.STATUS_ROLE)
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_a_freshly_queued_game_gets_a_base_dot_and_a_queued_tooltip(mock_estimate):
     mock_estimate.return_value = 0
     window = DownloadWindow()
@@ -443,7 +471,7 @@ def test_a_freshly_queued_game_gets_a_base_dot_and_a_queued_tooltip(mock_estimat
     assert not window.game_queue_table.item(0, Column.STATUS).icon().isNull()
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_each_scheduler_signal_paints_the_dot_its_own_color(mock_estimate):
     mock_estimate.return_value = 0
     window = DownloadWindow()
@@ -461,7 +489,7 @@ def test_each_scheduler_signal_paints_the_dot_its_own_color(mock_estimate):
         assert window.game_queue_table.item(0, Column.STATUS).toolTip() == tip
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_a_theme_change_repaints_the_dot_without_forgetting_its_color(mock_estimate):
     mock_estimate.return_value = 0
     window = DownloadWindow()
@@ -473,7 +501,7 @@ def test_a_theme_change_repaints_the_dot_without_forgetting_its_color(mock_estim
     assert _status(window, 0) == "red"
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_clearing_an_idle_queue_empties_it_but_keeps_the_headers(mock_estimate):
     # Regression: QTableWidget.clear() nuked the items AND the headers but left
     # every row standing, a table full of ghosts that crashed the next loop.
@@ -494,7 +522,7 @@ def test_clearing_an_idle_queue_empties_it_but_keeps_the_headers(mock_estimate):
 
 @patch.object(DownloadScheduler, "stop_all")
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_clearing_mid_run_waits_for_the_stop_before_wiping_the_table(mock_estimate, mock_schedule, mock_stop):
     # The workers are still out there sending row indexes. Yank the rows
     # before they're done and every late signal lands on a None.
@@ -520,7 +548,7 @@ def test_clearing_mid_run_waits_for_the_stop_before_wiping_the_table(mock_estima
 
 @patch.object(DownloadScheduler, "stop_all")
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_chickening_out_of_a_mid_run_clear_changes_nothing(mock_estimate, mock_schedule, mock_stop):
     # Regression: saying No left the Clear button greyed out for eternity.
     mock_estimate.return_value = 0
@@ -539,7 +567,7 @@ def test_chickening_out_of_a_mid_run_clear_changes_nothing(mock_estimate, mock_s
 @patch.object(DownloadScheduler, "stop_all")
 @patch.object(DownloadScheduler, "pause_all")
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_cancelling_while_a_pause_is_landing_gives_the_clear_button_back(mock_estimate, mock_schedule, mock_pause, mock_stop):
     # Regression: pause disabled Clear and waited for _on_paused to undo it,
     # but a Cancel mid-pause means paused never fires. Clear stayed dead.
@@ -557,7 +585,7 @@ def test_cancelling_while_a_pause_is_landing_gives_the_clear_button_back(mock_es
 
 
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_a_fresh_start_doesnt_nag_about_completed_downloads_that_dont_exist(mock_estimate, mock_schedule):
     # Regression: the check was upside down, so every first Start asked to
     # remove "completed" downloads and then deleted the ones you wanted.
@@ -574,7 +602,7 @@ def test_a_fresh_start_doesnt_nag_about_completed_downloads_that_dont_exist(mock
 
 
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_restarting_can_drop_the_finished_games_and_the_scheduler_keeps_up(mock_estimate, mock_schedule):
     # Two regressions for the price of one: removing rows front to back
     # skipped every other one, and the scheduler kept jobs for rows that no
@@ -598,7 +626,7 @@ def test_restarting_can_drop_the_finished_games_and_the_scheduler_keeps_up(mock_
 
 
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_dropping_every_finished_game_doesnt_start_a_download_of_nothing(mock_estimate, mock_schedule):
     # Otherwise the scheduler finishes an empty queue on the spot and
     # proudly announces "Downloads complete". Complete what, exactly?
@@ -617,7 +645,7 @@ def test_dropping_every_finished_game_doesnt_start_a_download_of_nothing(mock_es
 
 
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_keeping_finished_games_resets_the_whole_row_and_the_overall_bar_before_the_redownload(mock_estimate, mock_schedule):
     mock_estimate.return_value = 1000
     window = DownloadWindow()
@@ -631,7 +659,7 @@ def test_keeping_finished_games_resets_the_whole_row_and_the_overall_bar_before_
     assert window.game_queue_table.rowCount() == 1
     assert _status(window, 0) == "base"
     assert window.game_queue_table.item(0, Column.TITLE).data(UserRole.PROGRESS_ROLE) == 0
-    assert window.game_queue_table.item(0, Column.PROGRESS).text() == "0 / 1.0 kB"
+    assert window.game_queue_table.item(0, Column.PROGRESS).text() == "0 Bytes / 1.0 kB"
     assert window.game_queue_table.item(0, Column.PROGRESS).data(UserRole.FETCHED_SIZE) == 0
     assert window.progress_bar.value() == 0  # not a head start of 100% on a download that hasn't happened
     assert [j["product_id"] for j in window.scheduler.idle_queue] == [1]
@@ -640,7 +668,7 @@ def test_keeping_finished_games_resets_the_whole_row_and_the_overall_bar_before_
 @patch.object(DownloadScheduler, "resume_all")
 @patch.object(DownloadScheduler, "pause_all")
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_resuming_never_offers_to_remove_rows_out_from_under_the_scheduler(mock_estimate, mock_schedule, mock_pause, mock_resume):
     # A game can finish right before the pause lands. Removing its row on
     # resume would shift the row indexes the paused jobs are still holding.
@@ -661,7 +689,7 @@ def test_resuming_never_offers_to_remove_rows_out_from_under_the_scheduler(mock_
     mock_resume.assert_called_once()
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_a_failed_game_drops_its_half_download_from_the_overall_bar(mock_estimate):
     # The partial file is gone or useless, so counting it as progress is
     # just lying to the user with extra steps.
@@ -673,11 +701,11 @@ def test_a_failed_game_drops_its_half_download_from_the_overall_bar(mock_estimat
     window._on_game_failed(0, "nope")
 
     assert window.game_queue_table.item(0, Column.PROGRESS).data(UserRole.FETCHED_SIZE) == 0
-    assert window.game_queue_table.item(0, Column.PROGRESS).text() == "0 / 1.0 kB"
+    assert window.game_queue_table.item(0, Column.PROGRESS).text() == "0 Bytes / 1.0 kB"
 
 
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_restarting_puts_failed_games_back_in_line_without_asking(mock_estimate, mock_schedule):
     # Red rows aren't "completed", so no prompt. They just get their dot
     # scrubbed and try again.
@@ -695,7 +723,7 @@ def test_restarting_puts_failed_games_back_in_line_without_asking(mock_estimate,
     assert window.game_queue_table.item(0, Column.STATUS).toolTip() == "Queued"
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_finishing_with_failures_owns_up_to_them(mock_estimate):
     mock_estimate.return_value = 0
     window = DownloadWindow()
@@ -709,7 +737,7 @@ def test_finishing_with_failures_owns_up_to_them(mock_estimate):
     assert window.downloads_status.text() == "Finished with 1 failure"
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_finishing_with_several_failures_gets_the_plural_it_deserves(mock_estimate):
     mock_estimate.return_value = 0
     window = DownloadWindow()
@@ -723,7 +751,7 @@ def test_finishing_with_several_failures_gets_the_plural_it_deserves(mock_estima
     assert window.downloads_status.text() == "Finished with 2 failures"
 
 
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_a_clean_finish_still_says_complete(mock_estimate):
     mock_estimate.return_value = 0
     window = DownloadWindow()
@@ -736,7 +764,7 @@ def test_a_clean_finish_still_says_complete(mock_estimate):
 
 
 @patch.object(DownloadScheduler, "schedule")
-@patch("gogstash.download_window.estimate_download_size")
+@sized_downloads()
 def test_the_leftover_ready_timer_doesnt_stomp_on_a_new_run(mock_estimate, mock_schedule):
     # Regression: finish, hit Start within five seconds, and the old timer
     # cheerfully announced "Ready!" over an active download.

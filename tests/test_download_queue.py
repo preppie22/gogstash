@@ -72,10 +72,15 @@ FAKE_DOWNLOADABLE = {
 }
 
 
+def fake_product(product_id, slug):
+    return {**FAKE_PRODUCT, "id": product_id, "title": slug, "slug": slug}
+
+
 @pytest.fixture(autouse=True)
 def db():
     library_db._create_db(force=True)
     library_db.update_downloadables([FAKE_DOWNLOADABLE])
+    library_db.update_products([FAKE_PRODUCT, fake_product(333, "polyglot-game"), fake_product(444, "monoglot-game")])
 
 
 def by_file(result, file_id):
@@ -299,10 +304,19 @@ def test_language_fallback_is_decided_per_game_in_a_batch():
     assert "mono_linux_en" in files
 
 
+def fake_response():
+    # The worker holds its download in a `with` block now, and a MagicMock's
+    # __enter__ hands back a brand new stranger instead of itself. Every
+    # carefully staged header and chunk would go straight in the bin.
+    response = MagicMock()
+    response.__enter__.return_value = response
+    return response
+
+
 def make_streamed_response(chunks, status_code=200, headers=None):
     # A real dict for headers, since a bare MagicMock's Content-Length int()s
     # to 1 and every fake file would swear it's a single byte long.
-    response = MagicMock()
+    response = fake_response()
     response.status_code = status_code
     response.iter_content.return_value = chunks
     response.headers = headers if headers is not None else {"Content-Length": str(sum(len(c) for c in chunks))}
@@ -345,6 +359,14 @@ def single_installer_setup(mock_resolve, tmp_path):
     return tmp_path / "fake-game" / "installer_windows_en"
 
 
+def make_worker(resume_link=None, file_queue=None):
+    # Workers are handed their file list by the scheduler now. Build it the
+    # same way the scheduler does, off whatever the test's settings say.
+    if file_queue is None:
+        file_queue = download_queue.generate_download_list((111,))
+    return download_queue.DownloadWorkerThread(111, file_queue, resume_link)
+
+
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
 def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, tmp_path):
@@ -360,7 +382,7 @@ def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, tmp_pa
         make_streamed_response([chunk_a, chunk_b]),  # the real download
     ]
 
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     events = Watcher(thread)
 
     thread.run()
@@ -395,9 +417,7 @@ def test_download_worker_resumes_a_part_file_with_a_range_request(mock_resolve, 
         make_streamed_response([new_bytes], status_code=206),
     ]
 
-    thread = download_queue.DownloadWorkerThread(
-        111, {"partpath": part_path, "downlink": "https://example.com/file1"}
-    )
+    thread = make_worker({"partpath": part_path, "downlink": "https://example.com/file1"})
     events = Watcher(thread)
 
     thread.run()
@@ -430,9 +450,7 @@ def test_download_worker_starts_over_when_the_cdn_ignores_the_range_request(mock
         make_streamed_response([full_bytes], status_code=200),
     ]
 
-    thread = download_queue.DownloadWorkerThread(
-        111, {"partpath": part_path, "downlink": "https://example.com/file1"}
-    )
+    thread = make_worker({"partpath": part_path, "downlink": "https://example.com/file1"})
     events = Watcher(thread)
 
     thread.run()
@@ -467,18 +485,17 @@ def test_download_worker_skips_a_renamed_bonus_file_instead_of_tripping_over_the
     bonus_dir.mkdir(parents=True)
     renamed = bonus_dir / "manual (read me first).zip"
     renamed.write_bytes(b"m" * 10)
-    manifest.add_file(game_dir, renamed, category="bonus_content", checksum="", timestamp=42.0)
-    response = MagicMock()
+    manifest.add_file(game_dir, renamed, category="bonus_content", downlink="", db_size=-1, checksum="", timestamp=42.0)
+    response = fake_response()
     response.status_code = 200
     response.headers = {"Content-Length": "10"}
     response.iter_content.side_effect = AssertionError("should never read the byte stream when skipping")
     mock_get.side_effect = [response]
 
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker(file_queue=[bonus_file])
     events = Watcher(thread)
 
-    with patch("gogstash.download_queue.generate_download_list", return_value=[bonus_file]):
-        thread.run()
+    thread.run()
 
     assert events.failed == []
     assert events.succeeded == 1
@@ -506,19 +523,16 @@ def test_download_worker_resumes_a_bonus_file_and_checks_it_against_the_full_siz
     bonus_dir.mkdir(parents=True)
     part_path = bonus_dir / "manual.zip.part"
     part_path.write_bytes(b"a" * 4)
-    response = MagicMock()
+    response = fake_response()
     response.status_code = 206
     response.iter_content.return_value = [b"b" * 6]
     response.headers = {"Content-Length": "6"}  # just the remaining bytes, like a real 206
     mock_get.side_effect = [response]
 
-    thread = download_queue.DownloadWorkerThread(
-        111, {"partpath": part_path, "downlink": "https://example.com/bonus1"}
-    )
+    thread = make_worker({"partpath": part_path, "downlink": "https://example.com/bonus1"}, file_queue=[bonus_file])
     events = Watcher(thread)
 
-    with patch("gogstash.download_queue.generate_download_list", return_value=[bonus_file]):
-        thread.run()
+    thread.run()
 
     assert mock_get.call_args.kwargs["headers"] == {"Range": "bytes=4-"}
     assert events.failed == []
@@ -536,14 +550,14 @@ def test_download_worker_skips_a_file_already_verified_in_the_manifest(mock_reso
     existing_file.parent.mkdir(parents=True)
     existing_file.write_bytes(b"already have this one")
     checksum = hashlib.md5(b"already have this one").hexdigest()
-    manifest.add_file(game_dir, existing_file, category="installers", checksum=checksum, timestamp=42.0)
+    manifest.add_file(game_dir, existing_file, category="installers", downlink="", db_size=-1, checksum=checksum, timestamp=42.0)
     # If the skip check fails to short-circuit, iter_content() gets called and
     # blows up loudly instead of quietly re-downloading something we already have.
-    stream_response = MagicMock()
+    stream_response = fake_response()
     stream_response.iter_content.side_effect = AssertionError("should never read the byte stream when skipping")
     mock_get.side_effect = [make_checksum_response(checksum), stream_response]
 
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     events = Watcher(thread)
 
     thread.run()
@@ -551,7 +565,7 @@ def test_download_worker_skips_a_file_already_verified_in_the_manifest(mock_reso
     assert events.failed == []
     assert events.succeeded == 1
     # Skipped files still get reported (so the log can say so), flagged so the
-    # scheduler knows not to rewrite their manifest entry.
+    # scheduler knows it's a backfill of an old entry, not a fresh download.
     [entry] = events.fetched
     assert entry["filepath"] == existing_file
     assert entry["checksum"] == checksum
@@ -573,12 +587,12 @@ def test_download_worker_skipping_a_file_never_touches_the_network_stream_or_dis
     existing_file.parent.mkdir(parents=True)
     existing_file.write_bytes(b"already have this one")
     checksum = hashlib.md5(b"already have this one").hexdigest()
-    manifest.add_file(game_dir, existing_file, category="installers", checksum=checksum, timestamp=42.0)
-    stream_response = MagicMock()
+    manifest.add_file(game_dir, existing_file, category="installers", downlink="", db_size=-1, checksum=checksum, timestamp=42.0)
+    stream_response = fake_response()
     stream_response.iter_content.side_effect = AssertionError("should never read the byte stream when skipping")
     mock_get.side_effect = [make_checksum_response(checksum), stream_response]
 
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     events = Watcher(thread)
 
     real_open = open
@@ -612,7 +626,7 @@ def test_download_worker_redownloads_when_the_checksum_no_longer_matches(mock_re
     existing_file = game_dir / "installer_windows_en" / "setup_fake_game.exe"
     existing_file.parent.mkdir(parents=True)
     existing_file.write_bytes(b"a" * 1000)  # matches file1's declared size, but stale content
-    manifest.add_file(game_dir, existing_file, category="installers", checksum="stale-checksum", timestamp=1.0)
+    manifest.add_file(game_dir, existing_file, category="installers", downlink="", db_size=-1, checksum="stale-checksum", timestamp=1.0)
     chunk_a = b"a" * 400
     chunk_b = b"b" * 600
     fresh_checksum = hashlib.md5(chunk_a + chunk_b).hexdigest()
@@ -621,7 +635,7 @@ def test_download_worker_redownloads_when_the_checksum_no_longer_matches(mock_re
         make_streamed_response([chunk_a, chunk_b]),
     ]
 
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     events = Watcher(thread)
 
     thread.run()
@@ -655,19 +669,19 @@ def test_download_worker_only_emits_succeeded_once_when_some_files_are_skipped(m
     existing_file.parent.mkdir(parents=True)
     existing_file.write_bytes(b"already have this one")
     checksum = hashlib.md5(b"already have this one").hexdigest()
-    manifest.add_file(game_dir, existing_file, category="installers", checksum=checksum, timestamp=1.0)
+    manifest.add_file(game_dir, existing_file, category="installers", downlink="", db_size=-1, checksum=checksum, timestamp=1.0)
     bonus_chunk = b"x" * 10
-    bonus_response = MagicMock()
+    bonus_response = fake_response()
     bonus_response.headers = {"Content-Length": str(len(bonus_chunk))}
     bonus_response.iter_content.return_value = [bonus_chunk]
-    stream_response = MagicMock()
+    stream_response = fake_response()
     stream_response.iter_content.side_effect = AssertionError("should never read the byte stream when skipping")
     # generate_download_list() yields bonus_content before the installer for
     # this fixture. Bonus content has no checksum manifest, so its only request
     # is the download; the installer then asks for its checksum and its stream.
     mock_get.side_effect = [bonus_response, make_checksum_response(checksum), stream_response]
 
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     events = Watcher(thread)
 
     thread.run()
@@ -687,12 +701,12 @@ def test_download_worker_failure_does_not_also_emit_succeeded(mock_resolve, mock
     # faceplants once we start reading it. Needs a real dict for .headers
     # though, since a bare MagicMock().headers.get(...) is truthy and would
     # trip up int(cl) before we ever get to the good stuff.
-    broken_response = MagicMock()
+    broken_response = fake_response()
     broken_response.headers = {}
     broken_response.iter_content.side_effect = RuntimeError("connection reset")
     mock_get.side_effect = [make_checksum_response("irrelevant"), broken_response]
 
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     events = Watcher(thread)
 
     thread.run()
@@ -718,7 +732,7 @@ def test_download_worker_reports_failed_not_succeeded_when_a_file_fails_but_the_
         make_streamed_response([b"a" * 400, b"b" * 600]),
     ]
 
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     events = Watcher(thread)
 
     thread.run()
@@ -744,7 +758,7 @@ def test_download_worker_fails_immediately_when_no_valid_token(mock_resolve, tmp
     settings.update_setting("patches", False)
     mock_resolve.side_effect = PermissionError("Authentication failed. Login again.")
 
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     events = Watcher(thread)
 
     thread.run()
@@ -765,7 +779,7 @@ def test_download_worker_stop_mid_chunk_deletes_part_file_and_emits_stopped(
         make_streamed_response([b"a" * 400, b"b" * 600]),
     ]
 
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     # Rage-click Stop right after chunk one lands. Fuck chunk two.
     thread.update_progress = lambda: thread.stop_worker()
     events = Watcher(thread)
@@ -793,14 +807,14 @@ def test_download_worker_stop_after_full_download_still_saves_the_file(
     chunk_a = b"a" * 400
     chunk_b = b"b" * 600
     checksum = hashlib.md5(chunk_a + chunk_b).hexdigest()
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
 
     def chunks_then_stop():
         yield chunk_a
         yield chunk_b
         thread.stop_worker()  # doesn't fire until the loop comes back asking for seconds
 
-    response = MagicMock()
+    response = fake_response()
     response.iter_content.return_value = chunks_then_stop()
     mock_get.side_effect = [make_checksum_response(checksum), response]
     events = Watcher(thread)
@@ -832,7 +846,7 @@ def test_download_worker_pause_mid_chunk_keeps_part_file_and_reports_where_it_is
         make_streamed_response([b"a" * 400, b"b" * 600]),
     ]
 
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     thread.update_progress = lambda: thread.pause_worker()
     events = Watcher(thread)
 
@@ -861,14 +875,14 @@ def test_download_worker_pause_after_full_download_saves_the_file_and_only_pause
     chunk_a = b"a" * 400
     chunk_b = b"b" * 600
     checksum = hashlib.md5(chunk_a + chunk_b).hexdigest()
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
 
     def chunks_then_pause():
         yield chunk_a
         yield chunk_b
         thread.pause_worker()  # lands after the last chunk, before the loop notices
 
-    response = MagicMock()
+    response = fake_response()
     response.iter_content.return_value = chunks_then_pause()
     mock_get.side_effect = [make_checksum_response(checksum), response]
     events = Watcher(thread)
@@ -899,7 +913,7 @@ def test_download_worker_pause_landing_on_the_last_chunk_finishes_the_file_inste
     chunk_b = b"b" * 600
     checksum = hashlib.md5(chunk_a + chunk_b).hexdigest()
     mock_get.side_effect = [make_checksum_response(checksum), make_streamed_response([chunk_a, chunk_b])]
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     thread.update_progress = lambda: thread.pause_worker() if thread.fetched_size == 1000 else None
     events = Watcher(thread)
 
@@ -926,7 +940,7 @@ def test_download_worker_stop_landing_on_the_last_chunk_keeps_the_finished_file(
     chunk_b = b"b" * 600
     checksum = hashlib.md5(chunk_a + chunk_b).hexdigest()
     mock_get.side_effect = [make_checksum_response(checksum), make_streamed_response([chunk_a, chunk_b])]
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     thread.update_progress = lambda: thread.stop_worker() if thread.fetched_size == 1000 else None
     events = Watcher(thread)
 
@@ -953,7 +967,7 @@ def test_download_worker_can_still_pause_mid_file_when_the_server_wont_say_how_b
         make_checksum_response("irrelevant"),
         make_streamed_response([b"a" * 400, b"b" * 600], headers={}),
     ]
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     thread.update_progress = lambda: thread.pause_worker()
     events = Watcher(thread)
 
@@ -974,7 +988,7 @@ def test_download_worker_can_still_stop_mid_file_when_the_server_wont_say_how_bi
         make_checksum_response("irrelevant"),
         make_streamed_response([b"a" * 400, b"b" * 600], headers={}),
     ]
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     thread.update_progress = lambda: thread.stop_worker()
     events = Watcher(thread)
 
@@ -1003,7 +1017,7 @@ def test_download_worker_unrelated_failure_with_stop_already_requested_does_not_
         make_streamed_response([b"a"]),
     ]
 
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     thread.stop_worker()  # stop was already requested before this file even starts
     events = Watcher(thread)
 
@@ -1029,10 +1043,14 @@ class FakeWorker(QObject):
     paused = Signal(dict)
     fetched = Signal(dict)
 
-    def __init__(self, product_id, resume_link=None):
+    def __init__(self, product_id, file_queue=None, resume_link=None):
         super().__init__()
         self.product_id = product_id
+        self.file_queue = file_queue
         self.resume_link = resume_link
+        # The free-space check peeks at these on every active job.
+        self.total_size = sum(f["size"] for f in file_queue or [])
+        self.fetched_size = 0
         self.stop_worker = MagicMock()
         self.pause_worker = MagicMock()
 
@@ -1045,16 +1063,34 @@ class FakeWorker(QObject):
         return True
 
 
+def canned_download_list(product_ids):
+    # One tiny file per game, so scheduler tests never go rummaging through
+    # the DB or a manifest for games that only exist as row numbers.
+    return [{
+        "directory": "installer_windows_en", "category": "installers", "file": f"file_{pid}",
+        "os": "windows", "size": 1, "downlink": f"https://example.com/{pid}",
+    } for pid in product_ids]
+
+
+def with_fake_workers(test):
+    test = patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)(test)
+    return patch("gogstash.download_queue.generate_download_list", canned_download_list)(test)
+
+
 def make_scheduler(concurrency, count):
-    product_queue = [{"idx": i, "product_id": i} for i in range(count)]
-    return download_queue.DownloadScheduler(product_queue, concurrency)
+    # enqueue() is the only way in now. Idle schedulers just queue, so this
+    # still leaves every job waiting for the test to call schedule().
+    scheduler = download_queue.DownloadScheduler(concurrency)
+    for i in range(count):
+        scheduler.enqueue({"idx": i, "product_id": i})
+    return scheduler
 
 
 def _pause_active_worker(job, resume_link=None):
     job["worker"].paused.emit({} if resume_link is None else resume_link)
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_stop_all_stops_active_workers_immediately():
     # Regression: stop_all() used to just set a flag and hope to god
     # that some future dispatch() call, triggered by a completely different
@@ -1071,7 +1107,7 @@ def test_stop_all_stops_active_workers_immediately():
     active_worker.stop_worker.assert_called_once()
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_stop_all_reports_pending_and_active_jobs_as_stopped():
     scheduler = make_scheduler(concurrency=1, count=2)
     scheduler.schedule()
@@ -1088,7 +1124,7 @@ def test_stop_all_reports_pending_and_active_jobs_as_stopped():
     assert stopped_rows == [0, 1]
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_stop_all_with_nothing_pending_still_emits_stopped_not_finished():
     # Regression: the stopped-vs-finished flag only ever flipped while
     # draining leftover *pending* jobs. Stop the one download that's already
@@ -1109,7 +1145,7 @@ def test_stop_all_with_nothing_pending_still_emits_stopped_not_finished():
     assert finished_events == []
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_schedule_emits_finished_not_stopped_when_nothing_was_stopped():
     scheduler = make_scheduler(concurrency=1, count=1)
     scheduler.schedule()
@@ -1124,7 +1160,7 @@ def test_schedule_emits_finished_not_stopped_when_nothing_was_stopped():
     assert stopped_events == []
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_reap_ignores_a_job_that_was_already_removed():
     # Regression: a worker could, in a narrow race, announce its own
     # completion twice (see the double-emit test above). _reap() has to
@@ -1141,7 +1177,7 @@ def test_reap_ignores_a_job_that_was_already_removed():
     assert job["worker"] is None  # the dispatcher builds a fresh one next time
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_scheduler_builds_a_fresh_worker_per_dispatch_not_at_construction():
     scheduler = make_scheduler(concurrency=1, count=2)
 
@@ -1158,7 +1194,7 @@ def test_scheduler_builds_a_fresh_worker_per_dispatch_not_at_construction():
 def _fetched_entry(game_dir, name, checksum="abc", **extra):
     return {
         "game_dir": game_dir, "filepath": game_dir / name, "category": "installers",
-        "size": 1, "checksum": checksum, **extra,
+        "downlink": f"https://example.com/{name}", "size": 1, "db_size": 1, "checksum": checksum, **extra,
     }
 
 
@@ -1177,7 +1213,7 @@ def _log_lines():
     return log_file.read_text().splitlines() if log_file.exists() else []
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_game_succeeded_signal_carries_just_the_row():
     scheduler = make_scheduler(concurrency=1, count=1)
     scheduler.schedule()
@@ -1189,7 +1225,7 @@ def test_game_succeeded_signal_carries_just_the_row():
     assert succeeded == [0]
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_game_failed_signal_carries_the_row_and_the_reason():
     scheduler = make_scheduler(concurrency=1, count=1)
     scheduler.schedule()
@@ -1202,7 +1238,7 @@ def test_game_failed_signal_carries_the_row_and_the_reason():
     assert scheduler.active_queue == []  # the job got reaped and its slot freed
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_fetched_file_is_recorded_in_the_manifest_by_the_scheduler(tmp_path):
     scheduler, worker, game_dir = _scheduler_with_game_files(tmp_path, "setup.exe")
     (game_dir / "setup.exe").write_bytes(b"hello")
@@ -1218,7 +1254,7 @@ def test_fetched_file_is_recorded_in_the_manifest_by_the_scheduler(tmp_path):
     assert before <= recorded["fetched_at"] <= time.time()  # stamped when it was recorded
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_fetched_file_is_logged_the_moment_it_arrives_not_when_the_game_ends(tmp_path):
     # The point of the scheduler owning the log: a file that finished before a
     # pause (or before the app got killed) already has its line on disk.
@@ -1232,7 +1268,7 @@ def test_fetched_file_is_logged_the_moment_it_arrives_not_when_the_game_ends(tmp
     assert scheduler.active_queue  # the game itself hasn't finished
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_failed_fetch_entries_never_reach_the_manifest_and_dont_derail_the_good_ones(tmp_path):
     # Regression: a game can report failed entries (size -1, no real file
     # behind them, sometimes just a bare file id for a path) right next to real
@@ -1257,19 +1293,56 @@ def test_failed_fetch_entries_never_reach_the_manifest_and_dont_derail_the_good_
     assert "good.exe : Fetched" in log
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
-def test_skipped_fetch_entries_are_logged_but_leave_the_manifest_alone(tmp_path):
+@with_fake_workers
+def test_skipped_fetch_backfills_an_old_manifest_entry_with_its_downlink(tmp_path):
+    # A pre-upgrade entry only knows its filename. The worker's skip is the one
+    # moment both the filename and the downlink are in the same room, so
+    # that's when the entry gets its new fields, no network trip required.
     scheduler, worker, game_dir = _scheduler_with_game_files(tmp_path, "setup.exe")
-    manifest.add_file(game_dir, game_dir / "setup.exe", category="installers", checksum="abc123", timestamp=1.0)
+    (game_dir / manifest.MANIFEST_FILE).write_text(
+        '{"setup.exe": {"category": "installers", "size": 1, "checksum": "abc123", "fetched_at": 1.0}}'
+    )
 
-    worker.fetched.emit(_fetched_entry(game_dir, "setup.exe", checksum="abc123", skipped=True))
+    worker.fetched.emit(_fetched_entry(game_dir, "setup.exe", checksum="abc123", db_size=900, skipped=True))
 
-    assert manifest.stat_file(game_dir, game_dir / "setup.exe")["fetched_at"] == 1.0
+    recorded = manifest.stat_file(game_dir, game_dir / "setup.exe")
+    assert recorded["downlink"] == "https://example.com/setup.exe"
+    assert recorded["db_size"] == 900
+    assert recorded["checksum"] == "abc123"
     [line] = _log_lines()
     assert "setup.exe : Skipped | Already up to date" in line
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
+def test_skip_of_a_renamed_file_is_logged_without_inventing_an_entry_for_the_missing_path(tmp_path):
+    # Regression: check_exist can match a file the user renamed, so the
+    # skipped path doesn't exist. Writing an entry for it made add_file raise
+    # FileNotFoundError right inside the slot, and the log line died with it.
+    scheduler, worker, game_dir = _scheduler_with_game_files(tmp_path, "setup (my copy).exe")
+
+    worker.fetched.emit(_fetched_entry(game_dir, "setup.exe", skipped=True))
+
+    assert manifest.stat_file(game_dir, game_dir / "setup.exe") == {}
+    [line] = _log_lines()
+    assert "setup.exe : Skipped" in line
+
+
+@with_fake_workers
+def test_a_fresh_download_replaces_an_entry_that_already_had_a_downlink(tmp_path):
+    # Regression: GOG updates an installer and keeps the filename. The new copy
+    # has to overwrite the old entry, or its stale db_size never matches again
+    # and the file gets downloaded fresh on every single run, forever.
+    scheduler, worker, game_dir = _scheduler_with_game_files(tmp_path, "setup.exe")
+    manifest.add_file(game_dir, game_dir / "setup.exe", category="installers",
+                      downlink="https://example.com/setup.exe", db_size=100, checksum="old-sum", timestamp=1.0)
+
+    worker.fetched.emit(_fetched_entry(game_dir, "setup.exe", checksum="new-sum", db_size=200))
+
+    recorded = manifest.stat_file(game_dir, game_dir / "setup.exe")
+    assert (recorded["db_size"], recorded["checksum"]) == (200, "new-sum")
+
+
+@with_fake_workers
 def test_every_file_of_a_fully_cached_game_gets_its_own_log_line(tmp_path):
     scheduler, worker, game_dir = _scheduler_with_game_files(tmp_path, "a.exe", "b.exe", "c.exe")
 
@@ -1281,7 +1354,7 @@ def test_every_file_of_a_fully_cached_game_gets_its_own_log_line(tmp_path):
     assert all("Skipped" in line for line in lines)
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_a_file_fetched_before_a_pause_and_skipped_after_the_resume_is_logged_as_both(tmp_path):
     # The log is an event history, not a list of files: the download happened,
     # then the resumed worker re-checked it and skipped it. Both are true.
@@ -1356,7 +1429,7 @@ def test_write_log_msg_survives_a_log_file_it_cannot_write(capsys):
     assert "disk full" in capsys.readouterr().out
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_pause_resume_and_stop_each_leave_a_line_in_the_log():
     scheduler = make_scheduler(concurrency=1, count=1)
     scheduler.schedule()
@@ -1373,7 +1446,7 @@ def test_pause_resume_and_stop_each_leave_a_line_in_the_log():
     ]
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_pause_all_pauses_active_workers_and_leaves_pending_ones_alone():
     scheduler = make_scheduler(concurrency=1, count=2)
     scheduler.schedule()
@@ -1387,7 +1460,7 @@ def test_pause_all_pauses_active_workers_and_leaves_pending_ones_alone():
     assert scheduler.idle_queue[0]["stopped"] is False
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_pause_all_twice_only_pauses_workers_once():
     scheduler = make_scheduler(concurrency=1, count=1)
     scheduler.schedule()
@@ -1399,7 +1472,7 @@ def test_pause_all_twice_only_pauses_workers_once():
     active_worker.pause_worker.assert_called_once()
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_paused_worker_moves_to_paused_queue_and_frees_its_token(tmp_path):
     scheduler = make_scheduler(concurrency=1, count=1)
     scheduler.schedule()
@@ -1419,7 +1492,7 @@ def test_paused_worker_moves_to_paused_queue_and_frees_its_token(tmp_path):
     assert paused_job["resume_link"] == resume_link
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_scheduler_paused_signal_waits_for_the_last_active_worker():
     scheduler = make_scheduler(concurrency=2, count=2)
     scheduler.schedule()
@@ -1435,7 +1508,7 @@ def test_scheduler_paused_signal_waits_for_the_last_active_worker():
     assert paused_events == [True]
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_pausing_does_not_dispatch_pending_jobs_or_announce_finished():
     scheduler = make_scheduler(concurrency=1, count=2)
     scheduler.schedule()
@@ -1453,7 +1526,7 @@ def test_pausing_does_not_dispatch_pending_jobs_or_announce_finished():
     assert finished_events == []
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_resume_all_redispatches_paused_jobs_with_a_fresh_worker_and_their_resume_link(tmp_path):
     scheduler = make_scheduler(concurrency=1, count=2)
     scheduler.schedule()
@@ -1474,7 +1547,7 @@ def test_resume_all_redispatches_paused_jobs_with_a_fresh_worker_and_their_resum
     assert scheduler.paused_queue == []
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_resume_all_lets_the_rest_of_the_queue_flow_again():
     scheduler = make_scheduler(concurrency=1, count=2)
     scheduler.schedule()
@@ -1491,7 +1564,7 @@ def test_resume_all_lets_the_rest_of_the_queue_flow_again():
     assert finished_events == [True]
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_resume_all_is_a_noop_when_nothing_is_paused():
     scheduler = make_scheduler(concurrency=1, count=2)
     scheduler.schedule()
@@ -1503,7 +1576,7 @@ def test_resume_all_is_a_noop_when_nothing_is_paused():
     assert scheduler.active_queue[0]["worker"] is worker  # not rebuilt out from under the running download
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_stop_all_while_paused_reports_everything_stopped_and_deletes_part_files(tmp_path):
     scheduler = make_scheduler(concurrency=1, count=2)
     scheduler.schedule()
@@ -1529,7 +1602,7 @@ def test_stop_all_while_paused_reports_everything_stopped_and_deletes_part_files
     assert finished_events == []
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_stop_all_while_paused_survives_a_job_paused_between_files():
     # A pause that lands between two files has no .part file to point at, so
     # the resume link comes back empty. Stop shouldn't trip over the missing key.
@@ -1546,7 +1619,7 @@ def test_stop_all_while_paused_survives_a_job_paused_between_files():
     assert stopped_events == [True]
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_stop_all_while_paused_tolerates_a_part_file_that_already_vanished(tmp_path):
     scheduler = make_scheduler(concurrency=1, count=1)
     scheduler.schedule()
@@ -1575,7 +1648,7 @@ def test_stop_while_paused_deletes_the_part_file_a_real_worker_left_behind(mock_
         make_checksum_response("irrelevant"),
         make_streamed_response([b"a" * 400, b"b" * 600]),
     ]
-    thread = download_queue.DownloadWorkerThread(111)
+    thread = make_worker()
     thread.update_progress = lambda: thread.pause_worker()
     events = Watcher(thread)
     thread.run()
@@ -1583,7 +1656,8 @@ def test_stop_while_paused_deletes_the_part_file_a_real_worker_left_behind(mock_
     part_path = game_dir / "setup_fake_game.exe.part"
     assert part_path.exists()
 
-    with patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker):
+    with patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker), \
+            patch("gogstash.download_queue.generate_download_list", canned_download_list):
         scheduler = make_scheduler(concurrency=1, count=1)
         scheduler.schedule()
         scheduler.pause_all()
@@ -1594,7 +1668,7 @@ def test_stop_while_paused_deletes_the_part_file_a_real_worker_left_behind(mock_
     assert not part_path.exists()
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_enqueue_ignores_a_row_that_is_already_waiting():
     # Double-clicking a game twice shouldn't mean downloading that shit
     # twice.
@@ -1605,7 +1679,7 @@ def test_enqueue_ignores_a_row_that_is_already_waiting():
     assert [(j["row_idx"], j["product_id"]) for j in scheduler.idle_queue] == [(0, 7)]
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_enqueue_on_an_idle_scheduler_just_waits_for_start():
     # Adding a game is not clicking Start. And an idle scheduler yelling
     # "finished!" every time you add a row would be some unhinged shit.
@@ -1620,7 +1694,7 @@ def test_enqueue_on_an_idle_scheduler_just_waits_for_start():
     assert finished_events == []
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_enqueue_mid_run_grabs_a_free_slot_right_away():
     scheduler = make_scheduler(concurrency=2, count=1)
     scheduler.schedule()
@@ -1631,7 +1705,7 @@ def test_enqueue_mid_run_grabs_a_free_slot_right_away():
     assert scheduler.idle_queue == []
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_enqueue_mid_run_waits_its_turn_when_every_slot_is_busy():
     scheduler = make_scheduler(concurrency=1, count=1)
     scheduler.schedule()
@@ -1644,7 +1718,7 @@ def test_enqueue_mid_run_waits_its_turn_when_every_slot_is_busy():
     assert [j["row_idx"] for j in scheduler.active_queue] == [1]
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_enqueue_while_pausing_does_not_sneak_a_new_download_in():
     # Pause was clicked and the active worker is still packing its shit up.
     # A game added right then doesn't get to cut the line, it waits for
@@ -1669,7 +1743,7 @@ def test_set_concurrency_refuses_zero():
     assert scheduler.tokens == 1
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_set_concurrency_raised_mid_run_fills_the_new_slots_on_the_next_schedule():
     scheduler = make_scheduler(concurrency=1, count=3)
     scheduler.schedule()
@@ -1683,7 +1757,7 @@ def test_set_concurrency_raised_mid_run_fills_the_new_slots_on_the_next_schedule
     assert scheduler.tokens == 1
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_set_concurrency_lowered_mid_run_lets_the_extra_workers_drain_first():
     # Nobody gets jacked for being over the new limit, but nobody new gets
     # to start either until we're actually back under the damn thing.
@@ -1704,7 +1778,7 @@ def test_set_concurrency_lowered_mid_run_lets_the_extra_workers_drain_first():
     assert scheduler.tokens == 0
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_a_stop_does_not_haunt_the_next_run_on_the_same_scheduler():
     # Regression: _stopped_flag never got cleared, so one Cancel turned every
     # later run's "finished" into "stopped". One click and the scheduler held
@@ -1725,7 +1799,7 @@ def test_a_stop_does_not_haunt_the_next_run_on_the_same_scheduler():
     assert stopped_events == []
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_reap_waits_for_the_thread_to_actually_die_before_dropping_it():
     # Regression: _reap binned the only reference to a worker that had sent
     # its last signal but hadn't finished unwinding run() yet. Qt saw a
@@ -1747,17 +1821,273 @@ def test_reap_waits_for_the_thread_to_actually_die_before_dropping_it():
         assert getattr(worker, "waited", False), f"{signal} dropped the worker without waiting"
 
 
-@patch("gogstash.download_queue.DownloadWorkerThread", FakeWorker)
+@with_fake_workers
 def test_game_started_announces_the_row_not_the_product_id():
     # Regression: it emitted the product id, so the window went looking for
     # row 1207658924 and found a None instead of a dot to paint blue.
     # make_scheduler uses idx == product_id, which would hide exactly this.
-    scheduler = download_queue.DownloadScheduler(
-        [{"idx": 0, "product_id": 1207658924}, {"idx": 1, "product_id": 1207664663}], 2
-    )
+    scheduler = download_queue.DownloadScheduler(2)
+    scheduler.enqueue({"idx": 0, "product_id": 1207658924})
+    scheduler.enqueue({"idx": 1, "product_id": 1207664663})
     started = []
     scheduler.game_started.connect(started.append)
 
     scheduler.schedule()
 
     assert started == [0, 1]
+
+
+# --- skipping what's already on disk ---
+
+def _record_file1(tmp_path, db_size=1000, downlink="https://example.com/file1"):
+    settings.update_setting("download_path", str(tmp_path))
+    game_dir = tmp_path / "fake-game"
+    installer = game_dir / "installer_windows_en" / "setup_fake_game.exe"
+    installer.parent.mkdir(parents=True)
+    installer.write_bytes(b"x" * 10)
+    manifest.add_file(game_dir, installer, category="installers", downlink=downlink, db_size=db_size,
+                      checksum="abc", timestamp=1.0)
+    return installer
+
+
+def test_download_list_leaves_out_a_file_already_on_disk(tmp_path):
+    _record_file1(tmp_path)
+
+    result = download_queue.generate_download_list((111,))
+
+    assert by_file(result, "file1") is None
+    assert by_file(result, "patch1") is not None  # never downloaded, still wanted
+
+
+def test_download_list_keeps_a_file_whose_listing_size_changed(tmp_path):
+    # Same downlink slot, new size on GOG's side: that's an update, go get it.
+    _record_file1(tmp_path, db_size=999)
+
+    assert by_file(download_queue.generate_download_list((111,)), "file1") is not None
+
+
+def test_download_list_keeps_a_file_the_user_deleted(tmp_path):
+    _record_file1(tmp_path).unlink()
+
+    assert by_file(download_queue.generate_download_list((111,)), "file1") is not None
+
+
+def test_download_list_keeps_a_file_from_a_manifest_that_predates_downlinks(tmp_path):
+    # The worker will recognise it and skip it, and backfill the entry on the way.
+    _record_file1(tmp_path, downlink="", db_size=-1)
+
+    assert by_file(download_queue.generate_download_list((111,)), "file1") is not None
+
+
+def test_download_list_reads_each_games_manifest_once_not_once_per_file(tmp_path):
+    settings.update_setting("download_path", str(tmp_path))
+
+    with patch("gogstash.manifest.read_manifest", wraps=manifest.read_manifest) as spy:
+        result = download_queue.generate_download_list((111,))
+
+    assert len(result) == 2  # installer + patch, so a per-file read would show up as 2
+    assert spy.call_count == 1
+
+
+def test_worker_knows_its_total_before_it_ever_runs():
+    # Regression: the total used to be set inside run(), so a job dispatched a
+    # moment ago counted as 0 bytes to the free-space check until its thread
+    # got around to it. A whole game's worth of blind spot.
+    files = canned_download_list((111,)) * 3
+
+    assert make_worker(file_queue=files).total_size == 3
+
+
+def test_worker_built_without_a_file_list_is_just_empty():
+    assert download_queue.DownloadWorkerThread(111).total_size == 0
+
+
+# --- up-to-date games and enqueue sizes ---
+
+@with_fake_workers
+def test_enqueue_reports_how_much_the_game_will_download():
+    scheduler = download_queue.DownloadScheduler()
+
+    with patch("gogstash.download_queue.generate_download_list", lambda ids: canned_download_list(ids) * 3):
+        assert scheduler.enqueue({"idx": 0, "product_id": 7}) == 3
+
+
+@with_fake_workers
+def test_enqueue_reports_nothing_for_a_row_that_is_already_waiting():
+    scheduler = download_queue.DownloadScheduler()
+    scheduler.enqueue({"idx": 0, "product_id": 7})
+
+    assert scheduler.enqueue({"idx": 0, "product_id": 7}) == 0
+
+
+@with_fake_workers
+def test_game_with_nothing_left_to_download_succeeds_without_a_worker():
+    # Regression: an up-to-date game got a worker anyway, which took one look
+    # at its empty list and reported "No files to download" as a failure.
+    scheduler = download_queue.DownloadScheduler()
+    with patch("gogstash.download_queue.generate_download_list", lambda ids: []):
+        scheduler.enqueue({"idx": 0, "product_id": 7})
+    succeeded, finished_events = [], []
+    scheduler.game_succeeded.connect(succeeded.append)
+    scheduler.finished.connect(lambda: finished_events.append(True))
+
+    scheduler.schedule()
+
+    assert succeeded == [0]
+    assert scheduler.active_queue == []
+    assert scheduler.tokens == 1  # never took a slot, never has to give one back
+    assert finished_events == [True]
+
+
+# --- free space ---
+
+def _disk_with(free):
+    return patch("gogstash.download_queue.shutil.disk_usage", return_value=MagicMock(free=free))
+
+
+def _low_space_events(scheduler):
+    events = []
+    scheduler.low_disk_space.connect(lambda required, free: events.append((required, free)))
+    return events
+
+
+@with_fake_workers
+def test_schedule_holds_everything_back_when_the_queue_wont_fit():
+    scheduler = make_scheduler(concurrency=2, count=2)
+    events = _low_space_events(scheduler)
+
+    with _disk_with(free=1):
+        scheduler.schedule()
+
+    assert events == [(2, 1)]  # two 1-byte games, one byte of disk
+    assert scheduler.active_queue == []
+    assert [j["row_idx"] for j in scheduler.idle_queue] == [0, 1]
+
+
+@with_fake_workers
+def test_schedule_keeps_a_little_headroom_instead_of_filling_the_disk_to_the_brim():
+    scheduler = make_scheduler(concurrency=1, count=1)
+    events = _low_space_events(scheduler)
+
+    with _disk_with(free=1):  # 1 byte needed, 1 byte free, 0.98 bytes usable
+        scheduler.schedule()
+
+    assert events == [(1, 1)]  # the real free space is reported, not the haircut
+
+
+@with_fake_workers
+def test_schedule_starts_the_queue_when_it_fits():
+    scheduler = make_scheduler(concurrency=2, count=2)
+    events = _low_space_events(scheduler)
+
+    with _disk_with(free=10**9):
+        scheduler.schedule()
+
+    assert events == []
+    assert [j["row_idx"] for j in scheduler.active_queue] == [0, 1]
+
+
+@with_fake_workers
+def test_free_space_check_counts_what_active_downloads_still_need():
+    scheduler = make_scheduler(concurrency=1, count=1)
+    with _disk_with(free=10**9):
+        scheduler.schedule()
+    worker = scheduler.active_queue[0]["worker"]
+    worker.total_size, worker.fetched_size = 100, 40
+    events = _low_space_events(scheduler)
+
+    with _disk_with(free=50), patch("gogstash.download_queue.generate_download_list", lambda ids: []):
+        scheduler.enqueue({"idx": 1, "product_id": 1})
+
+    assert events == [(60, 50)]
+
+
+@with_fake_workers
+def test_free_space_check_ignores_jobs_that_were_already_stopped():
+    scheduler = make_scheduler(concurrency=1, count=3)
+    scheduler.idle_queue[1]["stopped"] = True
+    scheduler.idle_queue[2]["stopped"] = True
+
+    with _disk_with(free=2):
+        assert scheduler._free_check().required == 1
+
+
+@with_fake_workers
+def test_stop_all_on_a_full_disk_still_winds_everything_down():
+    # Regression: the free-space check ran before stopped jobs were reported,
+    # so on a full disk Stop failed the check and returned early, and the
+    # window sat on "stopping" forever.
+    scheduler = make_scheduler(concurrency=1, count=2)
+    with _disk_with(free=10**9):
+        scheduler.schedule()
+    active_worker = scheduler.active_queue[0]["worker"]
+    stopped_rows, stopped_events = [], []
+    scheduler.game_stopped.connect(stopped_rows.append)
+    scheduler.stopped.connect(lambda: stopped_events.append(True))
+    events = _low_space_events(scheduler)
+
+    with _disk_with(free=0):
+        scheduler.stop_all()
+        active_worker.stopped.emit()
+
+    assert stopped_rows == [0, 1]
+    assert stopped_events == [True]
+    assert events == []
+
+
+@with_fake_workers
+def test_pause_on_a_full_disk_still_announces_paused():
+    scheduler = make_scheduler(concurrency=1, count=2)
+    with _disk_with(free=10**9):
+        scheduler.schedule()
+    job = scheduler.active_queue[0]
+    paused_events = []
+    scheduler.paused.connect(lambda: paused_events.append(True))
+
+    with _disk_with(free=0):
+        scheduler.pause_all()
+        _pause_active_worker(job)
+
+    assert paused_events == [True]
+
+
+@with_fake_workers
+def test_turning_the_free_space_check_off_lets_the_queue_run_anyway():
+    # The "download anyway" escape hatch for when the user knows better.
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.free_space_check = False
+    events = _low_space_events(scheduler)
+
+    with _disk_with(free=0):
+        scheduler.schedule()
+
+    assert events == []
+    assert [j["row_idx"] for j in scheduler.active_queue] == [0]
+
+
+@with_fake_workers
+def test_free_space_check_fails_safe_when_the_download_folder_cant_be_made(tmp_path):
+    settings.update_setting("download_path", str(tmp_path / "locked"))  # settings file exists before mkdir is sabotaged
+    scheduler = make_scheduler(concurrency=1, count=1)
+    events = _low_space_events(scheduler)
+
+    with patch("pathlib.Path.mkdir", side_effect=PermissionError("nope")):
+        scheduler.schedule()
+
+    assert events == [(1, 0)]
+    assert scheduler.active_queue == []
+
+
+@with_fake_workers
+def test_free_space_check_creates_a_download_folder_that_isnt_there_yet(tmp_path):
+    # Regression: a fresh install's ~/Downloads/GogStash doesn't exist until
+    # something downloads into it, and disk_usage() on a missing folder is a
+    # FileNotFoundError, not a number.
+    download_dir = tmp_path / "not" / "there" / "yet"
+    settings.update_setting("download_path", str(download_dir))
+    scheduler = make_scheduler(concurrency=1, count=1)
+
+    scheduler.schedule()
+
+    assert download_dir.is_dir()
+    assert [j["row_idx"] for j in scheduler.active_queue] == [0]

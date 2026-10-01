@@ -2,7 +2,9 @@
 
 Each game directory holds a hidden JSON file (``.gogstash.manifest``)
 keyed by file path relative to the game directory. Every entry records
-the file's category, size, md5 checksum and fetch time.
+the file's category, downlink, size on disk, size listed by GOG, md5
+checksum and fetch time. Entries written by older versions have no
+downlink or listed size.
 """
 
 import sys
@@ -31,7 +33,15 @@ def read_manifest(game_dir: Path) -> dict:
         return {'error': f'Missing: {str(manifest_file)}'}
     return manifest
 
-def add_file(game_dir: Path, filepath: Path, category: str, checksum: str, timestamp: float) -> None:
+def add_file(
+        game_dir: Path,
+        filepath: Path,
+        category: str,
+        downlink: str,
+        db_size: float,
+        checksum: str,
+        timestamp: float
+    ) -> None:
     """Record a downloaded file in the game's manifest.
 
     Creates the manifest if it does not exist. The manifest is written to
@@ -42,6 +52,10 @@ def add_file(game_dir: Path, filepath: Path, category: str, checksum: str, times
         game_dir (Path): The game's download directory.
         filepath (Path): Path to the downloaded file inside ``game_dir``.
         category (str): Download category, such as ``'installers'``.
+        downlink (str): GOG downlink of the file. Stays the same across
+            game updates, so it identifies the file before its CDN name is
+            known.
+        db_size (float): File size listed by GOG when it was downloaded.
         checksum (str): md5 hex digest. Empty for bonus content.
         timestamp (float): Fetch time as a Unix timestamp.
 
@@ -54,8 +68,10 @@ def add_file(game_dir: Path, filepath: Path, category: str, checksum: str, times
     if not filepath.exists():
         raise FileNotFoundError(f"No such file {filepath}")
     manifest[str(filepath.relative_to(game_dir))] = {
-        "category": category,
+        'category': category,
+        'downlink': downlink,
         'size': filepath.stat().st_size,
+        'db_size': db_size,
         'checksum': checksum,
         'fetched_at': timestamp
     }
@@ -119,3 +135,44 @@ def check_exist(game_dir: Path, filepath: Path, filesize: int) -> dict:
                 if filesize in file_sizes:
                     return manifest[name]
     return {}
+
+def check_exist_by_downlink(game_dir: Path, downlink: str, filesize: int, manifest_data: dict | None = None) -> dict:
+    """Find a manifest entry for a file that is already downloaded, by its downlink.
+
+    Unlike ``check_exist``, this works before the file's CDN name is known.
+    An entry matches when its downlink and listed size are the same and
+    the file is still on disk at its recorded size. A changed listed size
+    means GOG updated the file, so it does not match.
+
+    Args:
+        game_dir (Path): The game's download directory.
+        downlink (str): GOG downlink of the file.
+        filesize (int): File size listed by GOG.
+        manifest_data (dict | None): The game's manifest, if already read.
+            Read from ``game_dir`` when None.
+
+    Returns:
+        dict: The matching manifest entry, or an empty dict.
+    """
+    if manifest_data is not None:
+        manifest = manifest_data
+    else:
+        manifest = read_manifest(game_dir)
+    if 'error' in manifest:
+        return {}
+    found = False
+    for name, meta in manifest.items():
+        if meta.get('downlink', "") == downlink and meta.get('db_size', -1) == filesize:
+            found = True
+            break
+    if not found:
+        return {}
+    filepath = Path(game_dir) / name
+    if filepath.exists():
+        file_size = filepath.stat().st_size
+        if file_size == meta.get('size'):
+            return meta
+        else:
+            return {}
+    return {}
+

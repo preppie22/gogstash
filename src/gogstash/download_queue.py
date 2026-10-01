@@ -1,8 +1,8 @@
 """Download scheduling and per-game download workers.
 
-``DownloadScheduler`` owns the job queues, the concurrency limit,
-manifest updates and the download log. Each game is downloaded by its
-own ``DownloadWorkerThread``.
+``DownloadScheduler`` owns the job queues, the concurrency limit, the
+free space check, manifest updates and the download log. Each game is
+downloaded by its own ``DownloadWorkerThread``.
 """
 
 from gogstash import library_db
@@ -10,20 +10,37 @@ from gogstash import settings
 from gogstash import gog_api
 from gogstash import manifest
 from gogstash import paths
+
 import humanize
 from pathlib import Path
+import shutil
 
 import urllib
 import requests
 import hashlib
 import xml.etree.ElementTree as ET
 import time
+from typing import NamedTuple
 
 from PySide6.QtCore import (
     QThread,
     QObject,
     Signal
 )
+
+class FreeCheckReturn(NamedTuple):
+    """Result of the scheduler's free space check.
+
+    Attributes:
+        is_available (bool): The remaining downloads fit on the disk.
+        required (float): Bytes still to be downloaded, in bytes.
+        free (float): Free space in the download directory, in bytes.
+            0 if the directory could not be created.
+    """
+    is_available: bool
+    required: float
+    free: float
+
 class DownloadScheduler(QObject):
     """Runs queued game downloads with a limit on parallel downloads.
 
@@ -31,6 +48,9 @@ class DownloadScheduler(QObject):
     worker is running) and paused (holding resume information for a
     partly downloaded file). Each job carries the row index of its entry
     in the download window, and every per-game signal reports that index.
+
+    Before starting jobs, the scheduler checks that everything still to be
+    downloaded fits on the disk, and holds every job back if it does not.
 
     Attributes:
         game_succeeded (Signal(int)): A game finished downloading.
@@ -44,6 +64,9 @@ class DownloadScheduler(QObject):
         finished (Signal): All jobs have completed.
         stopped (Signal): All jobs have stopped after ``stop_all``.
         paused (Signal): All active jobs have paused after ``pause_all``.
+        low_disk_space (Signal(float, float)): The remaining downloads do
+            not fit on the disk, with the bytes required and the bytes
+            free. Emitted on every scheduling attempt until they fit.
     """
     game_succeeded = Signal(int)
     game_started = Signal(int)
@@ -54,16 +77,17 @@ class DownloadScheduler(QObject):
     finished = Signal()
     stopped = Signal()
     paused = Signal()
+    low_disk_space = Signal(float, float)
 
     _stopped_flag = False
     _paused_flag = False
 
-    def __init__(self, product_queue: list[dict] | None = None, concurrency: int = 1, parent=None):
+    def __init__(self, concurrency: int = 1, parent=None):
         """Create the scheduler.
 
+        Jobs are added with ``enqueue``.
+
         Args:
-            product_queue (list[dict] | None): Optional initial jobs, each with
-                ``idx`` (row index) and ``product_id``.
             concurrency (int): Maximum number of parallel downloads.
             parent (QObject): Optional parent object.
 
@@ -78,16 +102,17 @@ class DownloadScheduler(QObject):
         self.idle_queue = []
         self.active_queue = []
         self.paused_queue = []
-        if product_queue:
-            for product in product_queue:
-                queue_item = {
-                    'row_idx': product['idx'],
-                    'product_id': product['product_id'],
-                    'worker': None,
-                    'stopped': False,
-                    'resume_link': {}
-                }
-                self.idle_queue.append(queue_item)
+
+        self.__free_space_check = True
+
+    @property
+    def free_space_check(self):
+        """bool: Whether jobs are held back when they do not fit on the disk."""
+        return self.__free_space_check
+
+    @free_space_check.setter
+    def free_space_check(self, value: bool):
+        self.__free_space_check = value
 
     def set_concurrency(self, value):
         """Change the maximum number of parallel downloads.
@@ -107,28 +132,38 @@ class DownloadScheduler(QObject):
         self.tokens += diff
         self.max_tokens = value
 
-    def enqueue(self, product: dict):
+    def enqueue(self, product: dict) -> int:
         """Add a job to the idle queue.
 
-        A job for a row that is already waiting is ignored. If downloads are
-        running, the scheduler tries to start the job right away.
+        The game's download list is built here, without the files that are
+        already downloaded. A job for a row that is already waiting is
+        ignored. If downloads are running, the scheduler tries to start the
+        job right away.
 
         Args:
             product (dict): Job with ``idx`` (row index) and ``product_id``.
+
+        Returns:
+            int: Estimated bytes still to download for the game. 0 if the
+            row was already waiting.
         """
         for item in self.idle_queue:
             if item.get('row_idx') == product['idx']:
-                return
+                return 0
+        file_queue = generate_download_list((product['product_id'],))
         queue_item = {
             'row_idx': product['idx'],
             'product_id': product['product_id'],
             'worker': None,
+            'file_queue': file_queue,
             'stopped': False,
             'resume_link': {}
         }
         self.idle_queue.append(queue_item)
+        download_size = sum(file['size'] for file in file_queue)
         if self.active_queue:
             self.schedule()
+        return download_size
 
     def stop_all(self):
         """Stop all downloads.
@@ -174,22 +209,64 @@ class DownloadScheduler(QObject):
             self.idle_queue.append(self.paused_queue.pop())
         self.schedule()
 
+    def _free_check(self) -> FreeCheckReturn:
+        """Check whether the remaining downloads fit on the disk.
+
+        Counts every waiting job that is not stopped, plus the bytes that
+        active jobs have not downloaded yet. 2% of the free space is kept
+        in reserve. The download directory is created if it does not exist.
+
+        Returns:
+            FreeCheckReturn: Whether the downloads fit, the bytes required
+            and the bytes free.
+        """
+        dl_size = 0
+        for job in self.idle_queue:
+            if job['stopped']:
+                continue
+            for item in (job.get('file_queue') or []):
+                dl_size += item['size']
+        for job in self.active_queue:
+            remaining_size = job['worker'].total_size - job['worker'].fetched_size
+            dl_size += remaining_size
+        dl_path = Path(settings.read_setting('download_path'))
+        try:
+            dl_path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return FreeCheckReturn(False, dl_size, 0)
+        free_space = shutil.disk_usage(dl_path).free
+        if dl_size < free_space * 0.98:
+            return FreeCheckReturn(True, dl_size, free_space)
+        return FreeCheckReturn(False, dl_size, free_space)
+
+
     def schedule(self):
         """Start waiting jobs while the concurrency limit allows.
 
         Jobs start in row order. Jobs marked as stopped are reported through
-        ``game_stopped`` instead of starting. Emits ``finished``, ``stopped``
-        or ``paused`` when there is nothing left to run.
+        ``game_stopped`` instead of starting, and jobs with nothing left to
+        download are reported through ``game_succeeded`` without a worker.
+        If the free space check is on and the remaining downloads do not
+        fit, emits ``low_disk_space`` and starts nothing. Emits
+        ``finished``, ``stopped`` or ``paused`` when there is nothing left
+        to run.
         """
         self.idle_queue.sort(key=lambda x: x['row_idx'])
         if self._paused_flag:
             if not self.active_queue:
                 self.paused.emit()
             return
+        if self.free_space_check and not self._stopped_flag:
+            space_check = self._free_check()
+            if not space_check.is_available:
+                self.low_disk_space.emit(space_check.required, space_check.free)
+                return        
         while self.tokens > 0 and self.idle_queue:
             job = self.idle_queue.pop(0)
             if job['stopped']:
                 self.game_stopped.emit(job['row_idx'])
+            elif not job.get('file_queue'):
+                self.game_succeeded.emit(job['row_idx'])
             else:
                 self._dispatch(job)
         if not self.idle_queue and not self.active_queue:
@@ -205,7 +282,7 @@ class DownloadScheduler(QObject):
         Args:
             job (dict): The job to start.
         """
-        job['worker'] = DownloadWorkerThread(job['product_id'], job.get('resume_link'))
+        job['worker'] = DownloadWorkerThread(job['product_id'], job.get('file_queue'), job.get('resume_link'))
         job['worker'].succeeded.connect(lambda t=job: self._handle_success(t))
         job['worker'].failed.connect(lambda msg, t=job: self._handle_failure(t, msg))
         job['worker'].progress.connect(lambda fetched_size, total_size, t=job: self._report_progress(t, fetched_size, total_size))
@@ -234,7 +311,9 @@ class DownloadScheduler(QObject):
     def _handle_fetched(self, fetched_file: dict) -> None:
         """Record a file result in the manifest and the download log.
 
-        Skipped and failed files are logged but not added to the manifest.
+        Downloaded files are always recorded. Skipped files update their
+        existing entry, which fills in the downlink and listed size of
+        entries recorded by older versions. Failed files are only logged.
 
         Args:
             fetched_file (dict): File result from a worker's ``fetched``
@@ -242,14 +321,18 @@ class DownloadScheduler(QObject):
         """
         skipped = fetched_file.get('skipped', False)
         valid = fetched_file.get('size', -1) > -1
-        if valid and not skipped:
-            manifest.add_file(
-                game_dir=fetched_file.get('game_dir'),
-                filepath=fetched_file.get('filepath'),
-                category=fetched_file.get('category'),
-                checksum=fetched_file.get('checksum'),
-                timestamp=time.time()
-            )
+        if valid:
+            file_stats = manifest.stat_file(fetched_file.get('game_dir'), fetched_file.get('filepath'))
+            if not skipped or file_stats:
+                manifest.add_file(
+                    game_dir=fetched_file.get('game_dir'),
+                    filepath=fetched_file.get('filepath'),
+                    category=fetched_file.get('category'),
+                    downlink=fetched_file.get('downlink'),
+                    db_size=fetched_file.get('db_size', -1),
+                    checksum=fetched_file.get('checksum'),
+                    timestamp=time.time()
+                )
         _write_log_file(fetched_file)
 
     def _handle_success(self, job: dict) -> None:
@@ -328,9 +411,11 @@ class DownloadWorkerThread(QThread):
         fetched (Signal(dict)): A file was downloaded, skipped or failed.
         resume_link (str): Downlink of the file to resume, if any.
         product_id (int): GOG product ID of the game.
-        file_queue (list[dict]): Files to download, set when the thread
-            runs.
-        total_size (int): Total bytes to download.
+        file_queue (list[dict]): Files to download, from
+            ``generate_download_list``.
+        total_size (int): Total bytes to download. Known from the moment
+            the worker is created, and corrected as the real file sizes
+            arrive.
         fetched_size (int): Bytes downloaded so far.
     """
     succeeded = Signal()
@@ -344,11 +429,13 @@ class DownloadWorkerThread(QThread):
     _pause_flag = False
     _failed_flag = False
 
-    def __init__(self, product_id: int, resume_link: dict | None = None, parent=None):
+    def __init__(self, product_id: int, file_queue: list[dict] | None = None, resume_link: dict | None = None, parent=None):
         """Create the worker.
 
         Args:
             product_id (int): GOG product ID of the game.
+            file_queue (list[dict] | None): Files to download, from
+                ``generate_download_list``.
             resume_link (dict | None): Resume information from an earlier
                 pause, with the ``downlink`` of the file to resume.
             parent (QObject): Optional parent object.
@@ -356,9 +443,19 @@ class DownloadWorkerThread(QThread):
         super().__init__(parent)
         self.resume_link = resume_link.get('downlink', "") if resume_link else ""
         self.product_id = product_id
-        self.file_queue = None
-        self.total_size = 0
-        self.fetched_size = 0
+        self.file_queue = file_queue or []
+        self.__total_size = sum(file.get('size', 0) for file in self.file_queue)
+        self.__fetched_size = 0
+
+    @property
+    def total_size(self):
+        """int: Total bytes to download."""
+        return self.__total_size
+
+    @property
+    def fetched_size(self):
+        """int: Bytes downloaded so far."""
+        return self.__fetched_size
 
     def run(self):
         """Download every file in the game's download list.
@@ -369,7 +466,6 @@ class DownloadWorkerThread(QThread):
         failure or an unwritable directory, end the run with ``failed``.
         """
         try:
-            self.file_queue = generate_download_list((self.product_id,))
             if not self.file_queue:
                 self.failed.emit("No files to download")
                 return
@@ -378,7 +474,7 @@ class DownloadWorkerThread(QThread):
         except Exception as e:
             self.failed.emit(str(e))
             return
-        self.total_size = self.total_size + sum(file['size'] for file in self.file_queue)
+        
         for file in self.file_queue:
             try:
                 resolved = gog_api.resolve_downlink(file['downlink'])
@@ -400,7 +496,9 @@ class DownloadWorkerThread(QThread):
                     'game_dir': download_path,
                     'filepath': Path(file['file']), 
                     'category': file['category'],
+                    'downlink': file['downlink'],
                     'size': -1,
+                    'db_size': file['size'],
                     'checksum': "",
                     'error': str(e)
                 })
@@ -414,8 +512,10 @@ class DownloadWorkerThread(QThread):
                 self.fetched.emit({
                     'game_dir': download_path,
                     'filepath': Path(file['file']),
-                    'category': file['category'], 
+                    'category': file['category'],
+                    'downlink': file['downlink'], 
                     'size': -1,
+                    'db_size': file['size'],
                     'checksum': "",
                     'error': str(e)
                 })
@@ -434,63 +534,66 @@ class DownloadWorkerThread(QThread):
                             file_hash.update(chunk)
                         fetched_bytes = part_path.stat().st_size
                         header_params['Range'] = f"bytes={fetched_bytes}-"
-                        self.fetched_size += fetched_bytes
+                        self.__fetched_size += fetched_bytes
                         self.resume_link = ""
-                download_response = requests.get(cdn_link, headers=header_params, stream=True)
-                download_response.raise_for_status()
-                if download_response.status_code == 206:
-                    content_range = download_response.headers.get('Content-Range')
-                    if content_range:
-                        content_length = int(content_range.split('/')[-1])
+                # download_response = requests.get(cdn_link, headers=header_params, stream=True)
+                with requests.get(cdn_link, headers=header_params, stream=True) as download_response:
+                    download_response.raise_for_status()
+                    if download_response.status_code == 206:
+                        content_range = download_response.headers.get('Content-Range')
+                        if content_range:
+                            content_length = int(content_range.split('/')[-1])
+                        else:
+                            content_length = int(cl) if (cl:= download_response.headers.get('Content-Length')) else 0
+                            content_length += fetched_bytes
                     else:
                         content_length = int(cl) if (cl:= download_response.headers.get('Content-Length')) else 0
-                        content_length += fetched_bytes
-                else:
-                    content_length = int(cl) if (cl:= download_response.headers.get('Content-Length')) else 0
-                existing_metadata = manifest.check_exist(download_path, save_path, content_length)                
-                if existing_metadata:
-                    if (
-                        (existing_metadata['category'] != 'bonus_content' and checksum == existing_metadata['checksum']) or
-                        (existing_metadata['category'] == 'bonus_content' and content_length == existing_metadata['size'])
-                       ):
-                        self.fetched.emit({
-                            'game_dir': download_path,
-                            'filepath': save_path,
-                            'category': file['category'],
-                            'size': existing_metadata['size'],
-                            'checksum': existing_metadata['checksum'],
-                            'skipped': True
-                        })
-                        self.fetched_size = self.fetched_size + existing_metadata['size']
-                        self.update_progress()
-                        continue
-                self.total_size += (content_length - file['size'])
+                    existing_metadata = manifest.check_exist(download_path, save_path, content_length)                
+                    if existing_metadata:
+                        if (
+                            (existing_metadata['category'] != 'bonus_content' and checksum == existing_metadata['checksum']) or
+                            (existing_metadata['category'] == 'bonus_content' and content_length == existing_metadata['size'])
+                        ):
+                            self.fetched.emit({
+                                'game_dir': download_path,
+                                'filepath': save_path,
+                                'category': existing_metadata.get('category', ""),
+                                'downlink': file['downlink'],
+                                'size': existing_metadata.get('size', -1),
+                                'db_size': file['size'],
+                                'checksum': existing_metadata.get('checksum', ""),
+                                'skipped': True
+                            })
+                            self.__fetched_size = self.__fetched_size + existing_metadata['size']
+                            self.update_progress()
+                            continue
+                    self.__total_size += (content_length - file['size'])
 
-                if download_response.status_code == 206:
-                    file_mode = 'ab'
-                else:
-                    file_mode = 'wb'
-                    self.fetched_size -= fetched_bytes
-                    file_hash = hashlib.md5()
-                with open(part_path, file_mode) as fp:
-                    cleanup = False
-                    for chunk in download_response.iter_content(chunk_size=1024*1024):
-                        bytes_written = fp.write(chunk)
-                        current_size = fp.tell()
-                        self.fetched_size += bytes_written
-                        if file['directory'] != 'bonus_content':
-                            file_hash.update(chunk)
-                        self.update_progress()
-                        if current_size < content_length or content_length == 0:
-                            if self._stop_flag:
-                                cleanup = True
-                                break
-                            if self._pause_flag:
-                                self.paused.emit({
-                                    'partpath': part_path,
-                                    'downlink': file['downlink']
-                                })
-                                return
+                    if download_response.status_code == 206:
+                        file_mode = 'ab'
+                    else:
+                        file_mode = 'wb'
+                        self.__fetched_size -= fetched_bytes
+                        file_hash = hashlib.md5()
+                    with open(part_path, file_mode) as fp:
+                        cleanup = False
+                        for chunk in download_response.iter_content(chunk_size=1024*1024):
+                            bytes_written = fp.write(chunk)
+                            current_size = fp.tell()
+                            self.__fetched_size += bytes_written
+                            if file['directory'] != 'bonus_content':
+                                file_hash.update(chunk)
+                            self.update_progress()
+                            if current_size < content_length or content_length == 0:
+                                if self._stop_flag:
+                                    cleanup = True
+                                    break
+                                if self._pause_flag:
+                                    self.paused.emit({
+                                        'partpath': part_path,
+                                        'downlink': file['downlink']
+                                    })
+                                    return
                 if self._stop_flag and cleanup:
                     part_path.unlink()  
                     self.stopped.emit()
@@ -508,7 +611,9 @@ class DownloadWorkerThread(QThread):
                         'game_dir': download_path,
                         'filepath': save_path,
                         'category': file['category'],
+                        'downlink': file['downlink'],
                         'size': save_path.stat().st_size,
+                        'db_size': file['size'],
                         'checksum': checksum
                     })
                 else:
@@ -518,7 +623,9 @@ class DownloadWorkerThread(QThread):
                         'game_dir': download_path,
                         'filepath': save_path,
                         'category': file['category'],
-                        'size': -1, 
+                        'downlink': file['downlink'],
+                        'size': -1,
+                        'db_size': file['size'],
                         'checksum': "",
                         'error': f"Checksum mismatch | Expected size: {file['size']} | Got size: {actual_size}"
                     })
@@ -534,7 +641,9 @@ class DownloadWorkerThread(QThread):
                     'game_dir': download_path,
                     'filepath': save_path,
                     'category': file['category'],
+                    'downlink': file['downlink'],
                     'size': -1,
+                    'db_size': file['size'],
                     'checksum': "",
                     'error': f"{str(e)} | Expected size: {file['size']} | Got size: {_safe_size(part_path)}"
                 })
@@ -545,7 +654,9 @@ class DownloadWorkerThread(QThread):
                     'game_dir': download_path,
                     'filepath': save_path,
                     'category': file['category'],
+                    'downlink': file['downlink'],
                     'size': -1,
+                    'db_size': file['size'],
                     'checksum': "",
                     'error': f"{str(e)} | Expected size: {file['size']} | Got size: {_safe_size(part_path)}"
                 })
@@ -567,7 +678,7 @@ class DownloadWorkerThread(QThread):
 
     def update_progress(self):
         """Emit the current progress."""
-        self.progress.emit(self.fetched_size, self.total_size)
+        self.progress.emit(self.__fetched_size, self.__total_size)
 
 def _safe_size(path: Path) -> int:
     """Return a file's size, or 0 if it cannot be read.
@@ -630,19 +741,6 @@ def _write_log_msg(message: str = "") -> None:
     except Exception as e:
         print(f"Logging error: {e}\n {log_entry}")
 
-def estimate_download_size(product_id: int) -> int:
-    """Estimate a game's download size under the current settings.
-
-    Based on cached metadata, so the actual size may differ.
-
-    Args:
-        product_id (int): GOG product ID of the game.
-
-    Returns:
-        int: Estimated size in bytes.
-    """
-    return sum(file['size'] for file in generate_download_list((product_id,)))
-
 def generate_download_list(product_ids: tuple[int]) -> list[dict] | None:
     """Build the list of files to download under the current settings.
 
@@ -655,6 +753,10 @@ def generate_download_list(product_ids: tuple[int]) -> list[dict] | None:
     of the chosen languages for an OS, that OS falls back to English.
     Files with no language, such as bonus content, are kept.
 
+    Files already downloaded are left out: those whose manifest entry has
+    the same downlink and listed size, and whose file is still on disk
+    at its recorded size. Each game's manifest is read once.
+
     Args:
         product_ids (tuple[int]): GOG product IDs.
 
@@ -666,14 +768,27 @@ def generate_download_list(product_ids: tuple[int]) -> list[dict] | None:
     if not product_ids:
         return
     downloadables = library_db.get_downloadables(product_ids, filtered=True)
-    return [{
-            'directory': item['group_id'] if item['category'] == 'installers' else item['category'],
-            'category': item['category'],
-            'file': item['file_id'],
-            'os': item['os'],
-            'size': item['file_size'],
-            'downlink': item['downlink'],
-    } for item in downloadables]
+    products = library_db.get_product_listing(product_ids)
+    slugs = {p['product_id']: p['slug'] for p in products}
+    manifest_cache = {}
+    game_dirs = {}
+    for pid in product_ids:
+        game_dirs[pid] = Path(settings.read_setting('download_path')) / slugs[pid]
+        manifest_cache[pid] = manifest.read_manifest(game_dirs[pid])
+
+    download_list = []
+    for item in downloadables:
+        if manifest.check_exist_by_downlink(game_dirs[item['product_id']], item['downlink'], item['file_size'], manifest_cache[item['product_id']]):
+            continue
+        download_list.append ({
+                'directory': item['group_id'] if item['category'] == 'installers' else item['category'],
+                'category': item['category'],
+                'file': item['file_id'],
+                'os': item['os'],
+                'size': item['file_size'],
+                'downlink': item['downlink'],
+        })
+    return download_list
 
 if __name__ == "__main__":
     file_list = generate_download_list((1929434313,))
