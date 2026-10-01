@@ -24,6 +24,7 @@ suffix until the first stable release), not SemVer.
 - Linux: logging in no longer crashes on newer distros such as openSUSE Tumbleweed and Kubuntu 25.10 (#1)
 - The About Qt dialog no longer opens behind the About box, where it couldn't be dismissed (#9)
 - Stopping downloads while they were paused no longer leaves the Start button greyed out
+- Cancelling downloads no longer leaves empty folders or leftover partial files behind in the game's download folder
 
 ## [2026.9.26-beta2] - 2026-09-26
 

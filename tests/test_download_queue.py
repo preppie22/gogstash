@@ -794,6 +794,59 @@ def test_download_worker_stop_mid_chunk_deletes_part_file_and_emits_stopped(
     assert not (game_dir / "setup_fake_game.exe").exists()
 
 
+def _stop_after_first_chunk(mock_get):
+    mock_get.side_effect = [
+        make_checksum_response("irrelevant"),
+        make_streamed_response([b"a" * 400, b"b" * 600]),
+    ]
+    thread = make_worker()
+    thread.update_progress = lambda: thread.stop_worker()
+    return thread
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_stopping_a_brand_new_game_leaves_no_empty_folders_behind(mock_resolve, mock_get, tmp_path):
+    # Regression: cancelling a game's very first download left
+    # fake-game/installer_windows_en/ sitting there, empty, forever, like a
+    # tombstone for a game you changed your mind about.
+    single_installer_setup(mock_resolve, tmp_path)
+    thread = _stop_after_first_chunk(mock_get)
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert events.stopped == 1
+    assert not (tmp_path / "fake-game").exists()
+    assert tmp_path.exists()  # tidy the game's folder, not the whole download folder
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_stopping_a_game_with_earlier_downloads_only_tidies_what_is_empty(mock_resolve, mock_get, tmp_path):
+    # Regression: an unconditional rmdir() on a game folder that already held
+    # a manifest blew up with "Directory not empty", and the stop came back
+    # as a red "Failed" row instead of a quiet "Queued" one.
+    game_dir = single_installer_setup(mock_resolve, tmp_path).parent
+    (game_dir / "extras").mkdir(parents=True)
+    (game_dir / ".gogstash.manifest").write_text("{}")
+    (game_dir / "patches").mkdir()
+    (game_dir / "patches" / "patch_1.exe").write_bytes(b"finished, keep me")
+    (game_dir / "patches" / "patch_2.exe.part").write_bytes(b"left over from a failed run")
+    thread = _stop_after_first_chunk(mock_get)
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert events.stopped == 1
+    assert events.failed == []
+    assert (game_dir / ".gogstash.manifest").exists()
+    assert (game_dir / "patches" / "patch_1.exe").read_bytes() == b"finished, keep me"
+    assert not (game_dir / "patches" / "patch_2.exe.part").exists()
+    assert not (game_dir / "installer_windows_en").exists()
+    assert not (game_dir / "extras").exists()
+
+
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
 def test_download_worker_stop_after_full_download_still_saves_the_file(
@@ -1581,7 +1634,8 @@ def test_stop_all_while_paused_reports_everything_stopped_and_deletes_part_files
     scheduler = make_scheduler(concurrency=1, count=2)
     scheduler.schedule()
     job = scheduler.active_queue[0]
-    part_path = tmp_path / "game.exe.part"
+    part_path = tmp_path / "game" / "installer" / "game.exe.part"
+    part_path.parent.mkdir(parents=True)
     part_path.write_bytes(b"half a game")
     stopped_rows, stopped_events, finished_events = [], [], []
     scheduler.game_stopped.connect(lambda row_idx: stopped_rows.append(row_idx))
@@ -1597,6 +1651,7 @@ def test_stop_all_while_paused_reports_everything_stopped_and_deletes_part_files
     # sitting there forever waiting on a paused scheduler that will never talk again.
     assert sorted(stopped_rows) == [0, 1]
     assert not part_path.exists()
+    assert not (tmp_path / "game").exists()  # and the folders it was sitting in
     assert scheduler.paused_queue == []
     assert stopped_events == [True]
     assert finished_events == []
@@ -1627,7 +1682,7 @@ def test_stop_all_while_paused_tolerates_a_part_file_that_already_vanished(tmp_p
     stopped_events = []
     scheduler.stopped.connect(lambda: stopped_events.append(True))
     scheduler.pause_all()
-    _pause_active_worker(job, {"partpath": tmp_path / "ghost.part", "downlink": "x"})
+    _pause_active_worker(job, {"partpath": tmp_path / "game" / "installer" / "ghost.part", "downlink": "x"})
 
     scheduler.stop_all()
 
@@ -1666,6 +1721,7 @@ def test_stop_while_paused_deletes_the_part_file_a_real_worker_left_behind(mock_
         scheduler.stop_all()
 
     assert not part_path.exists()
+    assert not (tmp_path / "fake-game").exists()  # nor the folders it was sitting in
 
 
 @with_fake_workers

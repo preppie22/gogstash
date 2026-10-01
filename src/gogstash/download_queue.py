@@ -170,7 +170,8 @@ class DownloadScheduler(QObject):
 
         Active workers are asked to stop, waiting jobs are marked as stopped,
         and paused jobs are stopped right away with their partial files
-        deleted. Emits ``stopped`` once nothing is left running.
+        deleted and empty folders removed. Emits ``stopped`` once nothing
+        is left running.
         """
         _write_log_msg("Downloads stopped")
         self._stopped_flag = True
@@ -183,7 +184,12 @@ class DownloadScheduler(QObject):
             job = self.paused_queue.pop()
             self.game_stopped.emit(job['row_idx'])
             part_path : Path = job['resume_link'].get('partpath', None)
-            if part_path: part_path.unlink(missing_ok=True)
+            if part_path: 
+                try:
+                    part_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                _cleanup_dirs(part_path.parent.parent)
         self.schedule()
             
     def pause_all(self):
@@ -601,7 +607,11 @@ class DownloadWorkerThread(QThread):
                                     })
                                     return
                 if self._stop_flag and cleanup:
-                    part_path.unlink()  
+                    try:
+                        part_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    _cleanup_dirs(download_path)
                     self.stopped.emit()
                     return
                 verified = False
@@ -675,7 +685,7 @@ class DownloadWorkerThread(QThread):
                 self.failed.emit("Downloads completed with failures")
 
     def stop_worker(self):
-        """Ask the worker to stop and delete the partial file."""
+        """Ask the worker to stop, delete the partial file and remove empty folders."""
         self._stop_flag = True
 
     def pause_worker(self):
@@ -746,6 +756,29 @@ def _write_log_msg(message: str = "") -> None:
             wp.write(log_entry)
     except Exception as e:
         print(f"Logging error: {e}\n {log_entry}")
+
+def _cleanup_dirs(game_dir: Path) -> None:
+    """Tidy up a game's download directory after a download is stopped.
+
+    Deletes leftover ``.part`` files and removes every directory that ends
+    up empty, including ``game_dir`` itself. Finished files and the
+    manifest are never touched. Best effort: files or directories that
+    cannot be removed are left as they are.
+
+    Args:
+        game_dir (Path): The game's download directory.
+    """
+    for root, dirs, files in game_dir.walk(top_down=False):
+        for file in files:
+            if file.endswith('.part'):
+                try:
+                    (root / file).unlink(missing_ok=True)
+                except OSError:
+                    continue
+        try:
+            root.rmdir()
+        except OSError:
+            continue
 
 def generate_download_list(product_ids: tuple[int]) -> list[dict] | None:
     """Build the list of files to download under the current settings.
