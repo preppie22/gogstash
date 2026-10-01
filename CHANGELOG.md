@@ -10,6 +10,7 @@ suffix until the first stable release), not SemVer.
 
 ### Added
 - Pick which languages to download in Settings. Games that don't come in any of your languages fall back to English
+- GogStash warns you before downloading more than fits on the disk, and lets you stop or download anyway
 
 ### Changed
 - The status indicators in the download queue now have a different shape for each state (ring, triangle, check mark, X, pause bars) and colors that are easier to tell apart, including for color blindness (#22)
@@ -21,6 +22,7 @@ suffix until the first stable release), not SemVer.
 - Game sizes in the library now match what will actually be downloaded, following your platform, language, patch and bonus content settings (#5)
 - Linux: logging in no longer crashes on newer distros such as openSUSE Tumbleweed and Kubuntu 25.10 (#1)
 - The About Qt dialog no longer opens behind the About box, where it couldn't be dismissed (#9)
+- Stopping downloads while they were paused no longer leaves the Start button greyed out
 
 ## [2026.9.26-beta2] - 2026-09-26
 

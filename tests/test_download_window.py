@@ -1,9 +1,9 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from gogstash import library_db
 from gogstash.download_queue import DownloadScheduler
@@ -776,3 +776,168 @@ def test_the_leftover_ready_timer_doesnt_stomp_on_a_new_run(mock_estimate, mock_
     window._reset_status()  # the timer firing late
 
     assert window.downloads_status.text() == "Downloading..."
+
+
+# --- low disk space ---
+
+class _IdleWorker(QObject):
+    """A worker that never works. Enough for the window's scheduler to dispatch
+    to without a real QThread wandering off to download from GOG."""
+
+    succeeded = Signal()
+    failed = Signal(str)
+    progress = Signal(float, float)
+    stopped = Signal()
+    paused = Signal(dict)
+    fetched = Signal(dict)
+
+    def __init__(self, product_id, file_queue=None, resume_link=None):
+        super().__init__()
+        self.total_size = sum(f["size"] for f in file_queue or [])
+        self.fetched_size = 0
+
+    def start(self):
+        pass
+
+    def wait(self):
+        return True
+
+    def stop_worker(self):
+        self.stopped.emit()
+
+    def pause_worker(self):
+        self.paused.emit({})
+
+
+def _full_disk():
+    return patch("gogstash.download_queue.shutil.disk_usage", return_value=MagicMock(free=0))
+
+
+def _deliver_queued_signals():
+    # low_disk_space is a queued connection, so its slot only runs once the
+    # event loop gets a turn. In a test, we are the event loop.
+    QApplication.processEvents()
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_low_disk_space_waits_for_start_to_finish_before_asking(mock_estimate):
+    # Regression: as a direct connection, the dialog popped up from inside
+    # start_downloads(), saw the window still IDLE, and "No" did nothing
+    # because stop_downloads() ignores an idle window. Then start carried on
+    # and left a window claiming to download with every button greyed out.
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+    seen_states = []
+
+    def answer(*_):
+        seen_states.append(window.current_state)
+        return NO
+
+    with _full_disk(), patch("gogstash.download_window.QMessageBox.exec", side_effect=answer):
+        window.start_downloads()
+        assert seen_states == []  # not from inside start, thanks
+        _deliver_queued_signals()
+
+    assert seen_states == [DownloadState.RUNNING]
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_saying_no_to_a_full_disk_stops_everything_and_goes_back_to_idle(mock_estimate):
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+
+    with _full_disk(), _answer_dialog(NO):
+        window.start_downloads()
+        _deliver_queued_signals()
+
+    assert window.current_state == DownloadState.IDLE
+    assert window.start_button.isEnabled() is True
+    assert window.downloads_status.text() == "Downloads stopped"
+    assert window.game_queue_table.rowCount() == 1  # stopping isn't clearing
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_saying_yes_to_a_full_disk_downloads_anyway_with_the_buttons_still_working(mock_estimate):
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+
+    with _full_disk(), _answer_dialog(YES):
+        window.start_downloads()
+        _deliver_queued_signals()
+
+    assert window.scheduler.free_space_check is False
+    assert [j["row_idx"] for j in window.scheduler.active_queue] == [0]
+    assert window.current_state == DownloadState.RUNNING
+    assert window.start_button.isEnabled() is True  # Pause still works
+    assert window.clear_queue_button.isEnabled() is True
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_a_full_disk_only_asks_once_no_matter_how_often_the_scheduler_complains(mock_estimate):
+    # The scheduler re-checks after every finished game, and dialog.exec()
+    # keeps delivering queued signals while it waits for an answer. Without
+    # the guard, the user would be stacking dialogs like dinner plates.
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+
+    def answer_while_the_scheduler_keeps_yelling(*_):
+        window.scheduler.low_disk_space.emit(1000, 0)
+        window.scheduler.low_disk_space.emit(1000, 0)
+        _deliver_queued_signals()
+        return YES
+
+    with _full_disk(), patch("gogstash.download_window.QMessageBox.exec",
+                             side_effect=answer_while_the_scheduler_keeps_yelling) as mock_exec:
+        window.start_downloads()
+        _deliver_queued_signals()
+
+    assert mock_exec.call_count == 1
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_the_next_run_gets_its_own_free_space_check(mock_estimate):
+    # "Download anyway" is a one-run pass, not a lifetime membership.
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+    with _full_disk(), _answer_dialog(YES):
+        window.start_downloads()
+        _deliver_queued_signals()
+    window.scheduler.active_queue[0]["worker"].succeeded.emit()  # run finishes, window resets
+
+    with _full_disk(), _answer_dialog(NO) as mock_exec:
+        window.start_downloads()
+        _deliver_queued_signals()
+
+    # Two dialogs: "remove completed downloads?" for the finished row, then
+    # the disk one again. A leftover pass would have skipped the second.
+    assert mock_exec.call_count == 2
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_stopping_while_paused_gives_the_start_button_back(mock_estimate):
+    # Regression: with nothing active, the stop lands synchronously inside
+    # stop_all(), and _on_stopped re-enables Start before stop_downloads()
+    # gets to its next line, which then greys it right back out. Idle window,
+    # dead Start button, restart the app to download anything ever again.
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+    window.start_downloads()
+    window.pause_downloads()
+    assert window.current_state == DownloadState.PAUSED
+
+    window.stop_downloads()
+
+    assert window.current_state == DownloadState.IDLE
+    assert window.start_button.isEnabled() is True

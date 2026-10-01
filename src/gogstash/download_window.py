@@ -133,6 +133,7 @@ class DownloadWindow(QDockWidget):
         self.current_state = DownloadState.IDLE
         self.scheduler = None
         self.clear_queue = False
+        self._disk_space_error = False
 
         self._reset_scheduler()
 
@@ -212,6 +213,7 @@ class DownloadWindow(QDockWidget):
         self.scheduler.paused.connect(self._on_paused)
         self.scheduler.game_paused.connect(self._on_game_paused)
         self.scheduler.game_started.connect(self._on_game_started)
+        self.scheduler.low_disk_space.connect(self._on_low_disk_space, Qt.ConnectionType.QueuedConnection)
 
     def add_to_queue(self, row_data: dict) -> int:
         """Add a game to the queue.
@@ -335,8 +337,8 @@ class DownloadWindow(QDockWidget):
         if self.current_state == DownloadState.IDLE:
             return
         self.downloads_status.setText("Stopping. Please wait...")
-        self.scheduler.stop_all()
         self.start_button.setDisabled(True)
+        self.scheduler.stop_all()
 
     def _update_progress_bar(self):
         """Recalculate the overall progress bar from all rows."""
@@ -449,6 +451,7 @@ class DownloadWindow(QDockWidget):
             if self.game_queue_table.item(row_idx, Column.STATUS).data(UserRole.STATUS_ROLE) != 'green':
                 self._on_progress(row_idx, 0, estimated_size)
         self._update_progress_bar()
+        self._disk_space_error = False
 
     def clear_all(self):
         """Remove all games from the queue.
@@ -507,10 +510,36 @@ class DownloadWindow(QDockWidget):
         QTimer.singleShot(5000, self._reset_status)
         self._reset_all()
 
-    # def _on_low_disk_space(self):
-    #     disk_space_error = QMessageBox(self)
-    #     disk_space_error.setText("Low Disk Space. Continue?")
-    #     disk_space_error.setInformativeText("")
+    def _on_low_disk_space(self, required, free):
+        """Ask whether to download anyway when the queue does not fit on the disk.
+
+        Connected as a queued connection, so it runs after the current
+        start or schedule call has finished. Only the first warning of a
+        run shows a dialog. Yes turns off the free space check for the
+        rest of the run and starts the waiting downloads. No stops all
+        downloads, including the ones already running.
+
+        Args:
+            required (float): Bytes still to be downloaded.
+            free (float): Free space in the download folder, in bytes.
+        """
+        if self._disk_space_error:
+            return
+        self._disk_space_error = True
+        disk_space_error = QMessageBox(self)
+        disk_space_error.setText("Low Disk Space. Continue?")
+        disk_space_error.setInformativeText(f"The download folder has {humanize.naturalsize(free)} free but the "
+                                            f"queued downloads require {humanize.naturalsize(required)}. "
+                                            "Clicking Yes will ignore this error and continue anyway.")
+        disk_space_error.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        disk_space_error.setDefaultButton(QMessageBox.StandardButton.No)
+        ans = disk_space_error.exec()
+        if ans == QMessageBox.StandardButton.No:
+            self.stop_downloads()
+        else:
+            self.scheduler.free_space_check = False
+            self.scheduler.schedule()
+
 
     def _reset_status(self):
         """Show the ready message if the queue is idle."""
