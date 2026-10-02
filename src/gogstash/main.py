@@ -38,6 +38,25 @@ from gogstash.manifest import read_manifest
 from gogstash.download_window import DownloadWindow, UserRole
 from gogstash.icon_utils import get_icon, get_logo
 
+class GameSizeItem(QTableWidgetItem):
+    """Library cell that sorts by size in bytes instead of by its text.
+
+    The cell shows a readable size such as "900.0 MB", which would sort
+    before "1.2 GB" as text. The raw byte count is stored under
+    ``Qt.ItemDataRole.UserRole`` and compared instead.
+    """
+    def __lt__(self, other):
+        """Compare two size cells by their stored byte counts.
+
+        Args:
+            other (GameSizeItem): The cell to compare against.
+
+        Returns:
+            bool: True if this game is smaller than ``other``.
+        """
+        return self.data(Qt.ItemDataRole.UserRole) < other.data(Qt.ItemDataRole.UserRole)
+
+
 class MainWindow(QMainWindow):
     """Main application window.
 
@@ -120,6 +139,8 @@ class MainWindow(QMainWindow):
         self.games_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.games_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.games_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.games_list.setSortingEnabled(True)
+        self.games_list.sortByColumn(0, Qt.SortOrder.AscendingOrder)
 
         self.queue_download_button = QPushButton("Queue Selection")
         self.queue_download_button.setIcon(get_icon('enqueue.svg'))
@@ -292,10 +313,10 @@ class MainWindow(QMainWindow):
         self.fetch_games_button.setDisabled(False)
 
     def on_games_loaded(self, result):
-        """Fill the library list, sorted by title.
+        """Fill the library list, keeping the column sort the user picked.
 
-        The Fetched column shows whether the game's installers are recorded
-        in its manifest.
+        The list starts out sorted by title, A to Z. The Fetched column
+        shows whether the game's installers are recorded in its manifest.
 
         Args:
             result (list[dict]): Products from
@@ -305,7 +326,7 @@ class MainWindow(QMainWindow):
         self.status_progress.setVisible(False)
         self.fetch_games_button.setDisabled(False)
         self.games_list.setRowCount(0)
-        result = sorted(result, key=(lambda n: n['title']))
+        self.games_list.setSortingEnabled(False)
         for game in result:
             fetched = self._check_fetched(Path(read_setting('download_path')) / game['slug'])
             row_idx = self.games_list.rowCount()
@@ -313,8 +334,11 @@ class MainWindow(QMainWindow):
             first_column.setData(UserRole.PRODUCT_ID_ROLE.value, game['product_id'])
             self.games_list.insertRow(row_idx)
             self.games_list.setItem(row_idx, 0, first_column)
-            self.games_list.setItem(row_idx, 1, QTableWidgetItem(humanize.naturalsize(game['download_size'])))
+            size_item = GameSizeItem(humanize.naturalsize(game['download_size']))
+            size_item.setData(Qt.ItemDataRole.UserRole, game['download_size'])
+            self.games_list.setItem(row_idx, 1, size_item)
             self.games_list.setItem(row_idx, 2, QTableWidgetItem("Yes" if fetched else "No"))
+        self.games_list.setSortingEnabled(True)
         self.games_list.selectRow(0)
         self.games_list.setFocus()
 

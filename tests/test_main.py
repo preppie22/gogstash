@@ -2,6 +2,7 @@ import time
 from unittest.mock import MagicMock, patch
 
 import humanize
+import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import QApplication, QDialog
@@ -171,6 +172,77 @@ def test_on_games_loaded_replaces_previous_rows_not_appends():
 
     assert window.games_list.rowCount() == 1
     assert window.games_list.item(0, 0).text() == "Second Fake Game"
+
+
+# Size order (Alpha < Gamma < Beta) disagrees with both title order and the
+# order they arrive in, so no test here can pass by accident.
+SIZED_GAMES = [
+    {"product_id": 3, "title": "Gamma", "slug": "gamma", "download_size": 900_000_000},
+    {"product_id": 1, "title": "Alpha", "slug": "alpha", "download_size": 50_000},
+    {"product_id": 2, "title": "Beta", "slug": "beta", "download_size": 1_200_000_000},
+]
+SIZE_TEXT = {g["title"]: humanize.naturalsize(g["download_size"]) for g in SIZED_GAMES}
+
+
+def _rows(window):
+    table = window.games_list
+    return [(table.item(row, 0).text(), table.item(row, 1).text()) for row in range(table.rowCount())]
+
+
+def test_library_starts_out_sorted_by_title_a_to_z():
+    # Qt's out-of-the-box sort is Z to A, and before sortByColumn showed up the
+    # header's sort column had wandered off to section 3, which doesn't exist.
+    window = MainWindow()
+
+    window.on_games_loaded(SIZED_GAMES)
+
+    assert [title for title, _ in _rows(window)] == ["Alpha", "Beta", "Gamma"]
+    header = window.games_list.horizontalHeader()
+    assert (header.sortIndicatorSection(), header.sortIndicatorOrder()) == (0, Qt.SortOrder.AscendingOrder)
+
+
+@pytest.mark.parametrize("order, expected", [
+    (Qt.SortOrder.AscendingOrder, ["Alpha", "Gamma", "Beta"]),
+    (Qt.SortOrder.DescendingOrder, ["Beta", "Gamma", "Alpha"]),
+])
+def test_sorting_by_size_counts_bytes_instead_of_reading_the_label(order, expected):
+    # As text, "900.0 MB" outranks "1.2 GB" because 9 > 1. GOG's biggest games
+    # would sink to the bottom of the "biggest first" list, which is a bold
+    # take on "biggest".
+    window = MainWindow()
+    window.on_games_loaded(SIZED_GAMES)
+
+    window.games_list.sortByColumn(1, order)
+
+    assert _rows(window) == [(title, SIZE_TEXT[title]) for title in expected]
+
+
+def test_reloading_keeps_the_size_sort_and_every_game_keeps_its_own_size():
+    # Regression: filling the table with sorting on moves each row the moment
+    # its title lands, so the size and Fetched cells get written into whatever
+    # row is now sitting at that index. Games end up wearing each other's sizes,
+    # or none at all.
+    window = MainWindow()
+    window.on_games_loaded(SIZED_GAMES)
+    window.games_list.sortByColumn(1, Qt.SortOrder.DescendingOrder)
+
+    window.on_games_loaded(SIZED_GAMES)
+
+    assert _rows(window) == [(title, SIZE_TEXT[title]) for title in ["Beta", "Gamma", "Alpha"]]
+    assert all(window.games_list.item(row, 2) is not None for row in range(3))
+
+
+def test_doubleclick_after_sorting_queues_the_game_on_that_row_now():
+    window = MainWindow()
+    window.on_games_loaded(SIZED_GAMES)
+    window.games_list.sortByColumn(1, Qt.SortOrder.DescendingOrder)
+    window.download_window.add_to_queue = MagicMock(return_value=0)
+
+    window.doubleclick_game_list(0, 0)
+
+    window.download_window.add_to_queue.assert_called_once_with(
+        {"product_id": 2, "title": "Beta", "size": SIZE_TEXT["Beta"]}
+    )
 
 
 def test_onclick_queue_download_adds_selected_game_title_once():
