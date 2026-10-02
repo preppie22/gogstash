@@ -221,7 +221,9 @@ class DownloadScheduler(QObject):
         """Check whether the remaining downloads fit on the disk.
 
         Counts every waiting job that is not stopped, plus the bytes that
-        active jobs have not downloaded yet. 2% of the free space is kept
+        active jobs have not downloaded yet. Waiting jobs that were paused
+        count only the bytes they had left, not their whole download list
+        again. 2% of the free space is kept
         in reserve. Nothing left to download always fits, without looking
         at the disk. Otherwise the download directory is created if it does
         not exist.
@@ -235,10 +237,14 @@ class DownloadScheduler(QObject):
         for job in self.idle_queue:
             if job['stopped']:
                 continue
-            for item in (job.get('file_queue') or []):
-                dl_size += item['size']
+            remaining_size = job.get('remaining_size')
+            if remaining_size is not None:
+                dl_size += max(remaining_size, 0)
+            else:
+                for item in (job.get('file_queue') or []):
+                    dl_size += item['size']
         for job in self.active_queue:
-            remaining_size = job['worker'].total_size - job['worker'].fetched_size
+            remaining_size = max(job['worker'].total_size - job['worker'].fetched_size, 0)
             dl_size += remaining_size
         if dl_size == 0:
             return FreeCheckReturn(True, 0, 0)
@@ -382,6 +388,7 @@ class DownloadScheduler(QObject):
         if job in self.active_queue:
             paused_job = job.copy()
             paused_job['resume_link'] = resume_link
+            paused_job['remaining_size'] = job['worker'].total_size - job['worker'].fetched_size
             self.paused_queue.append(paused_job)
         self._reap(job)
         self.schedule()
@@ -418,6 +425,7 @@ class DownloadScheduler(QObject):
             if job in self.active_queue:
                 paused_job = job.copy()
                 paused_job['resume_link'] = resume_link
+                paused_job['remaining_size'] = job['worker'].total_size - job['worker'].fetched_size
                 self.paused_queue.append(paused_job)
         self._reap(job)
         self.schedule()

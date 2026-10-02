@@ -2510,3 +2510,85 @@ def test_a_full_disk_during_a_stop_stays_quiet(tmp_path):
     _run_out_of_space(job, _part_file(tmp_path))
 
     assert "disk_full" not in events
+
+
+# --- resuming counts what's left, not the whole game again ---
+
+def _one_big_game(size=100):
+    big_list = lambda ids: [dict(item, size=size) for item in canned_download_list(ids)]
+    with patch("gogstash.download_queue.generate_download_list", big_list):
+        return make_scheduler(concurrency=1, count=1)
+
+
+@with_fake_workers
+def test_resuming_a_paused_game_only_needs_room_for_what_is_left():
+    # Regression: Resume re-counted the whole game from its enqueue-time file
+    # list, finished files and .part bytes included. 60 of 100 bytes done,
+    # 50 free, and the user got told they needed 100. They needed 40.
+    scheduler = _one_big_game(size=100)
+    with _disk_with(free=10**9):
+        scheduler.schedule()
+    job = scheduler.active_queue[0]
+    job["worker"].fetched_size = 60
+    scheduler.pause_all()
+    _pause_active_worker(job)
+    events = _low_space_events(scheduler)
+
+    with _disk_with(free=50):
+        scheduler.resume_all()
+
+    assert events == []
+    assert [j["row_idx"] for j in scheduler.active_queue] == [0]
+
+
+@with_fake_workers
+def test_resuming_after_a_full_disk_reports_what_is_really_needed(tmp_path):
+    # Still not enough room, but at least the warning quotes the real bill.
+    scheduler = _one_big_game(size=100)
+    with _disk_with(free=10**9):
+        scheduler.schedule()
+    job = scheduler.active_queue[0]
+    job["worker"].fetched_size = 60
+    _run_out_of_space(job, _part_file(tmp_path))
+    events = _low_space_events(scheduler)
+
+    with _disk_with(free=30):
+        scheduler.resume_all()
+
+    assert events == [(40, 30)]
+    assert scheduler.active_queue == []
+
+
+@with_fake_workers
+def test_a_game_paused_with_nothing_left_needs_no_room_at_all():
+    # Pause landed in the split second after the last file finished. Zero
+    # bytes to go, and zero is a number, not a "go ask the file list".
+    scheduler = _one_big_game(size=100)
+    with _disk_with(free=10**9):
+        scheduler.schedule()
+    job = scheduler.active_queue[0]
+    job["worker"].fetched_size = 100
+    scheduler.pause_all()
+    _pause_active_worker(job)
+    events = _low_space_events(scheduler)
+
+    with _disk_with(free=10):
+        scheduler.resume_all()
+
+    assert events == []
+
+
+@with_fake_workers
+def test_a_game_that_came_in_smaller_than_listed_doesnt_eat_into_the_others():
+    # GOG listed 100 bytes, the CDN sent 120 before the size got corrected.
+    # A negative "remaining" would quietly hand the other games 20 bytes
+    # that don't exist.
+    scheduler = make_scheduler(concurrency=2, count=2)
+    with _disk_with(free=10**9):
+        scheduler.schedule()
+    first, second = scheduler.active_queue
+    first["worker"].total_size, first["worker"].fetched_size = 100, 120
+    second["worker"].total_size, second["worker"].fetched_size = 50, 0
+
+    with _disk_with(free=10**9):
+        assert scheduler._free_check().required == 50
