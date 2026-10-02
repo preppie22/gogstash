@@ -999,3 +999,95 @@ def test_stopping_while_paused_gives_the_start_button_back(mock_estimate):
 
     assert window.current_state == DownloadState.IDLE
     assert window.start_button.isEnabled() is True
+
+
+# --- the disk fills up mid-download ---
+
+def _fill_the_disk(window, row=0):
+    job = next(j for j in window.scheduler.active_queue if j["row_idx"] == row)
+    job["worker"].disk_full.emit({"partpath": None, "downlink": "x"})
+
+
+OK = QMessageBox.StandardButton.Ok
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_a_full_disk_mid_download_pauses_and_says_why(mock_estimate):
+    # Regression: the game just went red with "[Errno 28]" and the next one
+    # marched off into the same full disk. Now: pause, explain, wait.
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+    with _roomy_disk():
+        window.start_downloads()
+
+    with _answer_dialog(OK) as mock_exec:
+        _fill_the_disk(window)
+        _deliver_queued_signals()
+
+    assert mock_exec.call_count == 1
+    assert window.current_state == DownloadState.PAUSED
+    assert window.downloads_status.text() == "Downloads paused"  # not stuck on "Pausing..."
+    assert window.start_button.text() == "Resume Downloads"
+    assert window.start_button.isEnabled() is True
+    assert _status_of(window, 0) == "yellow"
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_a_full_disk_after_download_anyway_still_explains_and_rechecks_on_resume(mock_estimate):
+    # "Download anyway" is how you usually end up here, so it's exactly the
+    # case that can't go quiet. And the user's "I know better" pass expires
+    # the moment the disk proves otherwise.
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+    with _full_disk(), _answer_dialog(YES):
+        window.start_downloads()
+        _deliver_queued_signals()
+    assert window.scheduler.free_space_check is False
+
+    with _answer_dialog(OK) as mock_exec:
+        _fill_the_disk(window)
+        _deliver_queued_signals()
+
+    assert mock_exec.call_count == 1
+    assert window.scheduler.free_space_check is True
+
+    with _full_disk(), _answer_dialog(NO) as mock_exec:
+        window.start_downloads()  # Resume, without freeing anything
+        _deliver_queued_signals()
+
+    assert mock_exec.call_count == 1  # the low-disk dialog, instead of diving back in
+    assert window.scheduler.active_queue == []
+    assert window.current_state == DownloadState.PAUSED
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_a_full_disk_waits_for_the_other_downloads_before_saying_paused(mock_estimate):
+    # Two downloads, one hits the wall. The other takes a moment to put its
+    # pen down, and the window shouldn't claim "paused" before it has.
+    update_setting("download_concurrency", 2)
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+    window.add_to_queue(_row(title="Other Game", product_id=2))
+    with _roomy_disk():
+        window.start_downloads()
+    slow_job = next(j for j in window.scheduler.active_queue if j["row_idx"] == 1)
+    slow_job["worker"].pause_worker = lambda: None  # still finishing its chunk
+
+    with _answer_dialog(OK):
+        _fill_the_disk(window, row=0)
+        _deliver_queued_signals()
+
+    assert window.downloads_status.text() == "Download folder is full. Pausing..."
+    assert window.start_button.isEnabled() is False
+
+    slow_job["worker"].paused.emit({})
+
+    assert window.current_state == DownloadState.PAUSED
+    assert window.downloads_status.text() == "Downloads paused"
+    assert window.start_button.isEnabled() is True

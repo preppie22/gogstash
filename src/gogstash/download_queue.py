@@ -68,6 +68,9 @@ class DownloadScheduler(QObject):
         low_disk_space (Signal(float, float)): The remaining downloads do
             not fit on the disk, with the bytes required and the bytes
             free. Emitted on every scheduling attempt until they fit.
+        disk_full (Signal): A download ran out of disk space and all
+            downloads are being paused. Emitted once per pause, before
+            ``paused``.
     """
     game_succeeded = Signal(int)
     game_started = Signal(int)
@@ -79,6 +82,7 @@ class DownloadScheduler(QObject):
     stopped = Signal()
     paused = Signal()
     low_disk_space = Signal(float, float)
+    disk_full = Signal()
 
     _stopped_flag = False
     _paused_flag = False
@@ -387,9 +391,11 @@ class DownloadScheduler(QObject):
 
         The job goes to the paused queue with its resume information, so
         it continues from its ``.part`` file once there is space again.
-        Every other active job is asked to pause and no new jobs start. If
-        a stop was already in progress, the job is reported as stopped and
-        its partial downloads are discarded instead.
+        Every other active job is asked to pause and no new jobs start.
+        Emits ``disk_full`` if this starts the pause. Workers that run out
+        of space while a pause is already underway just join it. If a stop
+        was already in progress, the job is reported as stopped and its
+        partial downloads are discarded instead.
 
         Args:
             job (dict): The job whose worker ran out of space.
@@ -405,7 +411,9 @@ class DownloadScheduler(QObject):
                     _discard_partial_downloads(part_path.parent.parent)
         else:
             _write_log_msg("Download folder full: downloads paused")
-            self.pause_all()
+            if not self._paused_flag:
+                self.pause_all()
+                self.disk_full.emit()
             self.game_paused.emit(job['row_idx'])
             if job in self.active_queue:
                 paused_job = job.copy()

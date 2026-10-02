@@ -214,6 +214,7 @@ class DownloadWindow(QDockWidget):
         self.scheduler.game_paused.connect(self._on_game_paused)
         self.scheduler.game_started.connect(self._on_game_started)
         self.scheduler.low_disk_space.connect(self._on_low_disk_space, Qt.ConnectionType.QueuedConnection)
+        self.scheduler.disk_full.connect(self._on_disk_full, Qt.ConnectionType.QueuedConnection)
 
     def add_to_queue(self, row_data: dict) -> int:
         """Add a game to the queue.
@@ -500,6 +501,7 @@ class DownloadWindow(QDockWidget):
         self.start_button.setDisabled(False)
         self.clear_queue_button.setDisabled(False)
 
+
     def _on_finished(self):
         """Show a summary of failed downloads and return to the idle state."""
         failed_count = 0
@@ -550,6 +552,30 @@ class DownloadWindow(QDockWidget):
         else:
             self.scheduler.free_space_check = False
             self.scheduler.schedule()
+
+    def _on_disk_full(self):
+        """Tell the user that downloads paused because the disk filled up.
+
+        Connected as a queued connection, so it runs after the scheduler
+        has finished handling the full disk. The window switches to the
+        pausing state if other downloads are still pausing. The free space
+        check is turned back on, even if the user chose to download anyway
+        earlier in the run, so resuming checks the space first.
+        """
+        self.pause_downloads()
+        self.scheduler.free_space_check = True
+        if self.current_state != DownloadState.PAUSED:
+            self.downloads_status.setText("Download folder is full. Pausing...")
+        confirmation = QMessageBox(self)
+        confirmation.setWindowTitle("Download Folder Full")
+        confirmation.setText("The download folder ran out of space.")
+        confirmation.setInformativeText("Downloads have been paused and downloaded "
+                                        "content has not been removed. Clear some disk space "
+                                        "before resuming.")
+        confirmation.setStandardButtons(QMessageBox.StandardButton.Ok)
+        confirmation.setIcon(QMessageBox.Icon.Warning)
+        confirmation.exec()
+
 
 
     def _reset_status(self):

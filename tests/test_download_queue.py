@@ -2445,3 +2445,68 @@ def test_a_stop_that_races_a_full_disk_still_stops_and_cleans_up(tmp_path):
     messages = [line.split(" : ", 1)[1] for line in _log_lines()]
     assert messages.count("Downloads stopped") == 1
     assert "Download folder ran out of space while stopping" in messages
+
+
+def _disk_full_events(scheduler):
+    events = []
+    scheduler.disk_full.connect(lambda: events.append("disk_full"))
+    scheduler.paused.connect(lambda: events.append("paused"))
+    return events
+
+
+@with_fake_workers
+def test_a_full_disk_tells_the_window_why_before_announcing_paused(tmp_path):
+    # The window needs the "why" in hand by the time "paused" lands, or it
+    # just shrugs and says "Downloads paused" like the user asked for it.
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+    events = _disk_full_events(scheduler)
+
+    _run_out_of_space(scheduler.active_queue[0], _part_file(tmp_path))
+
+    assert events == ["disk_full", "paused"]
+
+
+@with_fake_workers
+def test_two_downloads_hitting_a_full_disk_only_raise_the_alarm_once(tmp_path):
+    # Both workers find out the hard way, a heartbeat apart. One dialog,
+    # not a matching pair.
+    scheduler = make_scheduler(concurrency=2, count=2)
+    scheduler.schedule()
+    first, second = scheduler.active_queue
+    events = _disk_full_events(scheduler)
+
+    _run_out_of_space(first, _part_file(tmp_path))
+    second["worker"].disk_full.emit({"partpath": tmp_path / "other" / "x" / "y.part", "downlink": "y"})
+
+    assert events == ["disk_full", "paused"]
+    assert sorted(j["row_idx"] for j in scheduler.paused_queue) == [0, 1]
+
+
+@with_fake_workers
+def test_a_full_disk_during_a_pause_the_user_asked_for_stays_quiet(tmp_path):
+    # They already clicked Pause. Popping up "the disk is full, pausing!"
+    # on top of that is just yelling at someone who's already sitting down.
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+    job = scheduler.active_queue[0]
+    events = _disk_full_events(scheduler)
+    scheduler.pause_all()
+
+    _run_out_of_space(job, _part_file(tmp_path))
+
+    assert events == ["paused"]
+    assert [j["row_idx"] for j in scheduler.paused_queue] == [0]
+
+
+@with_fake_workers
+def test_a_full_disk_during_a_stop_stays_quiet(tmp_path):
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+    job = scheduler.active_queue[0]
+    events = _disk_full_events(scheduler)
+    scheduler.stop_all()
+
+    _run_out_of_space(job, _part_file(tmp_path))
+
+    assert "disk_full" not in events
