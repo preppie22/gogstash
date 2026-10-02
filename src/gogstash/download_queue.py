@@ -109,6 +109,7 @@ class DownloadScheduler(QObject):
         self.paused_queue = []
 
         self.__free_space_check = True
+        self.__unrecorded = []
 
     @property
     def free_space_check(self):
@@ -208,10 +209,16 @@ class DownloadScheduler(QObject):
         self.schedule()
 
     def resume_all(self):
-        """Move paused jobs back to the idle queue and resume scheduling."""
+        """Move paused jobs back to the idle queue and resume scheduling.
+
+        Files that could not be recorded in the manifest while the disk was
+        full get another try first, so resumed jobs skip them instead of
+        downloading them again.
+        """
         if not self._paused_flag:
             return
         _write_log_msg("Downloads resumed")
+        self._retry_unrecorded()
         self._paused_flag = False
         while self.paused_queue:
             self.idle_queue.append(self.paused_queue.pop())
@@ -328,31 +335,82 @@ class DownloadScheduler(QObject):
             job['worker'].wait()
             job['worker'] = None
 
+    def _record_downloaded(self, fetched_file) -> bool | None:
+        """Record a downloaded file in its game's manifest.
+
+        The downloaded file itself is never touched, whatever happens to
+        the manifest.
+
+        Args:
+            fetched_file (dict): File result from a worker's ``fetched``
+                signal.
+
+        Returns:
+            bool | None: True if the file was recorded. False if the disk
+            is full, so recording can be tried again later. None if
+            recording failed for another reason, which is logged, and is
+            not worth trying again.
+        """
+        try:
+            manifest.add_file(
+                game_dir=fetched_file.get('game_dir'),
+                filepath=fetched_file.get('filepath'),
+                category=fetched_file.get('category'),
+                downlink=fetched_file.get('downlink'),
+                db_size=fetched_file.get('db_size', -1),
+                checksum=fetched_file.get('checksum'),
+                timestamp=time.time()
+            )
+        except Exception as e:
+            if isinstance(e, OSError) and (e.errno == errno.ENOSPC or e.errno == errno.EDQUOT):
+                return False
+            _write_log_msg(f"Error recording file {fetched_file.get('filepath')}: {e}")
+            return
+        return True
+            
+    def _retry_unrecorded(self) -> None:
+        """Try again to record the files that did not fit in the manifest.
+
+        Files that still do not fit keep waiting, and how many are left is
+        logged. Files that fail for any other reason are given up on.
+        """
+        if not self.__unrecorded:
+            return
+        errors = []
+        for file_data in self.__unrecorded:
+            result = self._record_downloaded(file_data)
+            if result is False:
+                errors.append(file_data)
+        if len(errors) == 1:
+            _write_log_msg("1 downloaded file still waiting to be recorded")
+        elif len(errors) > 1:
+            _write_log_msg(f"{len(errors)} downloaded files still waiting to be recorded")
+        self.__unrecorded = errors
+
     def _handle_fetched(self, fetched_file: dict) -> None:
         """Record a file result in the manifest and the download log.
 
         Downloaded files are always recorded. Skipped files update their
         existing entry, which fills in the downlink and listed size of
         entries recorded by older versions. Failed files are only logged.
+        Every file is logged once, when it arrives. A file that cannot be
+        recorded because the disk is full waits in a list and is retried
+        with every later file and on resume. Files still waiting are
+        retried first.
 
         Args:
             fetched_file (dict): File result from a worker's ``fetched``
                 signal.
         """
+        self._retry_unrecorded()
         skipped = fetched_file.get('skipped', False)
         valid = fetched_file.get('size', -1) > -1
         if valid:
             file_stats = manifest.stat_file(fetched_file.get('game_dir'), fetched_file.get('filepath'))
             if not skipped or file_stats:
-                manifest.add_file(
-                    game_dir=fetched_file.get('game_dir'),
-                    filepath=fetched_file.get('filepath'),
-                    category=fetched_file.get('category'),
-                    downlink=fetched_file.get('downlink'),
-                    db_size=fetched_file.get('db_size', -1),
-                    checksum=fetched_file.get('checksum'),
-                    timestamp=time.time()
-                )
+                result = self._record_downloaded(fetched_file)
+                if result is False:
+                    self.__unrecorded.append(fetched_file)
         _write_log_file(fetched_file)
 
     def _handle_success(self, job: dict) -> None:

@@ -46,7 +46,8 @@ def add_file(
 
     Creates the manifest if it does not exist. The manifest is written to
     a temporary file first and then swapped in, so an interrupted write
-    does not corrupt it.
+    does not corrupt it. If writing the temporary file fails, it is
+    deleted and the old manifest stays as it was.
 
     Args:
         game_dir (Path): The game's download directory.
@@ -61,6 +62,8 @@ def add_file(
 
     Raises:
         FileNotFoundError: If ``filepath`` does not exist.
+        OSError: If the manifest cannot be written, for example because
+            the disk is full.
     """
     manifest = read_manifest(game_dir)
     if 'error' in manifest:
@@ -77,8 +80,12 @@ def add_file(
     }
     temp_file = Path(game_dir) / f"{MANIFEST_FILE}~"
     manifest_file = Path(game_dir) / Path(MANIFEST_FILE)
-    with open(temp_file, 'w') as wp:
-        json.dump(manifest, wp)
+    try:
+        with open(temp_file, 'w') as wp:
+            json.dump(manifest, wp)
+    except Exception:
+        temp_file.unlink(missing_ok=True)
+        raise
     temp_file.replace(manifest_file)
     if sys.platform == 'win32':
         import ctypes

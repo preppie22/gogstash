@@ -1,5 +1,8 @@
+import errno
 import json
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -71,6 +74,26 @@ def test_add_file_does_not_leave_the_temp_file_behind(tmp_path):
 
     manifest.add_file(tmp_path, game_file, category="installers", downlink=DL, db_size=DB_SIZE, checksum="x", timestamp=1.0)
 
+    assert not (tmp_path / f"{manifest.MANIFEST_FILE}~").exists()
+
+
+def test_add_file_on_a_full_disk_raises_and_leaves_the_old_manifest_alone(tmp_path):
+    # Half a JSON file is worse than no JSON file. The old manifest stays as
+    # it was, the half-written temp file goes, and the caller hears about it.
+    game_file = tmp_path / "a.exe"
+    game_file.write_bytes(b"a")
+    manifest.add_file(tmp_path, game_file, category="installers", downlink=DL, db_size=DB_SIZE, checksum="old", timestamp=1.0)
+    before = (tmp_path / manifest.MANIFEST_FILE).read_text()
+
+    def disk_fills_up_mid_dump(data, fp):
+        fp.write('{"a.exe": {"categ')
+        raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+
+    with patch("gogstash.manifest.json.dump", disk_fills_up_mid_dump), pytest.raises(OSError) as raised:
+        manifest.add_file(tmp_path, game_file, category="installers", downlink=DL, db_size=DB_SIZE, checksum="new", timestamp=2.0)
+
+    assert raised.value.errno == errno.ENOSPC
+    assert (tmp_path / manifest.MANIFEST_FILE).read_text() == before
     assert not (tmp_path / f"{manifest.MANIFEST_FILE}~").exists()
 
 

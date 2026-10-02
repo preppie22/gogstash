@@ -10,8 +10,8 @@ suffix until the first stable release), not SemVer.
 
 ### Added
 - Pick which languages to download in Settings. Games that don't come in any of your languages fall back to English
-- GogStash warns you before downloading more than fits on the disk, and lets you pause (keeping what has already downloaded) or download anyway
-- If the disk fills up in the middle of a download, GogStash pauses all downloads and tells you, instead of failing them, so you can free up some space and resume where it left off
+- GogStash warns you before downloading more than fits on the disk, and lets you pause (keeping what has already downloaded) or download anyway (#4)
+- If the disk fills up in the middle of a download, GogStash pauses all downloads and tells you, instead of failing them, so you can free up some space and resume where it left off (#4)
 
 ### Changed
 - The status indicators in the download queue now have a different shape for each state (ring, triangle, check mark, X, pause bars) and colors that are easier to tell apart, including for color blindness (#22)

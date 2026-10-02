@@ -2592,3 +2592,103 @@ def test_a_game_that_came_in_smaller_than_listed_doesnt_eat_into_the_others():
 
     with _disk_with(free=10**9):
         assert scheduler._free_check().required == 50
+
+
+# --- the manifest can't be written because the disk is full ---
+
+def _manifest_write_fails(error_errno=errno.ENOSPC):
+    def dump(data, fp):
+        raise OSError(error_errno, os.strerror(error_errno))
+    return patch("gogstash.manifest.json.dump", dump)
+
+
+def _pause_and_resume(scheduler):
+    job = scheduler.active_queue[0]
+    scheduler.pause_all()
+    _pause_active_worker(job)
+    with _disk_with(free=10**9):
+        scheduler.resume_all()
+
+
+@with_fake_workers
+def test_a_file_the_full_disk_wont_let_us_record_gets_recorded_on_resume(tmp_path):
+    # Regression: the manifest write blew up on a full disk, the finished
+    # file never got its entry, and Resume cheerfully downloaded all 10 GB of
+    # it again. Into the disk that was full. You can see the problem.
+    scheduler, worker, game_dir = _scheduler_with_game_files(tmp_path, "a.exe")
+
+    with _manifest_write_fails():
+        worker.fetched.emit(_fetched_entry(game_dir, "a.exe", size=1))
+
+    assert manifest.stat_file(game_dir, game_dir / "a.exe") == {}
+    assert any(f"{game_dir / 'a.exe'} : Fetched" in line for line in _log_lines())  # logged on arrival anyway
+
+    _pause_and_resume(scheduler)
+
+    assert manifest.stat_file(game_dir, game_dir / "a.exe")["checksum"] == "abc"
+    assert (game_dir / "a.exe").exists()
+
+
+@with_fake_workers
+def test_a_waiting_record_gets_another_go_with_the_next_file(tmp_path):
+    scheduler, worker, game_dir = _scheduler_with_game_files(tmp_path, "a.exe", "b.exe")
+    with _manifest_write_fails():
+        worker.fetched.emit(_fetched_entry(game_dir, "a.exe", size=1))
+
+    worker.fetched.emit(_fetched_entry(game_dir, "b.exe", size=1))  # someone freed some space
+
+    assert manifest.stat_file(game_dir, game_dir / "a.exe") != {}
+    assert manifest.stat_file(game_dir, game_dir / "b.exe") != {}
+    assert sum(f"{game_dir / 'a.exe'} : Fetched" in line for line in _log_lines()) == 1  # one line, not two
+
+
+@with_fake_workers
+def test_a_record_that_still_wont_fit_keeps_waiting_and_says_so(tmp_path):
+    scheduler, worker, game_dir = _scheduler_with_game_files(tmp_path, "a.exe", "b.exe")
+
+    with _manifest_write_fails():
+        worker.fetched.emit(_fetched_entry(game_dir, "a.exe", size=1))
+        worker.fetched.emit(_fetched_entry(game_dir, "b.exe", size=1))
+
+    assert any("1 downloaded file still waiting to be recorded" in line for line in _log_lines())
+
+    _pause_and_resume(scheduler)  # finally some room
+
+    assert manifest.stat_file(game_dir, game_dir / "a.exe") != {}
+    assert manifest.stat_file(game_dir, game_dir / "b.exe") != {}
+
+
+@with_fake_workers
+def test_a_waiting_record_for_a_file_that_vanished_is_dropped_and_resume_still_works(tmp_path):
+    # The user "freed space" by deleting the very file we were waiting to
+    # record. Fair enough. Let it go, say so once, and don't brick Resume.
+    scheduler, worker, game_dir = _scheduler_with_game_files(tmp_path, "a.exe")
+    with _manifest_write_fails():
+        worker.fetched.emit(_fetched_entry(game_dir, "a.exe", size=1))
+    (game_dir / "a.exe").unlink()
+
+    _pause_and_resume(scheduler)
+
+    assert [j["row_idx"] for j in scheduler.active_queue] == [0]
+    errors = [line for line in _log_lines() if "Error recording file" in line]
+    assert len(errors) == 1
+    worker = scheduler.active_queue[0]["worker"]
+    (game_dir / "b.exe").write_bytes(b"x")
+    worker.fetched.emit(_fetched_entry(game_dir, "b.exe", size=1))
+    assert len([line for line in _log_lines() if "Error recording file" in line]) == 1  # not retried forever
+
+
+@with_fake_workers
+def test_other_manifest_errors_are_logged_and_never_cost_the_user_the_file(tmp_path):
+    # A manifest we can't write is our problem, not a reason to bin a
+    # perfectly good, freshly verified download.
+    scheduler, worker, game_dir = _scheduler_with_game_files(tmp_path, "a.exe", "b.exe")
+
+    with _manifest_write_fails(errno.EACCES):
+        worker.fetched.emit(_fetched_entry(game_dir, "a.exe", size=1))
+
+    assert (game_dir / "a.exe").exists()
+    assert sum("Error recording file" in line for line in _log_lines()) == 1
+    worker.fetched.emit(_fetched_entry(game_dir, "b.exe", size=1))
+    assert manifest.stat_file(game_dir, game_dir / "a.exe") == {}  # given up on, not waiting
+    assert sum("Error recording file" in line for line in _log_lines()) == 1
