@@ -5,6 +5,7 @@ import humanize
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QIcon, QPixmap
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog
 
 from gogstash import gog_auth, library_db, manifest
@@ -19,8 +20,8 @@ def _non_null_icon():
     return QIcon(QPixmap(4, 4))
 
 
-FAKE_GAME = {"product_id": 111, "title": "Fake Game", "slug": "fake-game", "download_size": 2048}
-FAKE_GAME_2 = {"product_id": 222, "title": "Second Fake Game", "slug": "second-fake-game", "download_size": 4096}
+FAKE_GAME = {"product_id": 111, "parent_id": None, "title": "Fake Game", "slug": "fake-game", "download_size": 2048}
+FAKE_GAME_2 = {"product_id": 222, "parent_id": None, "title": "Second Fake Game", "slug": "second-fake-game", "download_size": 4096}
 
 
 def _stock_the_library(games, bonus=False):
@@ -272,9 +273,9 @@ def test_on_games_loaded_with_an_empty_library_selects_nothing_and_survives():
 # Size order (Alpha < Gamma < Beta) disagrees with both title order and the
 # order they arrive in, so no test here can pass by accident.
 SIZED_GAMES = [
-    {"product_id": 3, "title": "Gamma", "slug": "gamma", "download_size": 900_000_000},
-    {"product_id": 1, "title": "Alpha", "slug": "alpha", "download_size": 50_000},
-    {"product_id": 2, "title": "Beta", "slug": "beta", "download_size": 1_200_000_000},
+    {"product_id": 3, "parent_id": None, "title": "Gamma", "slug": "gamma", "download_size": 900_000_000},
+    {"product_id": 1, "parent_id": None, "title": "Alpha", "slug": "alpha", "download_size": 50_000},
+    {"product_id": 2, "parent_id": None, "title": "Beta", "slug": "beta", "download_size": 1_200_000_000},
 ]
 SIZE_TEXT = {g["title"]: humanize.naturalsize(g["download_size"]) for g in SIZED_GAMES}
 
@@ -593,3 +594,115 @@ def test_fetched_tick_sits_in_the_middle_of_its_cell_and_nowhere_else(tmp_path):
     assert blank == []
     assert abs((min(xs) + max(xs)) / 2 - width / 2) <= 3
     assert max(xs) - min(xs) < 16  # one tick, not a tick and its evil twin
+
+
+# A base game with two DLCs. Sizes disagree with title order so the
+# child sort can't pass by accident.
+CULTIST = {"product_id": 10, "parent_id": None, "title": "Cultist Simulator", "slug": "cultist-simulator", "download_size": 400}
+DANCER = {"product_id": 11, "parent_id": 10, "title": "Cultist Simulator: The Dancer", "slug": "cultist-simulator-the-dancer", "download_size": 300}
+PRIEST = {"product_id": 12, "parent_id": 10, "title": "Cultist Simulator: The Priest", "slug": "cultist-simulator-the-priest", "download_size": 100}
+
+
+def _children(item):
+    return [item.child(i).text(0) for i in range(item.childCount())]
+
+
+def test_dlcs_sit_under_their_base_game_not_next_to_it():
+    window = MainWindow()
+
+    window.on_games_loaded([CULTIST, DANCER, PRIEST, FAKE_GAME])
+
+    assert [_row(window, row).text(0) for row in range(_row_count(window))] == ["Cultist Simulator", "Fake Game"]
+    assert _children(_row(window, 0)) == ["Cultist Simulator: The Dancer", "Cultist Simulator: The Priest"]
+    assert _row(window, 1).childCount() == 0
+
+
+def test_a_dlc_listed_before_its_base_game_still_finds_its_way_home():
+    # SQLite hands rows back in whatever order it likes. A DLC that shows up
+    # first can't be attached to a parent row that doesn't exist yet.
+    window = MainWindow()
+
+    window.on_games_loaded([PRIEST, DANCER, CULTIST])
+
+    assert _row_count(window) == 1
+    assert _children(_row(window, 0)) == ["Cultist Simulator: The Dancer", "Cultist Simulator: The Priest"]
+
+
+def test_a_dlc_whose_base_game_is_missing_gets_its_own_row_instead_of_vanishing():
+    # Regression: the fallback parent used to be a fresh row that never made
+    # it into the tree, so the DLC was adopted by a ghost and never seen again.
+    window = MainWindow()
+
+    window.on_games_loaded([DANCER, FAKE_GAME])
+
+    assert sorted(_row(window, row).text(0) for row in range(_row_count(window))) == ["Cultist Simulator: The Dancer", "Fake Game"]
+
+
+def test_sorting_by_size_shuffles_dlcs_within_their_game_and_leaves_them_there():
+    window = MainWindow()
+    window.on_games_loaded([CULTIST, DANCER, PRIEST, FAKE_GAME])
+
+    window.games_list.sortByColumn(1, Qt.SortOrder.AscendingOrder)
+
+    assert [_row(window, row).text(0) for row in range(_row_count(window))] == ["Cultist Simulator", "Fake Game"]
+    assert _children(_row(window, 0)) == ["Cultist Simulator: The Priest", "Cultist Simulator: The Dancer"]
+
+
+def test_doubleclick_on_a_dlc_queues_the_dlc_not_its_base_game():
+    window = MainWindow()
+    window.on_games_loaded([CULTIST, DANCER])
+    window.download_window.add_to_queue = MagicMock(return_value=0)
+
+    window.doubleclick_game_list(_row(window, 0).child(0), 0)
+
+    window.download_window.add_to_queue.assert_called_once_with(
+        {"product_id": 11, "title": "Cultist Simulator: The Dancer", "size": humanize.naturalsize(300)}
+    )
+
+
+def test_doubleclick_on_a_game_with_dlcs_queues_instead_of_unfolding():
+    # Double-click means "download this" here. Qt's habit of also expanding
+    # the row would turn every queued game into a surprise accordion.
+    window = MainWindow()
+    window.on_games_loaded([CULTIST, DANCER])
+    window.show()
+    QApplication.processEvents()
+    tree = window.games_list
+    rect = tree.visualItemRect(_row(window, 0))
+
+    # A real double-click opens with a plain click, and the tree only unfolds
+    # rows it saw pressed first. QTest's double-click alone skips that part.
+    QTest.mouseClick(tree.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+    QTest.mouseDClick(tree.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+
+    assert not _row(window, 0).isExpanded()
+
+
+def test_finished_dlc_download_ticks_the_dlc_row_tucked_under_its_game(tmp_path):
+    # The old lookup only walked top-level rows, so a DLC's tick would have
+    # gone looking for it in all the wrong places.
+    update_setting("download_path", str(tmp_path))
+    _stock_the_library([CULTIST, DANCER])
+    window = MainWindow()
+    window.on_games_loaded([CULTIST, DANCER])
+    _record_installer(tmp_path, DANCER)
+
+    _finish_download(window, DANCER)
+
+    dancer_row = _row(window, 0).child(0)
+    assert dancer_row.data(2, Qt.ItemDataRole.UserRole) is True
+    assert dancer_row.toolTip(2) == "Fetched"
+    assert _is_fetched(window, 0) is False  # the base game didn't lift a finger
+
+
+def test_finished_download_for_a_game_dropped_by_the_last_refresh_changes_nothing():
+    # Regression: clear() deletes the old rows, but the product ID lookup kept
+    # pointing at them. A refunded game finishing its download then poked a
+    # dead row and PySide raised "Internal C++ object already deleted".
+    window = MainWindow()
+    window.on_games_loaded([FAKE_GAME, FAKE_GAME_2])
+    window.on_games_loaded([FAKE_GAME_2])
+
+    window._on_game_succeeded(FAKE_GAME["product_id"])  # should shrug, not raise
+
+    assert _row_count(window) == 1

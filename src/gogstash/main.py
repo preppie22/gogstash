@@ -111,6 +111,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         """Build the window and load the cached library."""
         super().__init__()
+        self._games_list_map = {}
+
         self.setWindowTitle("GogStash")
         self.setWindowIcon(get_logo())
         self.resize(1024, 768)
@@ -368,9 +370,13 @@ class MainWindow(QMainWindow):
     def on_games_loaded(self, result):
         """Fill the library list, keeping the column sort the user picked.
 
-        The list starts out sorted by title, A to Z. The Fetched column
-        shows whether every file the current settings select for the game
-        is already downloaded, see ``_check_fetched``.
+        Games are top-level rows and each DLC is a child of its base game.
+        Games are added first, since ``result`` can list a DLC before its
+        game. A DLC whose game is not in ``result`` gets a top-level row of
+        its own. The list starts out sorted by title, A to Z, and DLCs are
+        sorted within their game. The Fetched column shows whether every
+        file the current settings select for the product is already
+        downloaded, see ``_check_fetched``.
 
         Args:
             result (list[dict]): Products from
@@ -380,23 +386,52 @@ class MainWindow(QMainWindow):
         self.status_progress.setVisible(False)
         self.fetch_games_button.setDisabled(False)
         self.games_list.clear()
+        self._games_list_map.clear()
         self.games_list.setSortingEnabled(False)
+
         fetched_games = self._check_fetched(result)
         for game in result:
-            row_item = GameListItem()
-            row_item.setText(Column.TITLE, game['title'])
-            row_item.setData(Column.TITLE, UserRole.PRODUCT_ID_ROLE, game['product_id'])
+            if game['parent_id'] is None:
+                row_item = self._make_games_list_item(game, fetched_games)
+                self._games_list_map[game['product_id']] = row_item
+                self.games_list.addTopLevelItem(row_item)
+        for game in result:
+            if game['parent_id'] is not None:
+                row_item = self._make_games_list_item(game, fetched_games)
+                parent_item: GameListItem = self._games_list_map.get(game['parent_id'])
+                self._games_list_map[game['product_id']] = row_item
+                if parent_item is None:
+                    self.games_list.addTopLevelItem(row_item)
+                else:
+                    parent_item.addChild(row_item)
 
-            row_item.setText(Column.SIZE, humanize.naturalsize(game['download_size']))
-            row_item.setData(Column.SIZE, Qt.ItemDataRole.UserRole, game['download_size'])
-
-            fetched = fetched_games[game['product_id']]
-            row_item.setData(Column.FETCHED, Qt.ItemDataRole.UserRole, True if fetched else False)
-            row_item.setToolTip(Column.FETCHED, "Fetched" if fetched else "Not Fetched")
-            self.games_list.addTopLevelItem(row_item)
         self.games_list.setSortingEnabled(True)
         self.games_list.setCurrentItem(self.games_list.topLevelItem(0))
         self.games_list.setFocus()
+
+    def _make_games_list_item(self, game: dict, fetched_games: dict) -> GameListItem:
+        """Build a library row for a game or DLC, not yet added to the list.
+
+        Args:
+            game (dict): A product from ``library_db.get_product_listing``.
+            fetched_games (dict[int, bool]): Whether each product is
+                fetched, keyed by product ID, from ``_check_fetched``.
+
+        Returns:
+            GameListItem: The row, with the title, size and Fetched columns
+            filled in.
+        """
+        row_item = GameListItem()
+        row_item.setText(Column.TITLE, game['title'])
+        row_item.setData(Column.TITLE, UserRole.PRODUCT_ID_ROLE, game['product_id'])
+
+        row_item.setText(Column.SIZE, humanize.naturalsize(game['download_size']))
+        row_item.setData(Column.SIZE, Qt.ItemDataRole.UserRole, game['download_size'])
+
+        fetched = fetched_games[game['product_id']]
+        row_item.setData(Column.FETCHED, Qt.ItemDataRole.UserRole, True if fetched else False)
+        row_item.setToolTip(Column.FETCHED, "Fetched" if fetched else "Not Fetched")
+        return row_item
 
     def _on_game_succeeded(self, product_id: int):
         """Refresh a game's Fetched column after its download succeeds.
@@ -408,15 +443,16 @@ class MainWindow(QMainWindow):
         Args:
             product_id (int): GOG product ID of the game.
         """
-        for row_idx in range(self.games_list.topLevelItemCount()):
-            if self.games_list.topLevelItem(row_idx).data(Column.TITLE,UserRole.PRODUCT_ID_ROLE) == product_id:
-                if self._check_fetched(library_db.get_product_listing((product_id,))).get(product_id, False):
-                    self.games_list.topLevelItem(row_idx).setData(Column.FETCHED, Qt.ItemDataRole.UserRole, True)
-                    self.games_list.topLevelItem(row_idx).setToolTip(Column.FETCHED, "Fetched")
-                else:
-                    self.games_list.topLevelItem(row_idx).setData(Column.FETCHED, Qt.ItemDataRole.UserRole, False)
-                    self.games_list.topLevelItem(row_idx).setToolTip(Column.FETCHED, "Not Fetched")
-                break
+        row_item = self._games_list_map.get(product_id)
+        if row_item is None: 
+            return
+        if self._check_fetched(library_db.get_product_listing((product_id,))).get(product_id, False):
+            row_item.setData(Column.FETCHED, Qt.ItemDataRole.UserRole, True)
+            row_item.setToolTip(Column.FETCHED, "Fetched")
+        else:
+            row_item.setData(Column.FETCHED, Qt.ItemDataRole.UserRole, False)
+            row_item.setToolTip(Column.FETCHED, "Not Fetched")
+
 
     def _check_fetched(self, product_listing: list[dict]) -> dict:
         """Check which games have every selected file downloaded.
