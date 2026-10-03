@@ -58,10 +58,20 @@ def _record_installer(download_dir, game):
     _record(download_dir, game, "installers")
 
 
+def _row(window, row):
+    # One tree item per game, all three columns in one object. The table used
+    # to hand out a separate object per cell, like a bank teller per coin.
+    return window.games_list.topLevelItem(row)
+
+
+def _row_count(window):
+    return window.games_list.topLevelItemCount()
+
+
 def _is_fetched(window, row):
     # The Fetched cell is all icon and no text now, so ask it what it
     # believes rather than reading what it says.
-    return window.games_list.item(row, 2).data(Qt.ItemDataRole.UserRole)
+    return _row(window, row).data(2, Qt.ItemDataRole.UserRole)
 
 
 def _finish_download(window, game):
@@ -171,16 +181,16 @@ def test_on_auth_failure_shows_error_and_resets_ui_state():
     assert not window.status_progress.isVisible()
 
 
-def test_on_games_loaded_populates_table_with_games(tmp_path):
+def test_on_games_loaded_populates_the_list_with_games(tmp_path):
     update_setting("download_path", str(tmp_path))  # no manifest under here for "fake-game"
     window = MainWindow()
 
     window.on_games_loaded([FAKE_GAME])
 
-    assert window.games_list.rowCount() == 1
-    assert window.games_list.item(0, 0).text() == "Fake Game"
+    assert _row_count(window) == 1
+    assert _row(window, 0).text(0) == "Fake Game"
     assert _is_fetched(window, 0) is False
-    assert window.games_list.item(0, 2).toolTip() == "Not Fetched"
+    assert _row(window, 0).toolTip(2) == "Not Fetched"
 
 
 def test_on_games_loaded_marks_fetched_when_every_selected_file_is_in_the_manifest(tmp_path):
@@ -192,7 +202,7 @@ def test_on_games_loaded_marks_fetched_when_every_selected_file_is_in_the_manife
     window.on_games_loaded([FAKE_GAME])
 
     assert _is_fetched(window, 0) is True
-    assert window.games_list.item(0, 2).toolTip() == "Fetched"
+    assert _row(window, 0).toolTip(2) == "Fetched"
 
 
 def test_on_games_loaded_does_not_mark_fetched_for_bonus_content_alone(tmp_path):
@@ -244,8 +254,19 @@ def test_on_games_loaded_replaces_previous_rows_not_appends():
 
     window.on_games_loaded([FAKE_GAME_2])
 
-    assert window.games_list.rowCount() == 1
-    assert window.games_list.item(0, 0).text() == "Second Fake Game"
+    assert _row_count(window) == 1
+    assert _row(window, 0).text(0) == "Second Fake Game"
+
+
+def test_on_games_loaded_with_an_empty_library_selects_nothing_and_survives():
+    # topLevelItem(0) on an empty tree is None, and setCurrentItem(None) has
+    # to take that in stride. A fresh install's first launch depends on it.
+    window = MainWindow()
+
+    window.on_games_loaded([])
+
+    assert _row_count(window) == 0
+    assert window.games_list.currentItem() is None
 
 
 # Size order (Alpha < Gamma < Beta) disagrees with both title order and the
@@ -259,8 +280,7 @@ SIZE_TEXT = {g["title"]: humanize.naturalsize(g["download_size"]) for g in SIZED
 
 
 def _rows(window):
-    table = window.games_list
-    return [(table.item(row, 0).text(), table.item(row, 1).text()) for row in range(table.rowCount())]
+    return [(_row(window, row).text(0), _row(window, row).text(1)) for row in range(_row_count(window))]
 
 
 def test_library_starts_out_sorted_by_title_a_to_z():
@@ -271,7 +291,7 @@ def test_library_starts_out_sorted_by_title_a_to_z():
     window.on_games_loaded(SIZED_GAMES)
 
     assert [title for title, _ in _rows(window)] == ["Alpha", "Beta", "Gamma"]
-    header = window.games_list.horizontalHeader()
+    header = window.games_list.header()
     assert (header.sortIndicatorSection(), header.sortIndicatorOrder()) == (0, Qt.SortOrder.AscendingOrder)
 
 
@@ -295,7 +315,8 @@ def test_reloading_keeps_the_size_sort_and_every_game_keeps_its_own_size():
     # Regression: filling the table with sorting on moves each row the moment
     # its title lands, so the size and Fetched cells get written into whatever
     # row is now sitting at that index. Games end up wearing each other's sizes,
-    # or none at all.
+    # or none at all. A tree row carries all its columns in one object, so it
+    # can't lose them in transit anymore, but trust is earned.
     window = MainWindow()
     window.on_games_loaded(SIZED_GAMES)
     window.games_list.sortByColumn(1, Qt.SortOrder.DescendingOrder)
@@ -303,7 +324,7 @@ def test_reloading_keeps_the_size_sort_and_every_game_keeps_its_own_size():
     window.on_games_loaded(SIZED_GAMES)
 
     assert _rows(window) == [(title, SIZE_TEXT[title]) for title in ["Beta", "Gamma", "Alpha"]]
-    assert all(window.games_list.item(row, 2) is not None for row in range(3))
+    assert all(_is_fetched(window, row) is not None for row in range(3))
 
 
 def test_doubleclick_after_sorting_queues_the_game_on_that_row_now():
@@ -312,7 +333,7 @@ def test_doubleclick_after_sorting_queues_the_game_on_that_row_now():
     window.games_list.sortByColumn(1, Qt.SortOrder.DescendingOrder)
     window.download_window.add_to_queue = MagicMock(return_value=0)
 
-    window.doubleclick_game_list(0, 0)
+    window.doubleclick_game_list(_row(window, 0), 0)
 
     window.download_window.add_to_queue.assert_called_once_with(
         {"product_id": 2, "title": "Beta", "size": SIZE_TEXT["Beta"]}
@@ -320,14 +341,15 @@ def test_doubleclick_after_sorting_queues_the_game_on_that_row_now():
 
 
 def test_onclick_queue_download_adds_selected_game_title_once():
-    # Regression: games_list has 3 columns per row under SelectRows, so
-    # selectedItems() hands back 3 items for a single selected row. Naively
-    # wiring that up would queue the same game 3 times instead of once.
+    # Regression: back when games_list was a table, selectedItems() handed back
+    # one item per cell, so 3 for a single selected row. Naively wiring that up
+    # queued the same game 3 times. The tree hands back one per row, and this
+    # makes sure nobody brings the cell-counting habit back.
     window = MainWindow()
     window.on_games_loaded([FAKE_GAME])  # selects row 0
     captured_calls = []
-    # onclick_queue_download reuses and clears the same dict every call, so if
-    # we just hang onto the reference we'll catch it after it's been wiped.
+    # onclick_queue_download reuses the same dict across games, so if we just
+    # hang onto the reference we'll catch it after the next game moved in.
     # Snapshot a copy at call time instead, or this test lies to you.
     window.download_window.add_to_queue = MagicMock(
         side_effect=lambda row_data: captured_calls.append(dict(row_data))
@@ -393,7 +415,7 @@ def test_doubleclick_while_queue_is_busy_tells_the_user_to_hold_their_horses():
     window.error_message.showMessage = MagicMock()
     window.download_window.add_to_queue = MagicMock(return_value=-1)
 
-    window.doubleclick_game_list(0, 0)
+    window.doubleclick_game_list(_row(window, 0), 0)
 
     window.error_message.showMessage.assert_called_once_with(
         "Please wait for pending operations to complete before queuing downloads"
@@ -407,7 +429,7 @@ def test_doubleclick_that_queues_fine_keeps_its_damn_mouth_shut():
     window.error_message.showMessage = MagicMock()
     window.download_window.add_to_queue = MagicMock(return_value=0)
 
-    window.doubleclick_game_list(0, 0)
+    window.doubleclick_game_list(_row(window, 0), 0)
 
     window.error_message.showMessage.assert_not_called()
 
@@ -446,8 +468,7 @@ def test_opening_settings_over_and_over_doesnt_hoard_dead_dialogs():
 
 
 def _fetched_by_title(window):
-    table = window.games_list
-    return {table.item(row, 0).text(): _is_fetched(window, row) for row in range(table.rowCount())}
+    return {_row(window, row).text(0): _is_fetched(window, row) for row in range(_row_count(window))}
 
 
 def test_finished_download_flips_fetched_to_yes_without_a_reload(tmp_path):
@@ -462,7 +483,7 @@ def test_finished_download_flips_fetched_to_yes_without_a_reload(tmp_path):
     _finish_download(window, FAKE_GAME)
 
     assert _fetched_by_title(window) == {"Fake Game": True}
-    assert window.games_list.item(0, 2).toolTip() == "Fetched"
+    assert _row(window, 0).toolTip(2) == "Fetched"
 
 
 def test_finished_download_still_asks_the_manifest_before_saying_yes(tmp_path):
@@ -477,7 +498,7 @@ def test_finished_download_still_asks_the_manifest_before_saying_yes(tmp_path):
     _finish_download(window, FAKE_GAME)
 
     assert _fetched_by_title(window) == {"Fake Game": False}
-    assert window.games_list.item(0, 2).toolTip() == "Not Fetched"  # a blank cell still owes an explanation
+    assert _row(window, 0).toolTip(2) == "Not Fetched"  # a blank cell still owes an explanation
 
 
 def test_finished_download_finds_its_game_wherever_the_sort_put_it(tmp_path):
@@ -535,17 +556,17 @@ def test_sorting_by_fetched_groups_the_downloaded_games_together(tmp_path):
 
     window.games_list.sortByColumn(2, Qt.SortOrder.DescendingOrder)
 
-    assert window.games_list.item(0, 0).text() == "Gamma"
+    assert _row(window, 0).text(0) == "Gamma"
     assert [_is_fetched(window, row) for row in range(3)] == [True, False, False]
 
 
 def _tick_pixels(window, row):
     # Green-ish pixels in one Fetched cell, as (x, y) relative to the cell.
-    table = window.games_list
+    tree = window.games_list
     window.show()
     QApplication.processEvents()
-    image = table.viewport().grab().toImage()
-    cell = table.visualRect(table.model().index(row, 2))
+    image = tree.viewport().grab().toImage()
+    cell = tree.visualRect(tree.model().index(row, 2))
     return [(x - cell.left(), y - cell.top())
             for x in range(cell.left(), cell.right() + 1)
             for y in range(cell.top(), cell.bottom() + 1)

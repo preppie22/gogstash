@@ -13,8 +13,8 @@ from PySide6.QtWidgets import (
     QDialog,
     QDockWidget,
     QErrorMessage,
-    QTableWidget,
-    QTableWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
     QAbstractItemView,
     QHeaderView,
     QLabel,
@@ -40,6 +40,12 @@ from gogstash.manifest import read_manifest, check_exist_by_downlink
 from gogstash.download_window import DownloadWindow, UserRole
 from gogstash.icon_utils import get_icon, get_logo, status_indicator
 
+class Column(IntEnum):
+    """Column indices of the library tree."""
+    TITLE = 0
+    SIZE = 1
+    FETCHED = 2
+
 class FetchedDelegate(QStyledItemDelegate):
     """Draws a centered check mark in the Fetched cell of fetched games.
 
@@ -61,32 +67,39 @@ class FetchedDelegate(QStyledItemDelegate):
             icon = status_indicator('green')
             icon.paint(painter, option.rect, Qt.AlignmentFlag.AlignCenter)
 
-class GameListItem(QTableWidgetItem):
-    """Library cell that sorts by a stored value instead of by its text.
+class GameListItem(QTreeWidgetItem):
+    """Library row that sorts the Size and Fetched columns by stored values.
 
-    Used for the Size and Fetched columns. A size cell shows a readable
-    size such as "900.0 MB", which would sort before "1.2 GB" as text, so
-    it stores the byte count. A Fetched cell has no text at all, so it
-    stores whether the game is fetched. The value is stored under
-    ``Qt.ItemDataRole.UserRole`` and compared instead of the text.
+    One item holds all three columns of a game. The Title column sorts by
+    its text. The Size column shows a readable size such as "900.0 MB",
+    which would sort before "1.2 GB" as text, so it stores the byte count.
+    The Fetched column has no text at all, so it stores whether the game
+    is fetched. Both values are stored under ``Qt.ItemDataRole.UserRole``
+    in their own column and compared instead of the text.
     """
     def __lt__(self, other):
-        """Compare two cells of the same column by their stored values.
+        """Compare two rows by the column the tree is sorted on.
+
+        The tree compares whole rows, so the column comes from
+        ``treeWidget().sortColumn()``.
 
         Args:
-            other (GameListItem): The cell to compare against.
+            other (GameListItem): The row to compare against.
 
         Returns:
-            bool: True if this cell's stored value is less than ``other``'s.
-            Not fetched sorts before fetched.
+            bool: True if this row sorts before ``other``. Not fetched
+            sorts before fetched.
         """
-        return self.data(Qt.ItemDataRole.UserRole) < other.data(Qt.ItemDataRole.UserRole)
+        col_idx = self.treeWidget().sortColumn()
+        match col_idx:
+            case Column.TITLE:
+                return self.text(Column.TITLE) < other.text(Column.TITLE)
+            case Column.SIZE:
+                return self.data(Column.SIZE, Qt.ItemDataRole.UserRole) < other.data(Column.SIZE, Qt.ItemDataRole.UserRole)
+            case Column.FETCHED:
+                return self.data(Column.FETCHED, Qt.ItemDataRole.UserRole) < other.data(Column.FETCHED, Qt.ItemDataRole.UserRole)
 
-class Column(IntEnum):
-    """Column indices of the library table."""
-    TITLE = 0
-    SIZE = 1
-    FETCHED = 2
+
 
 class MainWindow(QMainWindow):
     """Main application window.
@@ -159,19 +172,21 @@ class MainWindow(QMainWindow):
         self.left_dock.setWindowTitle("Library")
         self.left_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
 
-        self.games_list = QTableWidget()
-        self.games_list.cellDoubleClicked.connect(self.doubleclick_game_list)
+        self.games_list = QTreeWidget()
+        self.games_list.setUniformRowHeights(True)
+        self.games_list.itemDoubleClicked.connect(self.doubleclick_game_list)
+        self.games_list.setExpandsOnDoubleClick(False)
         self.games_list.setColumnCount(len(Column))
-        self.games_list.setHorizontalHeaderLabels(['Title', 'Size', 'Fetched'])
+        self.games_list.setHeaderLabels(['Title', 'Size', 'Fetched'])
         self.games_list.setAlternatingRowColors(True)
         self.games_list.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.games_list.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.games_list.verticalHeader().setVisible(False)
-        self.games_list.horizontalHeader().setMinimumSectionSize(16)
+        self.games_list.header().setMinimumSectionSize(16)
         self.games_list.setColumnWidth(Column.FETCHED, 60)
-        self.games_list.horizontalHeader().setSectionResizeMode(Column.TITLE, QHeaderView.ResizeMode.Stretch)
-        self.games_list.horizontalHeader().setSectionResizeMode(Column.SIZE, QHeaderView.ResizeMode.ResizeToContents)
-        self.games_list.horizontalHeader().setSectionResizeMode(Column.FETCHED, QHeaderView.ResizeMode.Fixed)
+        self.games_list.header().setSectionResizeMode(Column.TITLE, QHeaderView.ResizeMode.Stretch)
+        self.games_list.header().setSectionResizeMode(Column.SIZE, QHeaderView.ResizeMode.ResizeToContents)
+        self.games_list.header().setSectionResizeMode(Column.FETCHED, QHeaderView.ResizeMode.Fixed)
+        self.games_list.header().setStretchLastSection(False)
         self.games_list.setItemDelegateForColumn(Column.FETCHED, FetchedDelegate(self.games_list))
         self.games_list.setSortingEnabled(True)
         self.games_list.sortByColumn(Column.TITLE, Qt.SortOrder.AscendingOrder)
@@ -301,31 +316,26 @@ class MainWindow(QMainWindow):
         selection_data = self.games_list.selectedItems()
         row_data = {}
         for item in selection_data:
-            if item.column() == Column.TITLE:
-                row_data['product_id'] = item.data(UserRole.PRODUCT_ID_ROLE)
-                row_data['title'] = item.text()
-            elif item.column() == Column.SIZE:
-                row_data['size'] = item.text()
-            elif item.column() == Column.FETCHED:
-                idx = self.download_window.add_to_queue(row_data.copy())
-                if idx == -1:
-                    self.error_message.setWindowTitle("Error Queuing")
-                    self.error_message.showMessage("Please wait for pending operations to complete before queuing downloads")
-                    break
-                row_data.clear()
+            row_data['product_id'] = item.data(Column.TITLE, UserRole.PRODUCT_ID_ROLE)
+            row_data['title'] = item.text(Column.TITLE)
+            row_data['size'] = item.text(Column.SIZE)
+            idx = self.download_window.add_to_queue(row_data.copy())
+            if idx == -1:
+                self.error_message.setWindowTitle("Error Queuing")
+                self.error_message.showMessage("Please wait for pending operations to complete before queuing downloads")
+                break
 
-
-    def doubleclick_game_list(self, row, _):
+    def doubleclick_game_list(self, item, _):
         """Add the double-clicked game to the download queue.
 
         Args:
-            row (int): Row index of the clicked cell.
+            item (GameListItem): The double-clicked row.
             _ (int): Column index of the clicked cell, unused.
         """
         row_data = {}
-        row_data['product_id'] = self.games_list.item(row, Column.TITLE).data(UserRole.PRODUCT_ID_ROLE)
-        row_data['title'] = self.games_list.item(row, Column.TITLE).text()
-        row_data['size'] = self.games_list.item(row, Column.SIZE).text()
+        row_data['product_id'] = item.data(Column.TITLE, UserRole.PRODUCT_ID_ROLE)
+        row_data['title'] = item.text(Column.TITLE)
+        row_data['size'] = item.text(Column.SIZE)
         idx = self.download_window.add_to_queue(row_data.copy())
         if idx == -1:
             self.error_message.setWindowTitle("Error Queuing")
@@ -369,29 +379,27 @@ class MainWindow(QMainWindow):
         self._update_login_status()
         self.status_progress.setVisible(False)
         self.fetch_games_button.setDisabled(False)
-        self.games_list.setRowCount(0)
+        self.games_list.clear()
         self.games_list.setSortingEnabled(False)
         fetched_games = self._check_fetched(result)
         for game in result:
+            row_item = GameListItem()
+            row_item.setText(Column.TITLE, game['title'])
+            row_item.setData(Column.TITLE, UserRole.PRODUCT_ID_ROLE, game['product_id'])
+
+            row_item.setText(Column.SIZE, humanize.naturalsize(game['download_size']))
+            row_item.setData(Column.SIZE, Qt.ItemDataRole.UserRole, game['download_size'])
+
             fetched = fetched_games[game['product_id']]
-            row_idx = self.games_list.rowCount()
-            title_item = QTableWidgetItem(game['title'])
-            title_item.setData(UserRole.PRODUCT_ID_ROLE, game['product_id'])
-            self.games_list.insertRow(row_idx)
-            self.games_list.setItem(row_idx, Column.TITLE, title_item)
-            size_item = GameListItem(humanize.naturalsize(game['download_size']))
-            size_item.setData(Qt.ItemDataRole.UserRole, game['download_size'])
-            self.games_list.setItem(row_idx, Column.SIZE, size_item)
-            fetched_item = GameListItem("")
-            fetched_item.setData(Qt.ItemDataRole.UserRole, True if fetched else False)
-            fetched_item.setToolTip("Fetched" if fetched else "Not Fetched")
-            self.games_list.setItem(row_idx, Column.FETCHED, fetched_item)
+            row_item.setData(Column.FETCHED, Qt.ItemDataRole.UserRole, True if fetched else False)
+            row_item.setToolTip(Column.FETCHED, "Fetched" if fetched else "Not Fetched")
+            self.games_list.addTopLevelItem(row_item)
         self.games_list.setSortingEnabled(True)
-        self.games_list.selectRow(0)
+        self.games_list.setCurrentItem(self.games_list.topLevelItem(0))
         self.games_list.setFocus()
 
     def _on_game_succeeded(self, product_id: int):
-        """Refresh a game's Fetched cell after its download succeeds.
+        """Refresh a game's Fetched column after its download succeeds.
 
         The game's files are checked again instead of assuming "Yes", so a
         file that never made it into the manifest still shows "No". Does
@@ -400,14 +408,14 @@ class MainWindow(QMainWindow):
         Args:
             product_id (int): GOG product ID of the game.
         """
-        for row_idx in range(self.games_list.rowCount()):
-            if self.games_list.item(row_idx, Column.TITLE).data(UserRole.PRODUCT_ID_ROLE) == product_id:
+        for row_idx in range(self.games_list.topLevelItemCount()):
+            if self.games_list.topLevelItem(row_idx).data(Column.TITLE,UserRole.PRODUCT_ID_ROLE) == product_id:
                 if self._check_fetched(library_db.get_product_listing((product_id,))).get(product_id, False):
-                    self.games_list.item(row_idx, Column.FETCHED).setData(Qt.ItemDataRole.UserRole, True)
-                    self.games_list.item(row_idx, Column.FETCHED).setToolTip("Fetched")
+                    self.games_list.topLevelItem(row_idx).setData(Column.FETCHED, Qt.ItemDataRole.UserRole, True)
+                    self.games_list.topLevelItem(row_idx).setToolTip(Column.FETCHED, "Fetched")
                 else:
-                    self.games_list.item(row_idx, Column.FETCHED).setData(Qt.ItemDataRole.UserRole, False)
-                    self.games_list.item(row_idx, Column.FETCHED).setToolTip("Not Fetched")
+                    self.games_list.topLevelItem(row_idx).setData(Column.FETCHED, Qt.ItemDataRole.UserRole, False)
+                    self.games_list.topLevelItem(row_idx).setToolTip(Column.FETCHED, "Not Fetched")
                 break
 
     def _check_fetched(self, product_listing: list[dict]) -> dict:
