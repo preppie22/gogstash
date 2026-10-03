@@ -5,8 +5,6 @@ from typing import Callable
 
 from gogstash import gog_auth
 
-
-LIBRARY_URL = "https://embed.gog.com/account/getFilteredProducts"
 PRODUCT_URL = "https://api.gog.com/products"
 USER_GAMES = "https://embed.gog.com/user/data/games"
 
@@ -42,43 +40,6 @@ def fetch_owned_ids() -> set:
     response_dict = response.json()
     owned_list = response_dict['owned']
     return set(owned_list)
-    
-
-def fetch_library() -> list[dict]:
-    """Fetch every product in the user's GOG library.
-
-    Walks through all pages of the library endpoint.
-
-    Returns:
-        list[dict]: Product entries as returned by GOG.
-
-    Raises:
-        PermissionError: If the user is not logged in.
-    """
-    token = gog_auth.get_valid_token()
-    if not token:
-        raise PermissionError("Authentication failed. Login again.")
-    products = []
-    response = requests.get(
-        LIBRARY_URL, 
-        headers={"Authorization": f"Bearer {token['access_token']}"}, 
-        params={
-            "page": 1
-        }
-    )
-    response.raise_for_status()
-    response_json = response.json()
-    total_pages = response_json.get('totalPages')
-    products.extend(response_json.get('products'))
-    for i in range(2, total_pages+1):
-        response = requests.get(
-            LIBRARY_URL, 
-            headers={"Authorization": f"Bearer {token['access_token']}"}, 
-            params={
-                "page": i
-        })
-        products.extend(response.json().get('products'))
-    return products
 
 def fetch_downloadables(product_ids: list, progress_callback: Callable[[int], None] = None) -> list[dict]:
     """Fetch download metadata for a list of products.

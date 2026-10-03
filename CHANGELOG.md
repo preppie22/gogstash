@@ -25,6 +25,7 @@ suffix until the first stable release), not SemVer.
 
 ### Fixed
 - DLCs you own now show up in the library, including ones GOG doesn't list on its store ([#6](https://github.com/preppie22/gogstash/issues/6))
+- If GOG no longer accepts your login, refreshing the library now logs you out and asks you to log in again, instead of showing a cryptic error while still saying you're logged in
 - Installers and patches are no longer downloaded in every language a game ships in, only the ones you picked ([#10](https://github.com/preppie22/gogstash/issues/10))
 - Game sizes in the library now match what will actually be downloaded, following your platform, language, patch and bonus content settings ([#5](https://github.com/preppie22/gogstash/issues/5))
 - Linux: logging in no longer crashes on newer distros such as openSUSE Tumbleweed and Kubuntu 25.10 ([#1](https://github.com/preppie22/gogstash/issues/1))

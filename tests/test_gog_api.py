@@ -19,50 +19,6 @@ def make_response(json_data):
 
 @patch("gogstash.gog_api.requests.get")
 @patch("gogstash.gog_api.gog_auth.get_valid_token")
-def test_get_library_single_page(mock_get_valid_token, mock_get):
-    mock_get_valid_token.return_value = FAKE_TOKEN
-    mock_get.return_value = make_response(
-        {"totalProducts": 2, "totalPages": 1, "products": [{"id": 1}, {"id": 2}]}
-    )
-
-    result = gog_api.fetch_library()
-
-    assert mock_get.call_count == 1
-    args, kwargs = mock_get.call_args
-    assert args[0] == gog_api.LIBRARY_URL
-    assert kwargs["headers"] == {"Authorization": "Bearer mytoken"}
-    assert kwargs["params"] == {"page": 1}
-    assert result == [{"id": 1}, {"id": 2}]
-
-
-@patch("gogstash.gog_api.requests.get")
-@patch("gogstash.gog_api.gog_auth.get_valid_token")
-def test_get_library_fetches_every_page_and_flattens_results(mock_get_valid_token, mock_get):
-    mock_get_valid_token.return_value = FAKE_TOKEN
-    mock_get.side_effect = [
-        make_response({"totalPages": 3, "products": [{"id": 1}]}),
-        make_response({"totalPages": 3, "products": [{"id": 2}]}),
-        make_response({"totalPages": 3, "products": [{"id": 3}]}),
-    ]
-
-    result = gog_api.fetch_library()
-
-    assert mock_get.call_count == 3
-    sent_pages = [call.kwargs["params"]["page"] for call in mock_get.call_args_list]
-    assert sent_pages == [1, 2, 3]
-    assert result == [{"id": 1}, {"id": 2}, {"id": 3}]
-
-
-@patch("gogstash.gog_api.gog_auth.get_valid_token")
-def test_fetch_library_raises_permission_error_when_not_logged_in(mock_get_valid_token):
-    mock_get_valid_token.return_value = None
-
-    with pytest.raises(PermissionError):
-        gog_api.fetch_library()
-
-
-@patch("gogstash.gog_api.requests.get")
-@patch("gogstash.gog_api.gog_auth.get_valid_token")
 def test_fetch_owned_ids_returns_owned_list_as_a_set(mock_get_valid_token, mock_get):
     mock_get_valid_token.return_value = FAKE_TOKEN
     mock_get.return_value = make_response({"owned": [1207658695, 1456702644, 1293681291]})
