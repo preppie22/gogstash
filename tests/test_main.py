@@ -4,10 +4,10 @@ from unittest.mock import MagicMock, patch
 import humanize
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import QApplication, QDialog
 
-from gogstash import gog_auth, manifest
+from gogstash import gog_auth, library_db, manifest
 from gogstash.main import MainWindow
 from gogstash.settings import update_setting
 
@@ -20,6 +20,59 @@ def _non_null_icon():
 
 FAKE_GAME = {"product_id": 111, "title": "Fake Game", "slug": "fake-game", "download_size": 2048}
 FAKE_GAME_2 = {"product_id": 222, "title": "Second Fake Game", "slug": "second-fake-game", "download_size": 4096}
+
+
+def _stock_the_library(games, bonus=False):
+    # Fetched means "every file the settings pick is on disk", so the DB has
+    # to list some files. One 5 byte installer per game, plus a 5 byte manual
+    # for the ones that came with homework.
+    library_db.update_products([{
+        "id": game["product_id"], "title": game["title"], "slug": game["slug"], "isMovie": False,
+        "url": f"/en/game/{game['slug']}", "image": "//images.example.com/cover",
+        "worksOn": {"Windows": True, "Linux": False, "Mac": False},
+    } for game in games])
+    library_db.update_downloadables([{
+        "id": game["product_id"],
+        "downloads": {
+            "installers": [{
+                "id": "installer_windows_en", "name": game["title"], "os": "windows", "language": "en", "total_size": 5,
+                "files": [{"id": "setup", "size": 5, "downlink": f"https://example.com/{game['slug']}/setup"}],
+            }],
+            "bonus_content": [{
+                "id": 1, "name": "manual", "type": "manuals", "total_size": 5,
+                "files": [{"id": "manual", "size": 5, "downlink": f"https://example.com/{game['slug']}/manual"}],
+            }] if bonus else [],
+        },
+    } for game in games])
+
+
+def _record(download_dir, game, category):
+    # Writes the file and its manifest entry with the same downlink and listed
+    # size the DB has, so this passes for "downlink is in the manifest" and
+    # for the stricter check_exist_by_downlink alike.
+    game_dir = download_dir / game["slug"]
+    name = "setup" if category == "installers" else "manual"
+    path = game_dir / category / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"hello")
+    manifest.add_file(game_dir, path, category=category, downlink=f"https://example.com/{game['slug']}/{name}", db_size=5, checksum="abc", timestamp=1.0)
+
+
+def _record_installer(download_dir, game):
+    _record(download_dir, game, "installers")
+
+
+def _is_fetched(window, row):
+    # The Fetched cell is all icon and no text now, so ask it what it
+    # believes rather than reading what it says.
+    return window.games_list.item(row, 2).data(Qt.ItemDataRole.UserRole)
+
+
+def _finish_download(window, game):
+    # Same trip a real download takes: the scheduler reports the queue row,
+    # the queue turns it into a product ID, the library takes it from there.
+    row_idx = window.download_window.add_to_queue({"product_id": game["product_id"], "title": game["title"], "size": "5 Bytes"})
+    window.download_window.scheduler.game_succeeded.emit(row_idx)
 
 
 def test_not_logged_in_shows_red_indicator_and_status_text():
@@ -130,38 +183,63 @@ def test_on_games_loaded_populates_table_with_games(tmp_path):
 
     assert window.games_list.rowCount() == 1
     assert window.games_list.item(0, 0).text() == "Fake Game"
-    assert window.games_list.item(0, 2).text() == "No"
+    assert _is_fetched(window, 0) is False
+    assert window.games_list.item(0, 2).toolTip() == "Not Fetched"
 
 
-def test_on_games_loaded_marks_fetched_when_an_installer_is_in_the_manifest(tmp_path):
+def test_on_games_loaded_marks_fetched_when_every_selected_file_is_in_the_manifest(tmp_path):
     update_setting("download_path", str(tmp_path))
-    game_dir = tmp_path / "fake-game"
-    installer = game_dir / "installer_windows_en" / "setup.exe"
-    installer.parent.mkdir(parents=True)
-    installer.write_bytes(b"hello")
-    manifest.add_file(game_dir, installer, category="installers", downlink="https://example.com/installer", db_size=1, checksum="abc", timestamp=1.0)
+    _stock_the_library([FAKE_GAME])
+    _record_installer(tmp_path, FAKE_GAME)
     window = MainWindow()
 
     window.on_games_loaded([FAKE_GAME])
 
-    assert window.games_list.item(0, 2).text() == "Yes"
+    assert _is_fetched(window, 0) is True
+    assert window.games_list.item(0, 2).toolTip() == "Fetched"
 
 
 def test_on_games_loaded_does_not_mark_fetched_for_bonus_content_alone(tmp_path):
-    # A game with only its manual/soundtrack downloaded shouldn't read as
-    # "fetched" -- that's the whole reason this checks category, not just
-    # "is the manifest non-empty".
+    # A manual on disk is not the game on disk. With bonus content switched
+    # off the manual isn't even on the shopping list, so it can't vouch for
+    # the installer that never showed up.
     update_setting("download_path", str(tmp_path))
-    game_dir = tmp_path / "fake-game"
-    manual = game_dir / "bonus_content" / "manual.pdf"
-    manual.parent.mkdir(parents=True)
-    manual.write_bytes(b"doc")
-    manifest.add_file(game_dir, manual, category="bonus_content", downlink="https://example.com/manual", db_size=1, checksum="xyz", timestamp=1.0)
+    _stock_the_library([FAKE_GAME], bonus=True)
+    _record(tmp_path, FAKE_GAME, "bonus_content")
     window = MainWindow()
 
     window.on_games_loaded([FAKE_GAME])
 
-    assert window.games_list.item(0, 2).text() == "No"
+    assert _is_fetched(window, 0) is False
+
+
+def test_on_games_loaded_does_not_mark_a_half_finished_game_fetched(tmp_path):
+    # Issue #3's other half: the installer made it, the manual didn't. One
+    # out of two used to be good enough for a tick.
+    update_setting("download_path", str(tmp_path))
+    update_setting("bonus_content", True)
+    _stock_the_library([FAKE_GAME], bonus=True)
+    _record_installer(tmp_path, FAKE_GAME)
+    window = MainWindow()
+
+    window.on_games_loaded([FAKE_GAME])
+
+    assert _is_fetched(window, 0) is False
+
+
+def test_on_games_loaded_does_not_call_a_game_with_nothing_to_download_fetched(tmp_path):
+    # The settings pick zero files for this one, yet there's a manifest from
+    # some earlier life. "Every one of no files is here" is technically true,
+    # and technically true is the worst kind of true for a status column.
+    update_setting("download_path", str(tmp_path))
+    _stock_the_library([FAKE_GAME])
+    update_setting("platform_filter", ["Linux"])  # its only installer is for Windows
+    _record_installer(tmp_path, FAKE_GAME)
+    window = MainWindow()
+
+    window.on_games_loaded([FAKE_GAME])
+
+    assert _is_fetched(window, 0) is False
 
 
 def test_on_games_loaded_replaces_previous_rows_not_appends():
@@ -369,3 +447,132 @@ def test_opening_settings_over_and_over_doesnt_hoard_dead_dialogs():
             QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     assert window.findChildren(SettingsDialog) == []
+
+
+def _fetched_by_title(window):
+    table = window.games_list
+    return {table.item(row, 0).text(): _is_fetched(window, row) for row in range(table.rowCount())}
+
+
+def test_finished_download_flips_fetched_to_yes_without_a_reload(tmp_path):
+    # Before this, the blank cell stuck around until the next library refresh, which is
+    # a strange thing to tell someone whose game just finished downloading.
+    update_setting("download_path", str(tmp_path))
+    _stock_the_library([FAKE_GAME])
+    window = MainWindow()
+    window.on_games_loaded([FAKE_GAME])
+    _record_installer(tmp_path, FAKE_GAME)
+
+    _finish_download(window, FAKE_GAME)
+
+    assert _fetched_by_title(window) == {"Fake Game": True}
+    assert window.games_list.item(0, 2).toolTip() == "Fetched"
+
+
+def test_finished_download_still_asks_the_manifest_before_saying_yes(tmp_path):
+    # Success with nothing recorded (say the disk filled up before the record
+    # landed) stays blank. The handler checks the receipts, it doesn't just
+    # take the scheduler's word for it.
+    update_setting("download_path", str(tmp_path))
+    _stock_the_library([FAKE_GAME])
+    window = MainWindow()
+    window.on_games_loaded([FAKE_GAME])
+
+    _finish_download(window, FAKE_GAME)
+
+    assert _fetched_by_title(window) == {"Fake Game": False}
+    assert window.games_list.item(0, 2).toolTip() == "Not Fetched"  # a blank cell still owes an explanation
+
+
+def test_finished_download_finds_its_game_wherever_the_sort_put_it(tmp_path):
+    # Gamma is queue row 0 but library row 1 once sorted biggest first. If the
+    # row index ever sneaks across instead of the product ID, Beta gets the
+    # credit for a game it never downloaded.
+    update_setting("download_path", str(tmp_path))
+    _stock_the_library(SIZED_GAMES)
+    window = MainWindow()
+    window.on_games_loaded(SIZED_GAMES)
+    window.games_list.sortByColumn(1, Qt.SortOrder.DescendingOrder)
+    gamma = SIZED_GAMES[0]
+    _record_installer(tmp_path, gamma)
+
+    _finish_download(window, gamma)
+
+    assert _fetched_by_title(window) == {"Alpha": False, "Beta": False, "Gamma": True}
+
+
+def test_finished_download_for_a_game_the_library_never_heard_of_changes_nothing(tmp_path):
+    update_setting("download_path", str(tmp_path))
+    _stock_the_library([FAKE_GAME])
+    window = MainWindow()
+    window.on_games_loaded([FAKE_GAME])
+
+    window._on_game_succeeded(999)  # should shrug, not raise
+
+    assert _fetched_by_title(window) == {"Fake Game": False}
+
+
+def test_fetched_still_updates_after_the_queue_swaps_in_a_fresh_scheduler(tmp_path):
+    # Stop and Clear Queue hand the queue a brand new scheduler. The library
+    # listens to the queue rather than the scheduler, so it shouldn't notice
+    # the staff change.
+    update_setting("download_path", str(tmp_path))
+    _stock_the_library([FAKE_GAME])
+    window = MainWindow()
+    window.on_games_loaded([FAKE_GAME])
+    window.download_window._reset_scheduler()
+    _record_installer(tmp_path, FAKE_GAME)
+
+    _finish_download(window, FAKE_GAME)
+
+    assert _fetched_by_title(window) == {"Fake Game": True}
+
+
+def test_sorting_by_fetched_groups_the_downloaded_games_together(tmp_path):
+    # Blank cells all have the same text, so without the stored flag every
+    # row ties and the sort shrugs. Gamma is the one that's actually home.
+    update_setting("download_path", str(tmp_path))
+    _stock_the_library(SIZED_GAMES)
+    _record_installer(tmp_path, SIZED_GAMES[0])
+    window = MainWindow()
+    window.on_games_loaded(SIZED_GAMES)
+
+    window.games_list.sortByColumn(2, Qt.SortOrder.DescendingOrder)
+
+    assert window.games_list.item(0, 0).text() == "Gamma"
+    assert [_is_fetched(window, row) for row in range(3)] == [True, False, False]
+
+
+def _tick_pixels(window, row):
+    # Green-ish pixels in one Fetched cell, as (x, y) relative to the cell.
+    table = window.games_list
+    window.show()
+    QApplication.processEvents()
+    image = table.viewport().grab().toImage()
+    cell = table.visualRect(table.model().index(row, 2))
+    return [(x - cell.left(), y - cell.top())
+            for x in range(cell.left(), cell.right() + 1)
+            for y in range(cell.top(), cell.bottom() + 1)
+            if (c := QColor(image.pixel(x, y))).green() > 100 and c.green() > c.red() + 30 and c.green() > c.blue()]
+
+
+def test_fetched_tick_sits_in_the_middle_of_its_cell_and_nowhere_else(tmp_path):
+    # Qt parks icons on the left edge unless told otherwise. A stray setIcon
+    # would also sneak a second tick in over there, which is one tick too
+    # many for a yes/no question.
+    update_setting("download_path", str(tmp_path))
+    _stock_the_library([FAKE_GAME, FAKE_GAME_2])
+    _record_installer(tmp_path, FAKE_GAME)
+    window = MainWindow()
+    window.on_games_loaded([FAKE_GAME, FAKE_GAME_2])
+    window.games_list.clearSelection()
+    fetched_row = 0 if _is_fetched(window, 0) else 1
+
+    tick = _tick_pixels(window, fetched_row)
+    blank = _tick_pixels(window, 1 - fetched_row)
+
+    width = window.games_list.columnWidth(2)
+    xs = [x for x, _ in tick]
+    assert blank == []
+    assert abs((min(xs) + max(xs)) / 2 - width / 2) <= 3
+    assert max(xs) - min(xs) < 16  # one tick, not a tick and its evil twin

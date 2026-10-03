@@ -19,6 +19,7 @@ suffix until the first stable release), not SemVer.
 - The download queue shows how much is left to download for each game, leaving out files you already have
 - Games you've already fully downloaded finish right away, instead of checking every file with GOG again
 - Dialogs in the download queue now have a title and an icon, so warnings like clearing the whole queue stand out from routine questions
+- The library's Fetched column shows a check mark for downloaded games and stays blank for the rest, instead of "Yes" and "No"
 
 ### Fixed
 - Installers and patches are no longer downloaded in every language a game ships in, only the ones you picked ([#10](https://github.com/preppie22/gogstash/issues/10))
@@ -27,6 +28,8 @@ suffix until the first stable release), not SemVer.
 - The About Qt dialog no longer opens behind the About box, where it couldn't be dismissed ([#9](https://github.com/preppie22/gogstash/issues/9))
 - Stopping downloads while they were paused no longer leaves the Start button greyed out
 - Cancelling downloads no longer leaves empty folders or leftover partial files behind in the game's download folder
+- The library's Fetched column now gets its check mark as soon as a game finishes downloading, instead of waiting for the next library refresh ([#3](https://github.com/preppie22/gogstash/issues/3))
+- Fetched only shows a check mark when every file your settings pick for a game is downloaded and still up to date, not when just some of them are. Changing your platform, language, patch or bonus content settings can change it ([#3](https://github.com/preppie22/gogstash/issues/3))
 
 ## [2026.9.26-beta2] - 2026-09-26
 

@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from gogstash import library_db
 from gogstash.download_queue import DownloadScheduler
-from gogstash.download_window import Column, DownloadState, DownloadWindow, UserRole
+from gogstash.download_window import Column, DownloadState, DownloadWindow, StatusDelegate, UserRole
 from gogstash.settings import update_setting
 
 FAKE_PRODUCT = {
@@ -311,6 +311,35 @@ def test_on_game_succeeded_fills_the_row_to_one_hundred_percent(mock_estimate):
     assert window.game_queue_table.item(0, Column.PROGRESS).data(UserRole.FETCHED_SIZE) == 2_000_000_000
 
 
+def test_on_game_succeeded_tells_the_library_which_game_not_which_row():
+    # Queue rows and library rows have nothing in common, so the row index
+    # would be useless (and confidently wrong) outside this table.
+    window = DownloadWindow()
+    window.add_to_queue(_row(title="Some Game", product_id=42))
+    window.add_to_queue(_row(title="Other Game", product_id=77))
+    announced = []
+    window.game_succeeded.connect(announced.append)
+
+    window._on_game_succeeded(1)
+
+    assert announced == [77]
+
+
+def test_on_game_succeeded_announces_product_ids_too_big_for_32_bits():
+    # A Signal(int) is a C++ int under the hood. The biggest ID in a real
+    # library today is 2147483137, a mere 510 short of the edge. One GOG
+    # release later, an ID one past the edge comes out the other side as
+    # -2147483648 and no library row will ever answer to it.
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=2_147_483_648))
+    announced = []
+    window.game_succeeded.connect(announced.append)
+
+    window._on_game_succeeded(0)
+
+    assert announced == [2_147_483_648]
+
+
 @sized_downloads()
 def test_on_game_failed_puts_the_reason_on_the_red_dot(mock_estimate):
     mock_estimate.return_value = 0
@@ -468,7 +497,7 @@ def test_a_freshly_queued_game_gets_a_base_dot_and_a_queued_tooltip(mock_estimat
 
     assert _status(window, 0) == "base"
     assert window.game_queue_table.item(0, Column.STATUS).toolTip() == "Queued"
-    assert not window.game_queue_table.item(0, Column.STATUS).icon().isNull()
+    assert isinstance(window.game_queue_table.itemDelegateForColumn(Column.STATUS), StatusDelegate)
 
 
 @sized_downloads()

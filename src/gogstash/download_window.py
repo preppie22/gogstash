@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import ( 
     Qt,
+    Signal,
     QModelIndex,
     QRect,
     QTimer,
@@ -79,7 +80,7 @@ class DownloadState(Enum):
     RUNNING = 1
     PAUSED = 2
 
-class RowItemDelegate(QStyledItemDelegate):
+class TitleDelegate(QStyledItemDelegate):
     """Draws the title cell with a progress fill behind the text."""
     def __init__(self):
         """Create the delegate."""
@@ -109,6 +110,25 @@ class RowItemDelegate(QStyledItemDelegate):
             index.data(Qt.ItemDataRole.DisplayRole)
         )
 
+class StatusDelegate(QStyledItemDelegate):
+    """Draws the status indicator centered in the status cell.
+
+    The color is read from ``UserRole.STATUS_ROLE`` and the indicator is
+    drawn on every paint, so it follows a change of color scheme without
+    being reset.
+    """
+    def paint(self, painter, option, index):
+        """Paint the cell background, then the status indicator.
+
+        Args:
+            painter (QPainter): The painter to draw with.
+            option (QStyleOptionViewItem): Style options for the cell.
+            index (QModelIndex): The cell being painted.
+        """
+        super().paint(painter, option, index)
+        icon = status_indicator(index.data(UserRole.STATUS_ROLE))
+        icon.paint(painter, option.rect, Qt.AlignmentFlag.AlignCenter)
+
 class DownloadWindow(QDockWidget):
     """Dock widget showing the download queue.
 
@@ -122,6 +142,9 @@ class DownloadWindow(QDockWidget):
         scheduler (DownloadScheduler): Scheduler running the downloads.
         clear_queue (bool): Clear the table once a pending stop completes.
     """
+
+    game_succeeded = Signal('qlonglong')
+
     def __init__(self, parent=None):
         """Build the queue table, controls and scheduler.
 
@@ -157,7 +180,8 @@ class DownloadWindow(QDockWidget):
         self.game_queue_table.horizontalHeader().setSectionResizeMode(Column.STATUS, QHeaderView.ResizeMode.Fixed)
         self.game_queue_table.horizontalHeader().setSectionResizeMode(Column.TITLE, QHeaderView.ResizeMode.Stretch)  
         self.game_queue_table.horizontalHeader().setSectionResizeMode(Column.PROGRESS, QHeaderView.ResizeMode.ResizeToContents)  
-        self.game_queue_table.setItemDelegateForColumn(Column.TITLE, RowItemDelegate())
+        self.game_queue_table.setItemDelegateForColumn(Column.TITLE, TitleDelegate())
+        self.game_queue_table.setItemDelegateForColumn(Column.STATUS, StatusDelegate(self.game_queue_table))
         self.window_layout.addWidget(self.game_queue_table)
 
         self.clear_queue_button = QPushButton("Clear Queue")
@@ -193,13 +217,14 @@ class DownloadWindow(QDockWidget):
         self._update_progress_bar()
 
     def _color_scheme_refresh(self) -> None:
-        """Reload button icons and status dots for the current color scheme."""
+        """Reload button icons for the current color scheme.
+
+        Status dots need no reload, ``StatusDelegate`` draws them in the
+        current scheme on every paint.
+        """
         for button in self.dialog_buttons.buttons():
             if not button.icon(): continue
             button.setIcon(get_icon(button.property('iconFile')))
-        for row_idx in range(self.game_queue_table.rowCount()):
-            self.set_row_status(row_idx,
-                                self.game_queue_table.item(row_idx, Column.STATUS).data(UserRole.STATUS_ROLE))
 
     def _reset_scheduler(self):
         """Replace the scheduler with a new one and connect its signals."""
@@ -258,12 +283,13 @@ class DownloadWindow(QDockWidget):
     def set_row_status(self, row: int, color: str):
         """Set a row's status dot.
 
+        Only the color is stored, ``StatusDelegate`` draws the dot from it.
+
         Args:
             row (int): Row index.
             color (str): Status color, see ``icon_utils.status_indicator``.
         """
         self.game_queue_table.item(row, Column.STATUS).setData(UserRole.STATUS_ROLE, color)
-        self.game_queue_table.item(row, Column.STATUS).setIcon(status_indicator(color))
 
     def _onclick_start_button(self):
         """Start, pause or resume downloads depending on the current state."""
@@ -397,6 +423,7 @@ class DownloadWindow(QDockWidget):
         self.game_queue_table.item(row_idx, Column.PROGRESS).setText(f"{humanize.naturalsize(total)} / {humanize.naturalsize(total)}")
         self.set_row_status(row_idx, 'green')
         self.game_queue_table.item(row_idx, Column.STATUS).setToolTip('Finished')
+        self.game_succeeded.emit(self.game_queue_table.item(row_idx, Column.TITLE).data(UserRole.PRODUCT_ID_ROLE))
 
     def _on_game_failed(self, row_idx, msg):
         """Mark a row as failed and reset its progress.

@@ -4,6 +4,7 @@ import sys
 import humanize
 from pathlib import Path
 import importlib.metadata
+from enum import IntEnum
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -22,7 +23,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QProgressBar,
     QDialogButtonBox,
-    QMessageBox
+    QMessageBox,
+    QStyledItemDelegate
 )
 from PySide6.QtGui import (
     QAction,
@@ -34,28 +36,57 @@ from gogstash.login_window import LoginWindow
 from gogstash import library_db
 from gogstash.settings_dialog import SettingsDialog
 from gogstash.settings import read_setting
-from gogstash.manifest import read_manifest
+from gogstash.manifest import read_manifest, check_exist_by_downlink
 from gogstash.download_window import DownloadWindow, UserRole
-from gogstash.icon_utils import get_icon, get_logo
+from gogstash.icon_utils import get_icon, get_logo, status_indicator
 
-class GameSizeItem(QTableWidgetItem):
-    """Library cell that sorts by size in bytes instead of by its text.
+class FetchedDelegate(QStyledItemDelegate):
+    """Draws a centered check mark in the Fetched cell of fetched games.
 
-    The cell shows a readable size such as "900.0 MB", which would sort
-    before "1.2 GB" as text. The raw byte count is stored under
-    ``Qt.ItemDataRole.UserRole`` and compared instead.
+    The cell has no icon of its own, since Qt would draw that on the left
+    edge. The fetched flag is read from ``Qt.ItemDataRole.UserRole``, and
+    the check mark is drawn on every paint, so it follows a change of
+    color scheme without being reset.
     """
-    def __lt__(self, other):
-        """Compare two size cells by their stored byte counts.
+    def paint(self, painter, option, index):
+        """Paint the cell background, then the check mark if fetched.
 
         Args:
-            other (GameSizeItem): The cell to compare against.
+            painter (QPainter): The painter to draw with.
+            option (QStyleOptionViewItem): Style options for the cell.
+            index (QModelIndex): The cell being painted.
+        """
+        super().paint(painter, option, index)
+        if index.data(Qt.ItemDataRole.UserRole):
+            icon = status_indicator('green')
+            icon.paint(painter, option.rect, Qt.AlignmentFlag.AlignCenter)
+
+class GameListItem(QTableWidgetItem):
+    """Library cell that sorts by a stored value instead of by its text.
+
+    Used for the Size and Fetched columns. A size cell shows a readable
+    size such as "900.0 MB", which would sort before "1.2 GB" as text, so
+    it stores the byte count. A Fetched cell has no text at all, so it
+    stores whether the game is fetched. The value is stored under
+    ``Qt.ItemDataRole.UserRole`` and compared instead of the text.
+    """
+    def __lt__(self, other):
+        """Compare two cells of the same column by their stored values.
+
+        Args:
+            other (GameListItem): The cell to compare against.
 
         Returns:
-            bool: True if this game is smaller than ``other``.
+            bool: True if this cell's stored value is less than ``other``'s.
+            Not fetched sorts before fetched.
         """
         return self.data(Qt.ItemDataRole.UserRole) < other.data(Qt.ItemDataRole.UserRole)
 
+class Column(IntEnum):
+    """Column indices of the library table."""
+    TITLE = 0
+    SIZE = 1
+    FETCHED = 2
 
 class MainWindow(QMainWindow):
     """Main application window.
@@ -72,7 +103,7 @@ class MainWindow(QMainWindow):
         self.resize(1024, 768)
         self.download_window = DownloadWindow(self)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.download_window)
-        self._queue_count = 0
+        self.download_window.game_succeeded.connect(self._on_game_succeeded)
 
         self.logged_in_indicator = QLabel()
         self.logged_in_indicator.setFixedSize(QSize(10,10))
@@ -130,17 +161,20 @@ class MainWindow(QMainWindow):
 
         self.games_list = QTableWidget()
         self.games_list.cellDoubleClicked.connect(self.doubleclick_game_list)
-        self.games_list.setColumnCount(3)
-        self.games_list.setHorizontalHeaderLabels(['Title', 'Total Size', 'Fetched'])
+        self.games_list.setColumnCount(len(Column))
+        self.games_list.setHorizontalHeaderLabels(['Title', 'Size', 'Fetched'])
         self.games_list.setAlternatingRowColors(True)
         self.games_list.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.games_list.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.games_list.verticalHeader().setVisible(False)
-        self.games_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.games_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.games_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.games_list.horizontalHeader().setMinimumSectionSize(16)
+        self.games_list.setColumnWidth(Column.FETCHED, 60)
+        self.games_list.horizontalHeader().setSectionResizeMode(Column.TITLE, QHeaderView.ResizeMode.Stretch)
+        self.games_list.horizontalHeader().setSectionResizeMode(Column.SIZE, QHeaderView.ResizeMode.ResizeToContents)
+        self.games_list.horizontalHeader().setSectionResizeMode(Column.FETCHED, QHeaderView.ResizeMode.Fixed)
+        self.games_list.setItemDelegateForColumn(Column.FETCHED, FetchedDelegate(self.games_list))
         self.games_list.setSortingEnabled(True)
-        self.games_list.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+        self.games_list.sortByColumn(Column.TITLE, Qt.SortOrder.AscendingOrder)
 
         self.queue_download_button = QPushButton("Queue Selection")
         self.queue_download_button.setIcon(get_icon('enqueue.svg'))
@@ -258,12 +292,12 @@ class MainWindow(QMainWindow):
         selection_data = self.games_list.selectedItems()
         row_data = {}
         for item in selection_data:
-            if item.column() == 0:
-                row_data['product_id'] = item.data(UserRole.PRODUCT_ID_ROLE.value)
+            if item.column() == Column.TITLE:
+                row_data['product_id'] = item.data(UserRole.PRODUCT_ID_ROLE)
                 row_data['title'] = item.text()
-            elif item.column() == 1:
+            elif item.column() == Column.SIZE:
                 row_data['size'] = item.text()
-            elif item.column() == 2:
+            elif item.column() == Column.FETCHED:
                 idx = self.download_window.add_to_queue(row_data.copy())
                 if idx == -1:
                     self.error_message.setWindowTitle("Error Queuing")
@@ -280,9 +314,9 @@ class MainWindow(QMainWindow):
             _ (int): Column index of the clicked cell, unused.
         """
         row_data = {}
-        row_data['product_id'] = self.games_list.item(row, 0).data(UserRole.PRODUCT_ID_ROLE.value)
-        row_data['title'] = self.games_list.item(row, 0).text()
-        row_data['size'] = self.games_list.item(row, 1).text()
+        row_data['product_id'] = self.games_list.item(row, Column.TITLE).data(UserRole.PRODUCT_ID_ROLE)
+        row_data['title'] = self.games_list.item(row, Column.TITLE).text()
+        row_data['size'] = self.games_list.item(row, Column.SIZE).text()
         idx = self.download_window.add_to_queue(row_data.copy())
         if idx == -1:
             self.error_message.setWindowTitle("Error Queuing")
@@ -316,7 +350,8 @@ class MainWindow(QMainWindow):
         """Fill the library list, keeping the column sort the user picked.
 
         The list starts out sorted by title, A to Z. The Fetched column
-        shows whether the game's installers are recorded in its manifest.
+        shows whether every file the current settings select for the game
+        is already downloaded, see ``_check_fetched``.
 
         Args:
             result (list[dict]): Products from
@@ -327,36 +362,87 @@ class MainWindow(QMainWindow):
         self.fetch_games_button.setDisabled(False)
         self.games_list.setRowCount(0)
         self.games_list.setSortingEnabled(False)
+        fetched_games = self._check_fetched(result)
         for game in result:
-            fetched = self._check_fetched(Path(read_setting('download_path')) / game['slug'])
+            fetched = fetched_games[game['product_id']]
             row_idx = self.games_list.rowCount()
-            first_column = QTableWidgetItem(game['title'])
-            first_column.setData(UserRole.PRODUCT_ID_ROLE.value, game['product_id'])
+            title_item = QTableWidgetItem(game['title'])
+            title_item.setData(UserRole.PRODUCT_ID_ROLE, game['product_id'])
             self.games_list.insertRow(row_idx)
-            self.games_list.setItem(row_idx, 0, first_column)
-            size_item = GameSizeItem(humanize.naturalsize(game['download_size']))
+            self.games_list.setItem(row_idx, Column.TITLE, title_item)
+            size_item = GameListItem(humanize.naturalsize(game['download_size']))
             size_item.setData(Qt.ItemDataRole.UserRole, game['download_size'])
-            self.games_list.setItem(row_idx, 1, size_item)
-            self.games_list.setItem(row_idx, 2, QTableWidgetItem("Yes" if fetched else "No"))
+            self.games_list.setItem(row_idx, Column.SIZE, size_item)
+            fetched_item = GameListItem("")
+            fetched_item.setData(Qt.ItemDataRole.UserRole, True if fetched else False)
+            fetched_item.setToolTip("Fetched" if fetched else "Not Fetched")
+            self.games_list.setItem(row_idx, Column.FETCHED, fetched_item)
         self.games_list.setSortingEnabled(True)
         self.games_list.selectRow(0)
         self.games_list.setFocus()
 
-    def _check_fetched(self, game_dir: Path) -> bool:
-        """Check whether a game's installers have been downloaded.
+    def _on_game_succeeded(self, product_id: int):
+        """Refresh a game's Fetched cell after its download succeeds.
+
+        The game's files are checked again instead of assuming "Yes", so a
+        file that never made it into the manifest still shows "No". Does
+        nothing if the game is not in the library list.
 
         Args:
-            game_dir (Path): The game's download directory.
+            product_id (int): GOG product ID of the game.
+        """
+        for row_idx in range(self.games_list.rowCount()):
+            if self.games_list.item(row_idx, Column.TITLE).data(UserRole.PRODUCT_ID_ROLE) == product_id:
+                if self._check_fetched(library_db.get_product_listing((product_id,))).get(product_id, False):
+                    self.games_list.item(row_idx, Column.FETCHED).setData(Qt.ItemDataRole.UserRole, True)
+                    self.games_list.item(row_idx, Column.FETCHED).setToolTip("Fetched")
+                else:
+                    self.games_list.item(row_idx, Column.FETCHED).setData(Qt.ItemDataRole.UserRole, False)
+                    self.games_list.item(row_idx, Column.FETCHED).setToolTip("Not Fetched")
+                break
+
+    def _check_fetched(self, product_listing: list[dict]) -> dict:
+        """Check which games have every selected file downloaded.
+
+        A game is fetched when each file the current settings select for
+        it passes ``check_exist_by_downlink``: recorded in the manifest,
+        still on disk at its recorded size, and with the same listed size
+        GOG has now. A changed listed size means GOG updated the file.
+        A game with no manifest, or no files selected, is not fetched.
+        Changing the download settings can change the result.
+
+        Args:
+            product_listing (list[dict]): Products with ``product_id`` and
+                ``slug``, such as from ``library_db.get_product_listing``.
 
         Returns:
-            bool: True if the manifest lists at least one installer file.
+            dict[int, bool]: Whether each product in ``product_listing``
+            is fetched, keyed by product ID. Empty if the listing is empty.
         """
-        manifest = read_manifest(game_dir)
-        if 'error' in manifest:
-            return False
-        if 'installers' in [f['category'] for f in manifest.values()]:
-            return True
-        return False
+        if len(product_listing) == 0:
+            return {}
+        games = product_listing
+        product_ids = [g['product_id'] for g in product_listing]
+        downloadables = library_db.get_downloadables(tuple(product_ids), filtered=True)
+        game_files = {}
+        for d in downloadables:
+            game_files.setdefault(d['product_id'], []).append(d)
+        fetched = {k: False for k in product_ids}
+        download_path = Path(read_setting('download_path'))
+        for game in games:
+            game_dir = download_path / game['slug']
+            manifest = read_manifest(game_dir)
+            if 'error' in manifest or not manifest.values():
+                continue
+            game_data = game_files.get(game['product_id'], [])
+            if not game_data:
+                continue
+            for d in game_data:
+                if not check_exist_by_downlink(game_dir, d['downlink'], d['file_size'], manifest):
+                    break
+            else:
+                fetched[game['product_id']] = True
+        return fetched
 
 def main():
     """Start the application and show the main window."""
