@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from gogstash import gog_api
 
@@ -11,6 +12,8 @@ FAKE_TOKEN = {"access_token": "mytoken"}
 def make_response(json_data):
     response = MagicMock()
     response.json.return_value = json_data
+    # A bare MagicMock is truthy for everything, so it would "redirect" every time
+    response.is_redirect = False
     return response
 
 
@@ -56,6 +59,83 @@ def test_fetch_library_raises_permission_error_when_not_logged_in(mock_get_valid
 
     with pytest.raises(PermissionError):
         gog_api.fetch_library()
+
+
+@patch("gogstash.gog_api.requests.get")
+@patch("gogstash.gog_api.gog_auth.get_valid_token")
+def test_fetch_owned_ids_returns_owned_list_as_a_set(mock_get_valid_token, mock_get):
+    mock_get_valid_token.return_value = FAKE_TOKEN
+    mock_get.return_value = make_response({"owned": [1207658695, 1456702644, 1293681291]})
+
+    result = gog_api.fetch_owned_ids()
+
+    assert mock_get.call_count == 1
+    args, kwargs = mock_get.call_args
+    assert args[0] == gog_api.USER_GAMES
+    assert kwargs["headers"] == {"Authorization": "Bearer mytoken"}
+    assert kwargs["allow_redirects"] is False
+    assert result == {1207658695, 1456702644, 1293681291}
+
+
+@patch("gogstash.gog_api.gog_auth.clear_token")
+@patch("gogstash.gog_api.requests.get")
+@patch("gogstash.gog_api.gog_auth.get_valid_token")
+def test_fetch_owned_ids_treats_login_redirect_as_auth_failure(mock_get_valid_token, mock_get, mock_clear_token):
+    # GOG doesn't say 401, it just shows you the door: 302 to /en##openlogin
+    mock_get_valid_token.return_value = FAKE_TOKEN
+    response = make_response({})
+    response.is_redirect = True
+    mock_get.return_value = response
+
+    with pytest.raises(PermissionError):
+        gog_api.fetch_owned_ids()
+
+    mock_clear_token.assert_called_once_with()
+    response.json.assert_not_called()
+
+
+@patch("gogstash.gog_api.requests.get")
+@patch("gogstash.gog_api.gog_auth.get_valid_token")
+def test_fetch_owned_ids_returns_empty_set_for_an_empty_library(mock_get_valid_token, mock_get):
+    # Owning nothing is a lifestyle choice, not an error
+    mock_get_valid_token.return_value = FAKE_TOKEN
+    mock_get.return_value = make_response({"owned": []})
+
+    assert gog_api.fetch_owned_ids() == set()
+
+
+@patch("gogstash.gog_api.requests.get")
+@patch("gogstash.gog_api.gog_auth.get_valid_token")
+def test_fetch_owned_ids_raises_on_http_error_status(mock_get_valid_token, mock_get):
+    mock_get_valid_token.return_value = FAKE_TOKEN
+    response = make_response({})
+    response.raise_for_status.side_effect = requests.HTTPError("503 Server Error")
+    mock_get.return_value = response
+
+    with pytest.raises(requests.HTTPError):
+        gog_api.fetch_owned_ids()
+
+
+@patch("gogstash.gog_api.requests.get")
+@patch("gogstash.gog_api.gog_auth.get_valid_token")
+def test_fetch_owned_ids_raises_when_owned_key_is_missing(mock_get_valid_token, mock_get):
+    # A 200 with no "owned" list must not pass for an empty library and wipe the cache
+    mock_get_valid_token.return_value = FAKE_TOKEN
+    mock_get.return_value = make_response({"error": "nope"})
+
+    with pytest.raises(KeyError):
+        gog_api.fetch_owned_ids()
+
+
+@patch("gogstash.gog_api.requests.get")
+@patch("gogstash.gog_api.gog_auth.get_valid_token")
+def test_fetch_owned_ids_raises_permission_error_when_not_logged_in(mock_get_valid_token, mock_get):
+    mock_get_valid_token.return_value = None
+
+    with pytest.raises(PermissionError):
+        gog_api.fetch_owned_ids()
+
+    mock_get.assert_not_called()
 
 
 @patch("gogstash.gog_api.requests.get")

@@ -7,11 +7,25 @@ group.
 """
 
 import sqlite3
+from typing import NamedTuple
+
 from gogstash import paths
-from gogstash.gog_api import fetch_library, fetch_downloadables
+from gogstash.gog_api import fetch_owned_ids, fetch_downloadables
 from gogstash import settings
 
 from PySide6.QtCore import QThread, Signal
+
+SCHEMA_VERSION = 1
+
+class DownloadValues(NamedTuple):
+    """Cache rows built from one product's downloads.
+
+    Attributes:
+        group_rows (list): Row tuples for the ``download_group`` table.
+        file_rows (list): Row tuples for the ``download_file`` table.
+    """
+    group_rows: list
+    file_rows : list
 
 def _create_db(force: bool = False) -> None:
     """Create the cache database and its tables if the file does not exist.
@@ -30,6 +44,7 @@ def _create_db(force: bool = False) -> None:
         conn.executescript(f"""
             CREATE TABLE product(
                 product_id BIGINT PRIMARY KEY,
+                parent_id BIGINT,
                 title TEXT,
                 slug TEXT,
                 product_type TEXT,
@@ -47,6 +62,7 @@ def _create_db(force: bool = False) -> None:
                 content_type TEXT,
                 os TEXT,
                 language TEXT,
+                version TEXT,
                 total_size BIGINT,
                 PRIMARY KEY (product_id, group_id),
                 FOREIGN KEY(product_id) REFERENCES product(product_id)
@@ -60,6 +76,7 @@ def _create_db(force: bool = False) -> None:
                 PRIMARY KEY (product_id, group_id, file_id),
                 FOREIGN KEY (product_id, group_id) REFERENCES download_group(product_id, group_id)
             );
+            PRAGMA user_version = {SCHEMA_VERSION}
         """)
 
 class LibraryFetchThread(QThread):
@@ -101,10 +118,8 @@ class LibraryFetchThread(QThread):
         try:
             product_listing = get_product_listing(product_id)
             if not (product_listing or product_id) or self.force:
-                update_products(fetch_library())
-                product_listing = get_product_listing()
-                all_product_ids = [p['product_id'] for p in product_listing]
-                update_downloadables(fetch_downloadables(all_product_ids, self.update_progress))
+                owned_products = fetch_owned_ids()
+                update_cache(fetch_downloadables(list(owned_products), self.update_progress))
                 product_listing = get_product_listing()
             self.succeeded.emit(product_listing)
         except PermissionError:
@@ -120,87 +135,165 @@ class LibraryFetchThread(QThread):
         """
         self.progress.emit(percentage)
 
-def update_products(products: list[dict]) -> None:
-    """Add library products to the cache.
+def verify_schema_version() -> bool:
+    """Rebuild the cache if it was made with a different schema.
 
-    Products already in the cache are left unchanged.
+    The schema version is stored in the database's ``user_version``.
+    Caches from before versioning read as 0. On a mismatch in either
+    direction, the old file is moved to its backup and an empty cache is
+    created, which the next library refresh fills.
 
-    Args:
-        products (list[dict]): Products from ``gog_api.fetch_library``.
+    Returns:
+        bool: True if the cache matches ``SCHEMA_VERSION`` or does not exist
+        yet. False if it was rebuilt.
     """
     db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     if not db_path.exists():
-        _create_db()
-    rows = [
-        (
-            product["id"],
-            product["title"],
-            product["slug"],
-            "movie" if product["isMovie"] else "game",
-            f"https://www.gog.com{product['url']}",
-            product['image'],
-            product["worksOn"]["Windows"],
-            product["worksOn"]["Linux"],
-            product["worksOn"]["Mac"],
-        )
-        for product in products
-    ]
+        return True
     with sqlite3.connect(db_path) as conn:
-        conn.executemany("INSERT OR IGNORE INTO product VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        query_result = conn.execute("PRAGMA user_version")
+        db_version = query_result.fetchone()[0]
+    conn.close()
+    if db_version != SCHEMA_VERSION:
+        _create_db(force=True)
+        return False
+    return True
 
-def update_downloadables(downloadables: list[dict]) -> None:
-    """Add or update download groups and files in the cache.
+def update_cache(products: list[dict]) -> None:
+    """Add or update products and their download files in the cache.
+
+    Only games and DLCs are stored. Packs and any other product types are
+    skipped along with their files. A DLC's response does not name its
+    base game, so ``parent_id`` comes from the games' ``dlcs`` lists, and
+    stays empty for a DLC whose game is not among ``products``. All rows
+    are written in one transaction.
 
     Args:
-        downloadables (list[dict]): Product details from
+        products (list[dict]): Product details from
             ``gog_api.fetch_downloadables``.
     """
     db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     if not db_path.exists():
         _create_db()
-    group_rows = []
-    file_rows = []
-    categories = ['installers', 'patches', 'language_packs', 'bonus_content']
-    for content in downloadables:
-        downloads: dict = content.get('downloads', [])
-        for category in categories:
-            group = downloads.get(category, [])
-            for items in group:
-                group_rows.append((
-                    content.get('id'),
-                    items.get('id'),
-                    items.get('name'),
-                    category,
-                    items.get('type'),
-                    items.get('os'),
-                    items.get('language'),
-                    items.get('total_size')
-                ))
-                for file in items.get('files', []):
-                    file_rows.append((
-                        content.get('id'),
-                        file.get('id'),
-                        items.get('id'),
-                        file.get('size'),
-                        file.get('downlink')
-                    ))
+    dlcs = {}
+    products_rows = []
+    download_group_rows = []
+    download_file_rows = []
+    for product in products:
+        if product.get('game_type') == 'game':
+            dlc_list = product.get('dlcs')
+            if isinstance(dlc_list, dict):
+                dlc_list = dlc_list.get('products')
+                dlcs.update({d['id']: product['id'] for d in dlc_list})
+    for product in products:
+        game_type = product.get('game_type')
+        match game_type:
+            case 'dlc':
+                parent_id = dlcs.get(product['id'])
+            case 'game':
+                parent_id = None
+            case _:
+                continue
+        products_rows.append(_product_values(product, parent_id))
+        download_values = _downloads_values(product)
+        download_group_rows.extend(download_values.group_rows)
+        download_file_rows.extend(download_values.file_rows)
     with sqlite3.connect(db_path) as conn:
         conn.executemany("""
-            INSERT INTO download_group VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO product VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(product_id) DO UPDATE SET
+                parent_id=excluded.parent_id,
+                title=excluded.title,
+                slug=excluded.slug,
+                product_type=excluded.product_type,
+                product_url=excluded.product_url,
+                image_uri=excluded.image_uri,
+                windows=excluded.windows,
+                linux=excluded.linux,
+                osx=excluded.osx
+        """, products_rows)
+        conn.executemany("""
+            INSERT INTO download_group VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(product_id, group_id) DO UPDATE SET
                     name=excluded.name,
                     category=excluded.category,
                     content_type=excluded.content_type,
                     os=excluded.os,
                     language=excluded.language,
+                    version=excluded.version,
                     total_size=excluded.total_size
-        """, group_rows)
+        """, download_group_rows)
         conn.executemany("""
             INSERT INTO download_file VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(product_id, group_id, file_id) DO UPDATE SET
                     size=excluded.size,
                     downlink=excluded.downlink
-        """, file_rows)
+        """, download_file_rows)        
+
+def _product_values(product: dict, parent_id: int | None = None) -> tuple:
+    """Build a ``product`` table row from a products API entry.
+
+    Args:
+        product (dict): Product details from ``gog_api.fetch_downloadables``.
+        parent_id (int | None): ID of the base game for a DLC, None for a
+            game.
+
+    Returns:
+        tuple: Values in the ``product`` table's column order.
+    """
+    return (
+        product['id'],
+        parent_id,
+        product['title'],
+        product['slug'],
+        product['game_type'],
+        product['links'].get('product_card', ""),
+        product['images'].get('icon', ""),
+        product['content_system_compatibility'].get('windows'),
+        product['content_system_compatibility'].get('linux'),
+        product['content_system_compatibility'].get('osx'),
+    )
+
+def _downloads_values(product: dict) -> DownloadValues:
+    """Build the download group and file rows for one product.
+
+    Rows are keyed by the product's own ID. A DLC and its base game can
+    share group IDs such as ``installer_windows_en``, so the DLC's files
+    are never stored under the parent.
+
+    Args:
+        product (dict): Product details from ``gog_api.fetch_downloadables``.
+
+    Returns:
+        DownloadValues: The ``download_group`` and ``download_file`` rows.
+    """
+    group_rows = []
+    file_rows = []
+    categories = ('installers', 'patches', 'language_packs', 'bonus_content')
+    downloads: dict = product.get('downloads', {})
+    for category in categories:
+        group = downloads.get(category, [])
+        for items in group:
+            group_rows.append((
+                product.get('id'),
+                items.get('id'),
+                items.get('name'),
+                category,
+                items.get('type'),
+                items.get('os'),
+                items.get('language'),
+                items.get('version'),
+                items.get('total_size')
+            ))
+            for file in items.get('files', []):
+                file_rows.append((
+                    product.get('id'),
+                    file.get('id'),
+                    items.get('id'),
+                    file.get('size'),
+                    file.get('downlink')
+                ))
+    return DownloadValues(group_rows, file_rows)
 
 def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
     """Return cached products with their total download size.
@@ -210,8 +303,9 @@ def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
             all products.
 
     Returns:
-        list[dict]: Entries with ``product_id``, ``title``, ``slug`` and
-        ``download_size``. Empty if the cache does not exist.
+        list[dict]: Entries with ``product_id``, ``parent_id`` (None for
+        games), ``title``, ``slug`` and ``download_size``. Empty if the
+        cache does not exist.
     """
     db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     if not db_path.exists():
@@ -224,6 +318,7 @@ def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
         query_result = conn.execute(f"""
             SELECT
                 p.product_id,
+                p.parent_id,
                 p.title,
                 p.slug
             FROM product p
@@ -235,8 +330,9 @@ def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
         product_sizes[file['product_id']] = product_sizes.get(file['product_id'], 0) + file['file_size']
     return [{
         'product_id': p[0],
-        'title': p[1],
-        'slug': p[2],
+        'parent_id': p[1],
+        'title': p[2],
+        'slug': p[3],
         'download_size': product_sizes.get(p[0], 0),
     } for p in query_result]
 

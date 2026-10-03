@@ -8,6 +8,41 @@ from gogstash import gog_auth
 
 LIBRARY_URL = "https://embed.gog.com/account/getFilteredProducts"
 PRODUCT_URL = "https://api.gog.com/products"
+USER_GAMES = "https://embed.gog.com/user/data/games"
+
+def fetch_owned_ids() -> set:
+    """Fetch the IDs of every product the user owns on GOG.
+
+    The list mixes games, DLCs and packs and carries no other details, so
+    callers look the IDs up with ``fetch_downloadables`` to tell them apart.
+    GOG rejects a bad token by redirecting to its login page, so a redirect
+    clears the saved token and counts as a failed login.
+
+    Returns:
+        set: Owned GOG product IDs as ints.
+
+    Raises:
+        PermissionError: If the user is not logged in or GOG rejects the
+            token.
+        requests.HTTPError: If GOG answers with an error status.
+        KeyError: If the response has no ``owned`` list.
+    """
+    token = gog_auth.get_valid_token()
+    if not token:
+        raise PermissionError("Authentication failed. Login again.")
+    response = requests.get(
+        USER_GAMES,
+        headers={"Authorization": f"Bearer {token['access_token']}"},
+        allow_redirects=False
+    )
+    if response.is_redirect:
+        gog_auth.clear_token()
+        raise PermissionError("Authentication failed. Login again.")
+    response.raise_for_status()
+    response_dict = response.json()
+    owned_list = response_dict['owned']
+    return set(owned_list)
+    
 
 def fetch_library() -> list[dict]:
     """Fetch every product in the user's GOG library.
@@ -29,7 +64,9 @@ def fetch_library() -> list[dict]:
         headers={"Authorization": f"Bearer {token['access_token']}"}, 
         params={
             "page": 1
-    })
+        }
+    )
+    response.raise_for_status()
     response_json = response.json()
     total_pages = response_json.get('totalPages')
     products.extend(response_json.get('products'))
@@ -46,7 +83,9 @@ def fetch_library() -> list[dict]:
 def fetch_downloadables(product_ids: list, progress_callback: Callable[[int], None] = None) -> list[dict]:
     """Fetch download metadata for a list of products.
 
-    Products are requested in batches of 50.
+    Products are requested in batches of 50. The token is required even
+    though GOG answers without one: anonymous requests silently leave out
+    secret DLCs and products that are no longer sold.
 
     Args:
         product_ids (list): GOG product IDs.
@@ -72,7 +111,8 @@ def fetch_downloadables(product_ids: list, progress_callback: Callable[[int], No
             params={
                 'ids': ','.join(str(pid) for pid in chunk),
                 'expand': 'downloads'
-            }
+            },
+            allow_redirects=False
         )
         product_info.extend(response.json())
         if progress_callback:

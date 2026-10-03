@@ -9,22 +9,15 @@ from gogstash import library_db
 from gogstash.download_queue import DownloadScheduler
 from gogstash.download_window import Column, DownloadState, DownloadWindow, StatusDelegate, UserRole
 from gogstash.settings import update_setting
+from tests.fakes import gog_product
 
-FAKE_PRODUCT = {
-    "id": 42,
-    "title": "Some Game",
-    "slug": "some-game",
-    "isMovie": False,
-    "url": "/en/game/some_game",
-    "image": "//images.example.com/some_game",
-    "worksOn": {"Windows": True, "Linux": False, "Mac": True},
-}
+FAKE_PRODUCT = gog_product(42, "Some Game", "some-game")
 
 
 @pytest.fixture(autouse=True)
 def db():
     library_db._create_db(force=True)
-    library_db.update_products([FAKE_PRODUCT])
+    library_db.update_cache([FAKE_PRODUCT])
 
 
 class SizedDownloadList:

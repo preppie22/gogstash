@@ -9,20 +9,9 @@ import pytest
 from PySide6.QtCore import QObject, Signal
 
 from gogstash import download_queue, library_db, manifest, paths, settings
+from tests.fakes import gog_product
 
-FAKE_PRODUCT = {
-    "id": 111,
-    "title": "Fake Game",
-    "slug": "fake-game",
-    "isMovie": False,
-    "url": "/en/game/fake_game",
-    "image": "//images.example.com/fake_game",
-    "worksOn": {"Windows": True, "Linux": False, "Mac": True},
-}
-
-FAKE_DOWNLOADABLE = {
-    "id": 111,
-    "downloads": {
+FAKE_PRODUCT = gog_product(111, "Fake Game", "fake-game", downloads={
         "installers": [
             {
                 "id": "installer_windows_en",
@@ -70,19 +59,17 @@ FAKE_DOWNLOADABLE = {
                 ],
             }
         ],
-    },
-}
-
-
-def fake_product(product_id, slug):
-    return {**FAKE_PRODUCT, "id": product_id, "title": slug, "slug": slug}
+})
 
 
 @pytest.fixture(autouse=True)
 def db():
     library_db._create_db(force=True)
-    library_db.update_downloadables([FAKE_DOWNLOADABLE])
-    library_db.update_products([FAKE_PRODUCT, fake_product(333, "polyglot-game"), fake_product(444, "monoglot-game")])
+    library_db.update_cache([
+        FAKE_PRODUCT,
+        gog_product(333, "polyglot-game", "polyglot-game"),
+        gog_product(444, "monoglot-game", "monoglot-game"),
+    ])
 
 
 def by_file(result, file_id):
@@ -159,9 +146,7 @@ def test_language_packs_are_never_included():
 
 # Shaped like Iratus: Lord of the Dead, where Linux speaks German but
 # Windows only ever learned English.
-FAKE_MULTILINGUAL = {
-    "id": 333,
-    "downloads": {
+FAKE_MULTILINGUAL = gog_product(333, "polyglot-game", "polyglot-game", downloads={
         "installers": [
             {
                 "id": f"installer_{os}_{lang}",
@@ -200,12 +185,11 @@ FAKE_MULTILINGUAL = {
                 ],
             }
         ],
-    },
-}
+})
 
 
 def polyglot_files(languages):
-    library_db.update_downloadables([FAKE_MULTILINGUAL])
+    library_db.update_cache([FAKE_MULTILINGUAL])
     settings.update_setting("languages", languages)
     settings.update_setting("bonus_content", True)
     return {f["file"] for f in download_queue.generate_download_list((333,))}
@@ -213,7 +197,7 @@ def polyglot_files(languages):
 
 def test_default_languages_download_english_only():
     # DEFAULT_SETTINGS has languages: ['en']
-    library_db.update_downloadables([FAKE_MULTILINGUAL])
+    library_db.update_cache([FAKE_MULTILINGUAL])
 
     files = {f["file"] for f in download_queue.generate_download_list((333,))}
 
@@ -279,9 +263,7 @@ def test_language_fallback_is_decided_per_game_in_a_batch():
     # languages were pooled across the batch, the polyglot's German Linux
     # build would convince everyone Linux speaks German, and the
     # monoglot's only Linux installer would quietly vanish.
-    monoglot = {
-        "id": 444,
-        "downloads": {
+    monoglot = gog_product(444, "monoglot-game", "monoglot-game", downloads={
             "installers": [
                 {
                     "id": "installer_linux_en_mono",
@@ -294,9 +276,8 @@ def test_language_fallback_is_decided_per_game_in_a_batch():
                     ],
                 }
             ],
-        },
-    }
-    library_db.update_downloadables([FAKE_MULTILINGUAL, monoglot])
+    })
+    library_db.update_cache([FAKE_MULTILINGUAL, monoglot])
     settings.update_setting("languages", ["de"])
 
     files = {f["file"] for f in download_queue.generate_download_list((333, 444))}
@@ -353,7 +334,7 @@ class Watcher:
 
 
 def single_installer_setup(mock_resolve, tmp_path):
-    library_db.update_products([FAKE_PRODUCT])
+    library_db.update_cache([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)  # isolate to the single installer file
     mock_resolve.return_value = {
@@ -375,7 +356,7 @@ def make_worker(resume_link=None, file_queue=None):
 @patch("gogstash.gog_api.resolve_downlink")
 def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, tmp_path):
     single_installer_setup(mock_resolve, tmp_path)
-    # file1's declared size in FAKE_DOWNLOADABLE is 1000 bytes, the streamed
+    # file1's declared size in FAKE_PRODUCT is 1000 bytes, the streamed
     # content must add up to exactly that or the new size-verification check
     # (part_path size vs file['size']) will treat this as a failed download.
     chunk_a = b"a" * 400
@@ -477,7 +458,7 @@ def test_download_worker_skips_a_renamed_bonus_file_instead_of_tripping_over_the
     # the file is not at its expected path (the user renamed it). Asking that
     # missing path for its size is how you get a FileNotFoundError for a file
     # we already have, just under a funnier name.
-    library_db.update_products([FAKE_PRODUCT])
+    library_db.update_cache([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     mock_resolve.return_value = {"downlink": "https://cdn.example.com/manual.zip", "checksum": ""}
     bonus_file = {
@@ -516,7 +497,7 @@ def test_download_worker_resumes_a_bonus_file_and_checks_it_against_the_full_siz
     # 206 reply reports Content-Length for the *remaining* bytes only, so
     # comparing the finished .part file to that number failed every resumed
     # bonus file even though all of its bytes were there, then binned it.
-    library_db.update_products([FAKE_PRODUCT])
+    library_db.update_cache([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     mock_resolve.return_value = {"downlink": "https://cdn.example.com/manual.zip", "checksum": ""}
     bonus_file = {
@@ -660,7 +641,7 @@ def test_download_worker_only_emits_succeeded_once_when_some_files_are_skipped(m
     # very end, so a batch with any skipped file emitted `succeeded` more
     # than once, prematurely freeing the scheduler's concurrency token for a
     # worker thread that was still very much alive.
-    library_db.update_products([FAKE_PRODUCT])
+    library_db.update_cache([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)
     settings.update_setting("bonus_content", True)  # installer (skip) + bonus (real download)
@@ -757,7 +738,7 @@ def test_download_worker_fails_immediately_when_no_valid_token(mock_resolve, tmp
     # now lives inside gog_api.resolve_downlink(), which raises
     # PermissionError instead of letting `None['access_token']` blow up with
     # something cryptic. Should just report the auth failure and bail.
-    library_db.update_products([FAKE_PRODUCT])
+    library_db.update_cache([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)
     mock_resolve.side_effect = PermissionError("Authentication failed. Login again.")

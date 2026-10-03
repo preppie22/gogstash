@@ -20,8 +20,11 @@ suffix until the first stable release), not SemVer.
 - Games you've already fully downloaded finish right away, instead of checking every file with GOG again
 - Dialogs in the download queue now have a title and an icon, so warnings like clearing the whole queue stand out from routine questions
 - The library's Fetched column shows a check mark for downloaded games and stays blank for the rest, instead of "Yes" and "No"
+- The library cache from earlier versions is cleared the first time you start this version. Click Refresh once to reload your library
+- Game titles in the library now update on refresh when GOG renames a game
 
 ### Fixed
+- DLCs you own now show up in the library, including ones GOG doesn't list on its store ([#6](https://github.com/preppie22/gogstash/issues/6))
 - Installers and patches are no longer downloaded in every language a game ships in, only the ones you picked ([#10](https://github.com/preppie22/gogstash/issues/10))
 - Game sizes in the library now match what will actually be downloaded, following your platform, language, patch and bonus content settings ([#5](https://github.com/preppie22/gogstash/issues/5))
 - Linux: logging in no longer crashes on newer distros such as openSUSE Tumbleweed and Kubuntu 25.10 ([#1](https://github.com/preppie22/gogstash/issues/1))

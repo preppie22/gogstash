@@ -187,6 +187,15 @@ class MainWindow(QMainWindow):
         self.library_layout.addWidget(self.games_list)
         self.library_layout.addWidget(self.button_layout)
 
+        if not library_db.verify_schema_version():
+            QMessageBox.information(
+                self,
+                "Cache Outdated",
+                "Your library cache was built by an older version of GogStash and has been updated. "
+                "Click Refresh to reload your library and rebuild the cache.",
+                QMessageBox.StandardButton.Ok
+            )
+
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea,self.left_dock)
         self._update_login_status()
         QApplication.instance().styleHints().colorSchemeChanged.connect(self._color_scheme_refresh)

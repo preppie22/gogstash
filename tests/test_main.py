@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication, QDialog
 from gogstash import gog_auth, library_db, manifest
 from gogstash.main import MainWindow
 from gogstash.settings import update_setting
+from tests.fakes import gog_product
 
 
 def _non_null_icon():
@@ -26,14 +27,9 @@ def _stock_the_library(games, bonus=False):
     # Fetched means "every file the settings pick is on disk", so the DB has
     # to list some files. One 5 byte installer per game, plus a 5 byte manual
     # for the ones that came with homework.
-    library_db.update_products([{
-        "id": game["product_id"], "title": game["title"], "slug": game["slug"], "isMovie": False,
-        "url": f"/en/game/{game['slug']}", "image": "//images.example.com/cover",
-        "worksOn": {"Windows": True, "Linux": False, "Mac": False},
-    } for game in games])
-    library_db.update_downloadables([{
-        "id": game["product_id"],
-        "downloads": {
+    library_db.update_cache([gog_product(
+        game["product_id"], game["title"], game["slug"], osx=False,
+        downloads={
             "installers": [{
                 "id": "installer_windows_en", "name": game["title"], "os": "windows", "language": "en", "total_size": 5,
                 "files": [{"id": "setup", "size": 5, "downlink": f"https://example.com/{game['slug']}/setup"}],
@@ -43,7 +39,7 @@ def _stock_the_library(games, bonus=False):
                 "files": [{"id": "manual", "size": 5, "downlink": f"https://example.com/{game['slug']}/manual"}],
             }] if bonus else [],
         },
-    } for game in games])
+    ) for game in games])
 
 
 def _record(download_dir, game, category):
