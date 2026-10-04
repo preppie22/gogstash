@@ -3,8 +3,8 @@
 Each game directory holds a hidden JSON file (``.gogstash.manifest``)
 keyed by file path relative to the game directory. Every entry records
 the file's category, downlink, size on disk, size listed by GOG, md5
-checksum and fetch time. Entries written by older versions have no
-downlink or listed size.
+checksum, installer version and fetch time. Entries written by older
+versions have no downlink or listed size, and no version.
 """
 
 import sys
@@ -40,6 +40,7 @@ def add_file(
         downlink: str,
         db_size: float,
         checksum: str,
+        version: str | None,
         timestamp: float
     ) -> None:
     """Record a downloaded file in the game's manifest.
@@ -58,6 +59,9 @@ def add_file(
             known.
         db_size (float): File size listed by GOG when it was downloaded.
         checksum (str): md5 hex digest. Empty for bonus content.
+        version (str | None): Version GOG listed for the file's download
+            group when it was downloaded. None when GOG lists none, as
+            for bonus content.
         timestamp (float): Fetch time as a Unix timestamp.
 
     Raises:
@@ -76,6 +80,7 @@ def add_file(
         'size': filepath.stat().st_size,
         'db_size': db_size,
         'checksum': checksum,
+        'version': version,
         'fetched_at': timestamp
     }
     temp_file = Path(game_dir) / f"{MANIFEST_FILE}~"
@@ -143,18 +148,29 @@ def check_exist(game_dir: Path, filepath: Path, filesize: int) -> dict:
                     return manifest[name]
     return {}
 
-def check_exist_by_downlink(game_dir: Path, downlink: str, filesize: int, manifest_data: dict | None = None) -> dict:
+def check_exist_by_downlink(
+        game_dir: Path,
+        downlink: str,
+        filesize: int, 
+        version: str | None,
+        manifest_data: dict | None = None
+    ) -> dict:
     """Find a manifest entry for a file that is already downloaded, by its downlink.
 
     Unlike ``check_exist``, this works before the file's CDN name is known.
-    An entry matches when its downlink and listed size are the same and
-    the file is still on disk at its recorded size. A changed listed size
-    means GOG updated the file, so it does not match.
+    An entry matches when its downlink, listed size and version are the
+    same and the file is still on disk at its recorded size. A changed
+    listed size or version means GOG updated the file, so it does not
+    match. Versions are only compared for equality, since GOG uses formats
+    such as ``gog-2`` and ``1.7.7.4``. An entry with no recorded version,
+    written by an older GogStash, does not match a listed version.
 
     Args:
         game_dir (Path): The game's download directory.
         downlink (str): GOG downlink of the file.
         filesize (int): File size listed by GOG.
+        version (str | None): Version GOG lists for the file's download
+            group. None when GOG lists none, as for bonus content.
         manifest_data (dict | None): The game's manifest, if already read.
             Read from ``game_dir`` when None.
 
@@ -169,7 +185,7 @@ def check_exist_by_downlink(game_dir: Path, downlink: str, filesize: int, manife
         return {}
     found = False
     for name, meta in manifest.items():
-        if meta.get('downlink', "") == downlink and meta.get('db_size', -1) == filesize:
+        if meta.get('version', "") == version and meta.get('downlink', "") == downlink and meta.get('db_size', -1) == filesize:
             found = True
             break
     if not found:

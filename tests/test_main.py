@@ -24,7 +24,7 @@ FAKE_GAME = {"product_id": 111, "parent_id": None, "title": "Fake Game", "slug":
 FAKE_GAME_2 = {"product_id": 222, "parent_id": None, "title": "Second Fake Game", "slug": "second-fake-game", "download_size": 4096}
 
 
-def _stock_the_library(games, bonus=False):
+def _stock_the_library(games, bonus=False, version=None):
     # Fetched means "every file the settings pick is on disk", so the DB has
     # to list some files. One 5 byte installer per game, plus a 5 byte manual
     # for the ones that came with homework. A game with a parent_id goes in
@@ -36,6 +36,7 @@ def _stock_the_library(games, bonus=False):
         downloads={
             "installers": [{
                 "id": "installer_windows_en", "name": game["title"], "os": "windows", "language": "en", "total_size": 5,
+                "version": version,
                 "files": [{"id": "setup", "size": 5, "downlink": f"https://example.com/{game['slug']}/setup"}],
             }],
             "bonus_content": [{
@@ -57,7 +58,7 @@ def _record(download_dir, game, category, folder=None):
     path = game_dir / category / f"{game['slug']}-{name}"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"hello")
-    manifest.add_file(game_dir, path, category=category, downlink=f"https://example.com/{game['slug']}/{name}", db_size=5, checksum="abc", timestamp=1.0)
+    manifest.add_file(game_dir, path, category=category, downlink=f"https://example.com/{game['slug']}/{name}", db_size=5, checksum="abc", version=None, timestamp=1.0)
 
 
 def _record_installer(download_dir, game, folder=None):
@@ -757,3 +758,17 @@ def test_ctrl_click_adds_a_second_game_instead_of_swapping_the_first_one_out():
     window.onclick_queue_download()
 
     assert _queued_titles(window) == ["Alpha", "Gamma"]
+
+
+def test_a_new_installer_version_takes_the_check_mark_away_even_at_the_same_size(tmp_path):
+    # #24: GOG's listed sizes are rounded, so a small patch can look identical
+    # on paper. The version is the one detail that can't keep a straight face.
+    update_setting("download_path", str(tmp_path))
+    _stock_the_library([FAKE_GAME])
+    _record_installer(tmp_path, FAKE_GAME)  # recorded on version None, matching the cache
+    _stock_the_library([FAKE_GAME], version="1.1")
+    window = MainWindow()
+
+    window.on_games_loaded([FAKE_GAME])
+
+    assert _is_fetched(window, 0) is False

@@ -350,7 +350,9 @@ def get_downloadables(product_id: tuple[int] = (), filtered: bool = False) -> li
 
     Returns:
         list[dict]: Entries with ``product_id``, ``category``,
-        ``group_id``, ``file_id``, ``file_size``, ``os``, ``language`` and ``downlink``.
+        ``group_id``, ``file_id``, ``file_size``, ``os``, ``language``,
+        ``downlink`` and ``version`` (the download group's version, None
+        for bonus content).
         Empty if the cache does not exist.
     """
     db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
@@ -370,7 +372,8 @@ def get_downloadables(product_id: tuple[int] = (), filtered: bool = False) -> li
                 df.size,
                 dg.os,
                 dg.language,
-                df.downlink
+                df.downlink,
+                dg.version
             FROM download_file df
             LEFT JOIN download_group dg ON
                 df.product_id = dg.product_id AND
@@ -386,7 +389,8 @@ def get_downloadables(product_id: tuple[int] = (), filtered: bool = False) -> li
         'file_size': p[4],
         'os': p[5],
         'language': p[6],
-        'downlink': p[7]
+        'downlink': p[7],
+        'version': p[8]
     } for p in query_result]
 
     if not filtered:

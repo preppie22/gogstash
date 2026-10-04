@@ -1,3 +1,4 @@
+import copy
 import errno
 import hashlib
 import os
@@ -463,14 +464,14 @@ def test_download_worker_skips_a_renamed_bonus_file_instead_of_tripping_over_the
     mock_resolve.return_value = {"downlink": "https://cdn.example.com/manual.zip", "checksum": ""}
     bonus_file = {
         "directory": "bonus_content", "category": "bonus_content", "file": "bonus1",
-        "os": None, "size": 10, "downlink": "https://example.com/bonus1",
+        "os": None, "size": 10, "downlink": "https://example.com/bonus1", "version": None,
     }
     game_dir = tmp_path / "fake-game"
     bonus_dir = game_dir / "bonus_content"
     bonus_dir.mkdir(parents=True)
     renamed = bonus_dir / "manual (read me first).zip"
     renamed.write_bytes(b"m" * 10)
-    manifest.add_file(game_dir, renamed, category="bonus_content", downlink="", db_size=-1, checksum="", timestamp=42.0)
+    manifest.add_file(game_dir, renamed, category="bonus_content", downlink="", db_size=-1, checksum="", version=None, timestamp=42.0)
     response = fake_response()
     response.status_code = 200
     response.headers = {"Content-Length": "10"}
@@ -502,7 +503,7 @@ def test_download_worker_resumes_a_bonus_file_and_checks_it_against_the_full_siz
     mock_resolve.return_value = {"downlink": "https://cdn.example.com/manual.zip", "checksum": ""}
     bonus_file = {
         "directory": "bonus_content", "category": "bonus_content", "file": "bonus1",
-        "os": None, "size": 10, "downlink": "https://example.com/bonus1",
+        "os": None, "size": 10, "downlink": "https://example.com/bonus1", "version": None,
     }
     bonus_dir = tmp_path / "fake-game" / "bonus_content"
     bonus_dir.mkdir(parents=True)
@@ -535,7 +536,7 @@ def test_download_worker_skips_a_file_already_verified_in_the_manifest(mock_reso
     existing_file.parent.mkdir(parents=True)
     existing_file.write_bytes(b"already have this one")
     checksum = hashlib.md5(b"already have this one").hexdigest()
-    manifest.add_file(game_dir, existing_file, category="installers", downlink="", db_size=-1, checksum=checksum, timestamp=42.0)
+    manifest.add_file(game_dir, existing_file, category="installers", downlink="", db_size=-1, checksum=checksum, version=None, timestamp=42.0)
     # If the skip check fails to short-circuit, iter_content() gets called and
     # blows up loudly instead of quietly re-downloading something we already have.
     stream_response = fake_response()
@@ -572,7 +573,7 @@ def test_download_worker_skipping_a_file_never_touches_the_network_stream_or_dis
     existing_file.parent.mkdir(parents=True)
     existing_file.write_bytes(b"already have this one")
     checksum = hashlib.md5(b"already have this one").hexdigest()
-    manifest.add_file(game_dir, existing_file, category="installers", downlink="", db_size=-1, checksum=checksum, timestamp=42.0)
+    manifest.add_file(game_dir, existing_file, category="installers", downlink="", db_size=-1, checksum=checksum, version=None, timestamp=42.0)
     stream_response = fake_response()
     stream_response.iter_content.side_effect = AssertionError("should never read the byte stream when skipping")
     mock_get.side_effect = [make_checksum_response(checksum), stream_response]
@@ -611,7 +612,7 @@ def test_download_worker_redownloads_when_the_checksum_no_longer_matches(mock_re
     existing_file = game_dir / "installer_windows_en" / "setup_fake_game.exe"
     existing_file.parent.mkdir(parents=True)
     existing_file.write_bytes(b"a" * 1000)  # matches file1's declared size, but stale content
-    manifest.add_file(game_dir, existing_file, category="installers", downlink="", db_size=-1, checksum="stale-checksum", timestamp=1.0)
+    manifest.add_file(game_dir, existing_file, category="installers", downlink="", db_size=-1, checksum="stale-checksum", version=None, timestamp=1.0)
     chunk_a = b"a" * 400
     chunk_b = b"b" * 600
     fresh_checksum = hashlib.md5(chunk_a + chunk_b).hexdigest()
@@ -654,7 +655,7 @@ def test_download_worker_only_emits_succeeded_once_when_some_files_are_skipped(m
     existing_file.parent.mkdir(parents=True)
     existing_file.write_bytes(b"already have this one")
     checksum = hashlib.md5(b"already have this one").hexdigest()
-    manifest.add_file(game_dir, existing_file, category="installers", downlink="", db_size=-1, checksum=checksum, timestamp=1.0)
+    manifest.add_file(game_dir, existing_file, category="installers", downlink="", db_size=-1, checksum=checksum, version=None, timestamp=1.0)
     bonus_chunk = b"x" * 10
     bonus_response = fake_response()
     bonus_response.headers = {"Content-Length": str(len(bonus_chunk))}
@@ -1516,7 +1517,7 @@ def test_a_fresh_download_replaces_an_entry_that_already_had_a_downlink(tmp_path
     # and the file gets downloaded fresh on every single run, forever.
     scheduler, worker, game_dir = _scheduler_with_game_files(tmp_path, "setup.exe")
     manifest.add_file(game_dir, game_dir / "setup.exe", category="installers",
-                      downlink="https://example.com/setup.exe", db_size=100, checksum="old-sum", timestamp=1.0)
+                      downlink="https://example.com/setup.exe", db_size=100, checksum="old-sum", version=None, timestamp=1.0)
 
     worker.fetched.emit(_fetched_entry(game_dir, "setup.exe", checksum="new-sum", db_size=200))
 
@@ -2024,14 +2025,14 @@ def test_game_started_announces_the_row_not_the_product_id():
 
 # --- skipping what's already on disk ---
 
-def _record_file1(tmp_path, db_size=1000, downlink="https://example.com/file1"):
+def _record_file1(tmp_path, db_size=1000, downlink="https://example.com/file1", version=None):
     settings.update_setting("download_path", str(tmp_path))
     game_dir = tmp_path / "fake-game"
     installer = game_dir / "installer_windows_en" / "setup_fake_game.exe"
     installer.parent.mkdir(parents=True)
     installer.write_bytes(b"x" * 10)
     manifest.add_file(game_dir, installer, category="installers", downlink=downlink, db_size=db_size,
-                      checksum="abc", timestamp=1.0)
+                      checksum="abc", version=version, timestamp=1.0)
     return installer
 
 
@@ -2719,6 +2720,65 @@ def test_download_list_skips_a_dlc_file_already_recorded_in_the_base_games_manif
     installer.parent.mkdir(parents=True)
     installer.write_bytes(b"h" * 10)
     manifest.add_file(game_dir, installer, category="installers", downlink="https://example.com/dlc1", db_size=1000,
-                      checksum="abc", timestamp=1.0)
+                      checksum="abc", version=None, timestamp=1.0)
 
     assert download_queue.generate_download_list((555,)) == []
+
+
+# --- installer versions (#24) ---
+
+def _versioned_fake_product(version):
+    product = copy.deepcopy(FAKE_PRODUCT)
+    product["downloads"]["installers"][0]["version"] = version
+    return product
+
+
+def test_download_list_queues_a_file_whose_version_changed_but_size_did_not(tmp_path):
+    library_db.update_cache([_versioned_fake_product("1.1")])
+    _record_file1(tmp_path, version="1.0")
+
+    assert by_file(download_queue.generate_download_list((111,)), "file1")["version"] == "1.1"
+
+
+def test_download_list_still_skips_a_file_on_the_current_version(tmp_path):
+    library_db.update_cache([_versioned_fake_product("1.1")])
+    _record_file1(tmp_path, version="1.1")
+
+    assert by_file(download_queue.generate_download_list((111,)), "file1") is None
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_version_bump_with_an_unchanged_file_is_skipped_and_signed_off_with_the_new_version(mock_resolve, mock_get, tmp_path):
+    # GOG bumped the version but this part of the installer didn't change.
+    # The checksum says so, nothing gets downloaded, and the skip carries the
+    # new version so the manifest stops asking.
+    single_installer_setup(mock_resolve, tmp_path)
+    library_db.update_cache([_versioned_fake_product("1.1")])
+    game_dir = tmp_path / "fake-game"
+    existing_file = game_dir / "installer_windows_en" / "setup_fake_game.exe"
+    existing_file.parent.mkdir(parents=True)
+    existing_file.write_bytes(b"same bytes, new label")
+    checksum = hashlib.md5(b"same bytes, new label").hexdigest()
+    manifest.add_file(game_dir, existing_file, category="installers", downlink="https://example.com/file1", db_size=1000,
+                      checksum=checksum, version="1.0", timestamp=42.0)
+    stream_response = fake_response()
+    stream_response.iter_content.side_effect = AssertionError("an unchanged file has no business being downloaded")
+    mock_get.side_effect = [make_checksum_response(checksum), stream_response]
+
+    thread = make_worker()
+    events = Watcher(thread)
+    thread.run()
+
+    [entry] = events.fetched
+    assert entry["skipped"] is True
+    assert entry["version"] == "1.1"
+
+
+@with_fake_workers
+def test_scheduler_records_the_version_a_worker_reports(tmp_path):
+    scheduler, worker, game_dir = _scheduler_with_game_files(tmp_path, "setup.exe")
+
+    worker.fetched.emit(_fetched_entry(game_dir, "setup.exe", version="1.7.7.4"))
+
+    assert manifest.stat_file(game_dir, game_dir / "setup.exe")["version"] == "1.7.7.4"

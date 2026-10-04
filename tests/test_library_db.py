@@ -670,3 +670,14 @@ def test_library_fetch_thread_emits_auth_failure_instead_of_failed_on_permission
 
     assert auth_failures == [True]
     assert failed == []
+
+
+def test_get_downloadables_hands_back_each_files_installer_version():
+    product = copy.deepcopy(FAKE_PRODUCT)
+    product["downloads"]["installers"][0]["version"] = "2025.8.f.4"
+    library_db.update_cache([product])
+
+    versions = {d["category"]: d["version"] for d in library_db.get_downloadables((111,))}
+
+    assert versions["installers"] == "2025.8.f.4"
+    assert versions["bonus_content"] is None  # GOG doesn't version manuals

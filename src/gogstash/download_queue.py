@@ -359,6 +359,7 @@ class DownloadScheduler(QObject):
                 downlink=fetched_file.get('downlink'),
                 db_size=fetched_file.get('db_size', -1),
                 checksum=fetched_file.get('checksum'),
+                version=fetched_file.get('version'),
                 timestamp=time.time()
             )
         except Exception as e:
@@ -622,6 +623,7 @@ class DownloadWorkerThread(QThread):
                     'size': -1,
                     'db_size': file['size'],
                     'checksum': "",
+                    'version': file['version'],
                     'error': str(e)
                 })
                 self._failed_flag = True
@@ -639,6 +641,7 @@ class DownloadWorkerThread(QThread):
                     'size': -1,
                     'db_size': file['size'],
                     'checksum': "",
+                    'version': file['version'],
                     'error': str(e)
                 })
                 self.failed.emit(str(e))
@@ -687,6 +690,7 @@ class DownloadWorkerThread(QThread):
                                 'size': existing_metadata.get('size', -1),
                                 'db_size': file['size'],
                                 'checksum': existing_metadata.get('checksum', ""),
+                                'version': file['version'],
                                 'skipped': True
                             })
                             self.__fetched_size = self.__fetched_size + existing_metadata['size']
@@ -749,7 +753,8 @@ class DownloadWorkerThread(QThread):
                         'downlink': file['downlink'],
                         'size': save_path.stat().st_size,
                         'db_size': file['size'],
-                        'checksum': checksum
+                        'checksum': checksum,
+                        'version': file['version']
                     })
                 else:
                     actual_size = part_path.stat().st_size
@@ -762,6 +767,7 @@ class DownloadWorkerThread(QThread):
                         'size': -1,
                         'db_size': file['size'],
                         'checksum': "",
+                        'version': file['version'],
                         'error': f"Checksum mismatch | Expected size: {file['size']} | Got size: {actual_size}"
                     })
                     self._failed_flag = True
@@ -780,6 +786,7 @@ class DownloadWorkerThread(QThread):
                     'size': -1,
                     'db_size': file['size'],
                     'checksum': "",
+                    'version': file['version'],
                     'error': f"{str(e)} | Expected size: {file['size']} | Got size: {_safe_size(part_path)}"
                 })
                 self._failed_flag = True
@@ -793,6 +800,7 @@ class DownloadWorkerThread(QThread):
                     'size': -1,
                     'db_size': file['size'],
                     'checksum': "",
+                    'version': file['version'],
                     'error': f"{str(e)} | Expected size: {file['size']} | Got size: {_safe_size(part_path)}"
                 })
                 self.failed.emit(str(e))
@@ -912,16 +920,16 @@ def generate_download_list(product_ids: tuple[int]) -> list[dict] | None:
     Files with no language, such as bonus content, are kept.
 
     Files already downloaded are left out: those whose manifest entry has
-    the same downlink and listed size, and whose file is still on disk
-    at its recorded size. Each game's manifest is read once.
+    the same downlink, listed size and version, and whose file is still
+    on disk at its recorded size. Each game's manifest is read once.
 
     Args:
         product_ids (tuple[int]): GOG product IDs.
 
     Returns:
         list[dict]: Files with ``directory`` (subfolder in the game
-        directory), ``category``, ``file``, ``os``, ``size`` and
-        ``downlink``. None if ``product_ids`` is empty.
+        directory), ``category``, ``file``, ``os``, ``size``,
+        ``version`` and ``downlink``. None if ``product_ids`` is empty.
     """
     if not product_ids:
         return
@@ -936,7 +944,7 @@ def generate_download_list(product_ids: tuple[int]) -> list[dict] | None:
 
     download_list = []
     for item in downloadables:
-        if manifest.check_exist_by_downlink(game_dirs[item['product_id']], item['downlink'], item['file_size'], manifest_cache[item['product_id']]):
+        if manifest.check_exist_by_downlink(game_dirs[item['product_id']], item['downlink'], item['file_size'], item['version'], manifest_cache[item['product_id']]):
             continue
         download_list.append ({
                 'directory': item['group_id'] if item['category'] == 'installers' else item['category'],
@@ -944,6 +952,7 @@ def generate_download_list(product_ids: tuple[int]) -> list[dict] | None:
                 'file': item['file_id'],
                 'os': item['os'],
                 'size': item['file_size'],
+                'version': item['version'],
                 'downlink': item['downlink'],
         })
     return download_list

@@ -13,6 +13,7 @@ suffix until the first stable release), not SemVer.
 - GogStash warns you before downloading more than fits on the disk, and lets you pause (keeping what has already downloaded) or download anyway ([#4](https://github.com/preppie22/gogstash/issues/4))
 - If the disk fills up in the middle of a download, GogStash pauses all downloads and tells you, instead of failing them, so you can free up some space and resume where it left off ([#4](https://github.com/preppie22/gogstash/issues/4))
 - Sort the library by any column by clicking its header ([#7](https://github.com/preppie22/gogstash/issues/7))
+- GogStash notices game updates by the installer and patch version GOG lists, not just by file size, so small patches that keep the same size are no longer missed. Games downloaded with an earlier version lose their check mark until you queue them once: files you already have are checked against GOG and skipped, not downloaded again ([#24](https://github.com/preppie22/gogstash/issues/24))
 
 ### Changed
 - The status indicators in the download queue now have a different shape for each state (ring, triangle, check mark, X, pause bars) and colors that are easier to tell apart, including for color blindness ([#22](https://github.com/preppie22/gogstash/issues/22))

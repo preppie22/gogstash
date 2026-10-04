@@ -460,7 +460,8 @@ class MainWindow(QMainWindow):
         A game is fetched when each file the current settings select for
         it passes ``check_exist_by_downlink``: recorded in the manifest,
         still on disk at its recorded size, and with the same listed size
-        GOG has now. A changed listed size means GOG updated the file.
+        and version GOG has now. A changed listed size or version means
+        GOG updated the file.
         A game with no manifest, or no files selected, is not fetched.
         Changing the download settings can change the result.
 
@@ -491,7 +492,7 @@ class MainWindow(QMainWindow):
             if not game_data:
                 continue
             for d in game_data:
-                if not check_exist_by_downlink(game_dir, d['downlink'], d['file_size'], manifest):
+                if not check_exist_by_downlink(game_dir, d['downlink'], d['file_size'], d['version'], manifest):
                     break
             else:
                 fetched[game['product_id']] = True
