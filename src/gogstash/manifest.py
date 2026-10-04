@@ -9,10 +9,24 @@ versions have no downlink or listed size, and no version.
 
 import sys
 import json
+from typing import NamedTuple
 from pathlib import Path
 
 MANIFEST_FILE = ".gogstash.manifest"
 FILE_ATTRIBUTE_HIDDEN = 0x2
+
+class FileExists(NamedTuple):
+    """Result of ``check_exist``.
+
+    Attributes:
+        filepath (Path | None): Where the matching file is on disk. This
+            can differ from the path asked about, for example when GOG
+            renamed the file. None when nothing matched.
+        manifest_entry (dict): The matching manifest entry, or an empty
+            dict when nothing matched.
+    """
+    filepath: Path | None
+    manifest_entry: dict
 
 def read_manifest(game_dir: Path) -> dict:
     """Read the manifest of a game directory.
@@ -50,6 +64,12 @@ def add_file(
     does not corrupt it. If writing the temporary file fails, it is
     deleted and the old manifest stays as it was.
 
+    Other entries with the same downlink whose file is gone are removed in
+    the same write. They are left behind when a file comes back under
+    another path, and would otherwise hide the new entry from
+    ``check_exist_by_downlink``. Entries with no downlink, or another one,
+    are kept even when their file is gone.
+
     Args:
         game_dir (Path): The game's download directory.
         filepath (Path): Path to the downloaded file inside ``game_dir``.
@@ -74,6 +94,16 @@ def add_file(
         manifest = {}
     if not filepath.exists():
         raise FileNotFoundError(f"No such file {filepath}")
+    valid_keys = []
+    for name, meta in manifest.items():
+        recorded_downlink = meta.get('downlink')
+        file_on_disk: Path = game_dir / name
+        if recorded_downlink and recorded_downlink == downlink and not file_on_disk.exists():
+            continue
+        else:
+            valid_keys.append(name)
+    manifest = {key: manifest[key] for key in valid_keys}
+        
     manifest[str(filepath.relative_to(game_dir))] = {
         'category': category,
         'downlink': downlink,
@@ -112,41 +142,57 @@ def stat_file(game_dir: Path, filepath: Path) -> dict:
         return {}
     return manifest.get(str(filepath.relative_to(game_dir)), {})
 
-def check_exist(game_dir: Path, filepath: Path, filesize: int) -> dict:
+def check_exist(game_dir: Path, downlink: str, filepath: Path, filesize: int) -> FileExists:
     """Find a manifest entry for a file that is already downloaded.
 
-    If ``filepath`` exists, its entry is returned only when the size on
-    disk matches the recorded size. If it does not exist (for example when
-    the file name changed on the CDN), any entry with a recorded size equal
-    to ``filesize`` is returned, as long as a file of that size exists in
-    ``game_dir``.
+    If ``filepath`` exists, its entry matches only when the size on disk
+    matches the recorded size. If it does not exist, another entry can
+    match instead, for example when GOG renamed the file on its CDN or an
+    older GogStash saved a shared installer under another language's
+    folder. Such an entry matches when its recorded size equals
+    ``filesize``, its own file is still on disk at that size, and it has
+    no downlink yet or has ``downlink``. An entry with another downlink
+    belongs to another file, such as the same installer in another
+    language, and is left alone.
+
+    Files renamed or moved by hand are not tracked down. Their entry points
+    to a file that is gone, so nothing matches and the file is downloaded
+    again.
 
     Args:
         game_dir (Path): The game's download directory.
+        downlink (str): GOG downlink of the file.
         filepath (Path): The path the file would be saved to.
         filesize (int): File size reported by the server.
 
     Returns:
-        dict: The matching manifest entry, or an empty dict.
+        FileExists: Where the matching file is and its manifest entry, or
+        ``(None, {})`` if nothing matches.
     """
     stats = stat_file(game_dir, filepath)
     if filepath.exists():
         if stats:
             file_size = filepath.stat().st_size
             if file_size == stats['size']:
-                return stats
+                return FileExists(filepath, stats)
         else:
-            return {}
+            return FileExists(None, {})
     else:
         manifest = read_manifest(game_dir)
         if 'error' in manifest:
-            return {}
-        file_sizes = [f.stat().st_size for f in game_dir.rglob('*')]
+            return FileExists(None, {})
         for name, meta in manifest.items():
+            downlink_matched = False
+            size_matched = False
             if meta['size'] == filesize:
-                if filesize in file_sizes:
-                    return manifest[name]
-    return {}
+                if meta.get('downlink', "") == downlink or not meta.get('downlink'):
+                    downlink_matched = True
+                file_on_disk = game_dir / name
+                if file_on_disk.exists() and file_on_disk.stat().st_size == filesize:
+                    size_matched = True
+            if downlink_matched and size_matched:
+                return FileExists(file_on_disk, meta)
+    return FileExists(None, {})
 
 def check_exist_by_downlink(
         game_dir: Path,

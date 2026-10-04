@@ -23,6 +23,7 @@ suffix until the first stable release), not SemVer.
 - The library's Fetched column shows a check mark for downloaded games and stays blank for the rest, instead of "Yes" and "No"
 - The library cache from earlier versions is cleared the first time you start this version. Click Refresh once to reload your library
 - Game titles in the library now update on refresh when GOG renames a game
+- Files you rename or move by hand inside a game's folder are no longer recognized, and are downloaded again on the next run. GogStash used to accept any file in the folder with the same size, which could skip a file you didn't actually have. Telling renamed, moved and copied files apart reliably isn't possible from names and sizes alone, so this is deliberate: GogStash only trusts files where it saved them. Files GOG renames on its side are still recognized ([#25](https://github.com/preppie22/gogstash/issues/25))
 
 ### Fixed
 - DLCs you own now show up in the library under their base game, including ones GOG doesn't list on its store, and download into the game's folder ([#6](https://github.com/preppie22/gogstash/issues/6))
@@ -35,6 +36,7 @@ suffix until the first stable release), not SemVer.
 - Cancelling downloads no longer leaves empty folders or leftover partial files behind in the game's download folder
 - The library's Fetched column now gets its check mark as soon as a game finishes downloading, instead of waiting for the next library refresh ([#3](https://github.com/preppie22/gogstash/issues/3))
 - Fetched only shows a check mark when every file your settings pick for a game is downloaded and still up to date, not when just some of them are. Changing your platform, language, patch or bonus content settings can change it ([#3](https://github.com/preppie22/gogstash/issues/3))
+- Games whose installer was saved under another language's folder by an earlier version, or whose files GOG renamed, now get their check mark once their files are found, instead of being counted toward the download size and skipped again on every download ([#25](https://github.com/preppie22/gogstash/issues/25))
 
 ## [2026.9.26-beta2] - 2026-09-26
 

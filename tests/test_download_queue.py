@@ -1,6 +1,7 @@
 import copy
 import errno
 import hashlib
+import json
 import os
 import time
 from pathlib import Path
@@ -488,7 +489,47 @@ def test_download_worker_skips_a_renamed_bonus_file_instead_of_tripping_over_the
     [entry] = events.fetched
     assert entry["skipped"] is True
     assert entry["size"] == 10
+    assert entry["filepath"] == renamed  # where the file is, not where it would have gone
     assert not (bonus_dir / "manual.zip").exists()
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_a_skip_found_under_another_language_folder_is_recorded_there_and_counts_as_fetched(mock_resolve, mock_get, tmp_path):
+    # Regression for #25: the worker skipped the _de copy but reported the
+    # _en path, the scheduler found no entry there, and nothing got recorded.
+    # The game then sat on "not fetched" forever, re-skipping ~200 MB of
+    # installers into the queue size every single time. Groundhog Day, but
+    # with progress bars.
+    single_installer_setup(mock_resolve, tmp_path)
+    [installer] = make_worker().file_queue
+    game_dir = tmp_path / "fake-game"
+    payload = b"one installer, five languages"
+    de_copy = game_dir / "installer_windows_de" / "setup_fake_game.exe"
+    de_copy.parent.mkdir(parents=True)
+    de_copy.write_bytes(payload)
+    (game_dir / manifest.MANIFEST_FILE).write_text(json.dumps({
+        "installer_windows_de/setup_fake_game.exe": {
+            "category": "installers", "size": len(payload), "checksum": hashlib.md5(payload).hexdigest(), "fetched_at": 1.0,
+        }
+    }))
+    stream_response = make_streamed_response([], headers={"Content-Length": str(len(payload))})
+    stream_response.iter_content.side_effect = AssertionError("should never read the byte stream when skipping")
+    mock_get.side_effect = [make_checksum_response(hashlib.md5(payload).hexdigest()), stream_response]
+
+    thread = make_worker()
+    events = Watcher(thread)
+    thread.run()
+
+    [entry] = events.fetched
+    assert entry["skipped"] is True
+    assert entry["filepath"] == de_copy
+    assert not any((game_dir / "installer_windows_en").iterdir())  # no second copy, just the empty folder mkdir left
+
+    download_queue.DownloadScheduler(1)._handle_fetched(entry)
+
+    assert manifest.check_exist_by_downlink(game_dir, installer["downlink"], installer["size"], installer["version"])
+    assert download_queue.generate_download_list((111,)) == []
 
 
 @patch("gogstash.download_queue.requests.get")

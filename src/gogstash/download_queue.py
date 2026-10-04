@@ -676,7 +676,7 @@ class DownloadWorkerThread(QThread):
                             content_length += fetched_bytes
                     else:
                         content_length = int(cl) if (cl:= download_response.headers.get('Content-Length')) else 0
-                    existing_metadata = manifest.check_exist(download_path, save_path, content_length)                
+                    file_on_disk, existing_metadata = manifest.check_exist(download_path, file['downlink'], save_path, content_length)                
                     if existing_metadata:
                         if (
                             (existing_metadata['category'] != 'bonus_content' and checksum == existing_metadata['checksum']) or
@@ -684,7 +684,7 @@ class DownloadWorkerThread(QThread):
                         ):
                             self.fetched.emit({
                                 'game_dir': download_path,
-                                'filepath': save_path,
+                                'filepath': file_on_disk,
                                 'category': existing_metadata.get('category', ""),
                                 'downlink': file['downlink'],
                                 'size': existing_metadata.get('size', -1),
