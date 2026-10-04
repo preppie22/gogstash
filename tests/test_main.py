@@ -478,6 +478,57 @@ def test_opening_settings_over_and_over_doesnt_hoard_dead_dialogs():
     assert window.findChildren(SettingsDialog) == []
 
 
+def test_settings_locks_while_downloads_are_busy_and_unlocks_once_idle():
+    # #26: moving the download folder under a paused game's .part file made
+    # it start over from zero, so Settings sits out the whole run, pause
+    # included, and says why instead of just going grey and silent.
+    from gogstash.download_window import DownloadState
+    window = MainWindow()
+    assert window.settings_button.isEnabled() is True
+    assert window.settings_button.toolTip() == "Settings (Ctrl+,)"
+
+    window.download_window.current_state = DownloadState.RUNNING
+    assert window.settings_button.isEnabled() is False
+    assert window.settings_button.toolTip() == "Can't change settings while downloads are running or paused"
+
+    window.download_window.current_state = DownloadState.PAUSED
+    assert window.settings_button.isEnabled() is False
+
+    window.download_window.current_state = DownloadState.IDLE
+    assert window.settings_button.isEnabled() is True
+    assert window.settings_button.toolTip() == "Settings (Ctrl+,)"
+
+
+def _press_ctrl_comma(window):
+    # Window shortcuts only fire for the active window, and offscreen there
+    # is nobody else to fight over focus with.
+    window.show()
+    window.activateWindow()
+    QTest.qWaitForWindowActive(window)
+    QTest.keyClick(window, Qt.Key.Key_Comma, Qt.KeyboardModifier.ControlModifier)
+
+
+@patch("gogstash.main.SettingsDialog")
+def test_ctrl_comma_opens_settings(mock_settings_dialog_cls):
+    window = MainWindow()
+
+    _press_ctrl_comma(window)
+
+    mock_settings_dialog_cls.return_value.exec.assert_called_once()
+
+
+@patch("gogstash.main.SettingsDialog")
+def test_ctrl_comma_is_locked_out_along_with_the_button(mock_settings_dialog_cls):
+    # A greyed-out button with a working back door is just a suggestion.
+    from gogstash.download_window import DownloadState
+    window = MainWindow()
+    window.download_window.current_state = DownloadState.RUNNING
+
+    _press_ctrl_comma(window)
+
+    mock_settings_dialog_cls.assert_not_called()
+
+
 def _fetched_by_title(window):
     return {_row(window, row).text(0): _is_fetched(window, row) for row in range(_row_count(window))}
 

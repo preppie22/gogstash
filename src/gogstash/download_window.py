@@ -141,9 +141,15 @@ class DownloadWindow(QDockWidget):
         current_state (DownloadState): State of the queue.
         scheduler (DownloadScheduler): Scheduler running the downloads.
         clear_queue (bool): Clear the table once a pending stop completes.
+        game_succeeded (Signal('qlonglong')): Emitted with the product ID of
+            a game that finished downloading.
+        busy_changed (Signal(bool)): Emitted whenever ``current_state`` is
+            set. True while downloads are running or paused, False once
+            the queue is idle.
     """
 
     game_succeeded = Signal('qlonglong')
+    busy_changed = Signal(bool)
 
     def __init__(self, parent=None):
         """Build the queue table, controls and scheduler.
@@ -153,7 +159,7 @@ class DownloadWindow(QDockWidget):
         """
         super().__init__(parent)
 
-        self.current_state = DownloadState.IDLE
+        self.__current_state = DownloadState.IDLE
         self.scheduler = None
         self.clear_queue = False
         self._disk_space_error = False
@@ -215,6 +221,20 @@ class DownloadWindow(QDockWidget):
         QApplication.instance().styleHints().colorSchemeChanged.connect(self._color_scheme_refresh)
         self._color_scheme_refresh()
         self._update_progress_bar()
+
+    @property
+    def current_state(self):
+        """DownloadState: State of the queue.
+
+        Setting it emits ``busy_changed``, True for anything but
+        ``DownloadState.IDLE``.
+        """
+        return self.__current_state
+
+    @current_state.setter
+    def current_state(self, value: DownloadState):
+        self.__current_state = value
+        self.busy_changed.emit(value != DownloadState.IDLE)
 
     def _color_scheme_refresh(self) -> None:
         """Reload button icons for the current color scheme.

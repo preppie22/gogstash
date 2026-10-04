@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import (
     QAction,
+    QKeySequence
 )
 from PySide6.QtCore import Qt, QSize
 
@@ -157,7 +158,10 @@ class MainWindow(QMainWindow):
         self.settings_button = QAction("Settings", self, icon=get_icon('settings.svg'))
         self.settings_button.setProperty('iconFile', 'settings.svg')
         self.settings_button.triggered.connect(self.open_settings)
+        self.settings_button.setShortcut(QKeySequence("Ctrl+,"))
+        self.settings_button.setToolTip(f"Settings ({self.settings_button.shortcut().toString(QKeySequence.SequenceFormat.NativeText)})")
         self.main_toolbar.addAction(self.settings_button)
+        self.download_window.busy_changed.connect(self._on_busy_changed)
 
         self.about_button = QAction("About", self, icon=get_icon('question.svg'))
         self.about_button.setProperty('iconFile', 'question.svg')
@@ -452,6 +456,20 @@ class MainWindow(QMainWindow):
         else:
             row_item.setData(Column.FETCHED, Qt.ItemDataRole.UserRole, False)
             row_item.setToolTip(Column.FETCHED, "Not Fetched")
+
+    def _on_busy_changed(self, is_busy: bool):
+        """Lock Settings while downloads are running or paused.
+
+        Changing the download folder or the file selection mid-run would
+        strand paused ``.part`` files and mix old and new settings in the
+        queue. Disabling the action also disables its shortcut.
+
+        Args:
+            is_busy (bool): True while the download queue is not idle.
+        """
+        self.settings_button.setDisabled(is_busy)
+        self.settings_button.setToolTip("Can't change settings while downloads are running or paused" if is_busy else
+                                         f"Settings ({self.settings_button.shortcut().toString(QKeySequence.SequenceFormat.NativeText)})")
 
 
     def _check_fetched(self, product_listing: list[dict]) -> dict:

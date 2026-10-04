@@ -11,6 +11,7 @@ suffix until the first stable release), not SemVer.
 ### Added
 - Pick which languages to download in Settings. Games that don't come in any of your languages fall back to English ([#10](https://github.com/preppie22/gogstash/issues/10))
 - GogStash warns you before downloading more than fits on the disk, and lets you pause (keeping what has already downloaded) or download anyway ([#4](https://github.com/preppie22/gogstash/issues/4))
+- Open Settings with Ctrl+, (Cmd+, on macOS)
 - If the disk fills up in the middle of a download, GogStash pauses all downloads and tells you, instead of failing them, so you can free up some space and resume where it left off ([#4](https://github.com/preppie22/gogstash/issues/4))
 - Sort the library by any column by clicking its header ([#7](https://github.com/preppie22/gogstash/issues/7))
 - GogStash notices game updates by the installer and patch version GOG lists, not just by file size, so small patches that keep the same size are no longer missed. Games downloaded with an earlier version lose their check mark until you queue them once: files you already have are checked against GOG and skipped, not downloaded again ([#24](https://github.com/preppie22/gogstash/issues/24))
@@ -38,6 +39,7 @@ suffix until the first stable release), not SemVer.
 - Fetched only shows a check mark when every file your settings pick for a game is downloaded and still up to date, not when just some of them are. Changing your platform, language, patch or bonus content settings can change it ([#3](https://github.com/preppie22/gogstash/issues/3))
 - Games whose installer was saved under another language's folder by an earlier version, or whose files GOG renamed, now get their check mark once their files are found, instead of being counted toward the download size and skipped again on every download ([#25](https://github.com/preppie22/gogstash/issues/25))
 - Switching between light and dark theme while downloading no longer freezes the window for a few seconds ([#23](https://github.com/preppie22/gogstash/issues/23))
+- Settings is locked while downloads are running or paused. Changing the download folder mid-run used to make a paused game start its file over from zero in the new folder, and games already in the queue kept the old language and file choices while new ones got the new ones ([#26](https://github.com/preppie22/gogstash/issues/26))
 
 ## [2026.9.26-beta2] - 2026-09-26
 

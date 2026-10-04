@@ -211,6 +211,26 @@ def test_start_button_walks_through_start_pause_resume(mock_estimate, mock_sched
     assert window.start_button.text() == "Pause Downloads"
 
 
+@patch.object(DownloadScheduler, "schedule")
+@sized_downloads()
+def test_busy_changed_stays_busy_through_a_pause_and_only_relaxes_once_idle(mock_estimate, mock_schedule):
+    # #26: the main window locks Settings off this signal. Paused counts as
+    # busy, since the paused game's .part file is still sitting in the old
+    # download folder, waiting for someone to move it out from under it.
+    mock_estimate.return_value = 0
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+    heard = []
+    window.busy_changed.connect(heard.append)
+
+    window.start_downloads()
+    window._on_paused()
+    window.stop_downloads()
+    window._on_stopped()
+
+    assert heard == [True, True, False]
+
+
 @patch("gogstash.download_window.DownloadScheduler")
 @sized_downloads()
 def test_start_downloads_does_not_require_a_stored_token(mock_estimate, mock_scheduler_cls):
