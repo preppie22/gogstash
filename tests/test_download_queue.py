@@ -389,6 +389,54 @@ def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, tmp_pa
     assert mock_get.call_args_list[1].kwargs["headers"] == {}
 
 
+def ten_chunk_download(mock_resolve, mock_get, tmp_path):
+    single_installer_setup(mock_resolve, tmp_path)
+    chunks = [bytes([65 + i]) * 100 for i in range(10)]  # 10 x 100 bytes = file1's 1000
+    mock_get.side_effect = [
+        make_checksum_response(hashlib.md5(b"".join(chunks)).hexdigest()),
+        make_streamed_response(chunks),
+    ]
+
+
+@patch("gogstash.download_queue.time.monotonic", return_value=100.0)
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_throttles_progress_but_still_lands_on_the_full_size(mock_resolve, mock_get, mock_clock, tmp_path):
+    # Regression for #23: one progress emit per chunk buried the UI thread so
+    # deep that a theme switch queued up behind it for seconds. Here the clock
+    # is frozen, so all ten chunks arrive in the same instant. Only the first
+    # one gets to speak, then the end-of-file emit has the final word.
+    ten_chunk_download(mock_resolve, mock_get, tmp_path)
+
+    thread = make_worker()
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert events.succeeded == 1
+    assert events.progress == [(100, 1000), (1000, 1000)]
+
+
+@patch("gogstash.download_queue.time.monotonic")
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_download_worker_reports_every_chunk_on_a_slow_enough_connection(mock_resolve, mock_get, mock_clock, tmp_path):
+    # The throttle is about time, not about shutting up after the first chunk.
+    # A quarter second between chunks is a connection slow enough that every
+    # single update is worth showing.
+    ten_chunk_download(mock_resolve, mock_get, tmp_path)
+    mock_clock.side_effect = (100.0 + 0.25 * i for i in range(10))
+
+    thread = make_worker()
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert events.succeeded == 1
+    assert [fetched for fetched, _ in events.progress[:10]] == [100 * (i + 1) for i in range(10)]
+    assert events.progress[-1] == (1000, 1000)
+
+
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
 def test_download_worker_resumes_a_part_file_with_a_range_request(mock_resolve, mock_get, tmp_path):

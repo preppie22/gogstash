@@ -567,6 +567,7 @@ class DownloadWorkerThread(QThread):
         self.file_queue = file_queue or []
         self.__total_size = sum(file.get('size', 0) for file in self.file_queue)
         self.__fetched_size = 0
+        self.__last_emitted = 0
 
     @property
     def total_size(self):
@@ -713,7 +714,10 @@ class DownloadWorkerThread(QThread):
                                 self.__fetched_size += bytes_written
                                 if file['directory'] != 'bonus_content':
                                     file_hash.update(chunk)
-                                self.update_progress()
+                                time_now = time.monotonic()
+                                if time_now - self.__last_emitted > 0.2:
+                                    self.__last_emitted = time_now
+                                    self.update_progress()
                                 if current_size < content_length or content_length == 0:
                                     if self._stop_flag:
                                         cleanup = True
@@ -732,7 +736,7 @@ class DownloadWorkerThread(QThread):
                             })
                             return
                         raise
-
+                self.update_progress()
                 if self._stop_flag and cleanup:
                     _discard_partial_downloads(download_path)
                     self.stopped.emit()

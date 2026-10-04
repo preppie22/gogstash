@@ -37,6 +37,7 @@ suffix until the first stable release), not SemVer.
 - The library's Fetched column now gets its check mark as soon as a game finishes downloading, instead of waiting for the next library refresh ([#3](https://github.com/preppie22/gogstash/issues/3))
 - Fetched only shows a check mark when every file your settings pick for a game is downloaded and still up to date, not when just some of them are. Changing your platform, language, patch or bonus content settings can change it ([#3](https://github.com/preppie22/gogstash/issues/3))
 - Games whose installer was saved under another language's folder by an earlier version, or whose files GOG renamed, now get their check mark once their files are found, instead of being counted toward the download size and skipped again on every download ([#25](https://github.com/preppie22/gogstash/issues/25))
+- Switching between light and dark theme while downloading no longer freezes the window for a few seconds ([#23](https://github.com/preppie22/gogstash/issues/23))
 
 ## [2026.9.26-beta2] - 2026-09-26
 
