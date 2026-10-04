@@ -2673,3 +2673,52 @@ def test_other_manifest_errors_are_logged_and_never_cost_the_user_the_file(tmp_p
     worker.fetched.emit(_fetched_entry(game_dir, "b.exe", size=1))
     assert manifest.stat_file(game_dir, game_dir / "a.exe") == {}  # given up on, not waiting
     assert sum("Error recording file" in line for line in _log_lines()) == 1
+
+
+# --- DLCs share their base game's folder ---
+
+FAKE_BASE_GAME = gog_product(444, "Hat Simulator", "hat-simulator", dlcs=[555])
+FAKE_DLC = gog_product(555, "Hat Simulator: Extra Hats", "hat-simulator-extra-hats", game_type="dlc", downloads={
+    "installers": [{
+        "id": "installer_windows_en", "name": "Extra Hats", "os": "windows", "language": "en", "total_size": 1000,
+        "files": [{"id": "dlc1", "size": 1000, "downlink": "https://example.com/dlc1"}],
+    }],
+})
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_dlc_download_lands_in_its_base_games_folder(mock_resolve, mock_get, tmp_path):
+    library_db.update_cache([FAKE_BASE_GAME, FAKE_DLC])
+    settings.update_setting("download_path", str(tmp_path))
+    mock_resolve.return_value = {
+        "downlink": "https://cdn.example.com/setup_extra_hats.exe",
+        "checksum": "https://cdn.example.com/setup_extra_hats.exe.xml",
+    }
+    body = b"h" * 1000
+    mock_get.side_effect = [make_checksum_response(hashlib.md5(body).hexdigest()), make_streamed_response([body])]
+    thread = download_queue.DownloadWorkerThread(555, download_queue.generate_download_list((555,)))
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert events.succeeded == 1
+    [entry] = events.fetched
+    assert entry["game_dir"] == tmp_path / "hat-simulator"
+    assert (tmp_path / "hat-simulator" / "installer_windows_en" / "setup_extra_hats.exe").read_bytes() == body
+    assert not (tmp_path / "hat-simulator-extra-hats").exists()  # no bachelor pad on the side
+
+
+def test_download_list_skips_a_dlc_file_already_recorded_in_the_base_games_manifest(tmp_path):
+    # Skipping reads the manifest from the same folder the worker writes to,
+    # or every finished DLC would be downloaded again on every queue.
+    library_db.update_cache([FAKE_BASE_GAME, FAKE_DLC])
+    settings.update_setting("download_path", str(tmp_path))
+    game_dir = tmp_path / "hat-simulator"
+    installer = game_dir / "installer_windows_en" / "setup_extra_hats.exe"
+    installer.parent.mkdir(parents=True)
+    installer.write_bytes(b"h" * 10)
+    manifest.add_file(game_dir, installer, category="installers", downlink="https://example.com/dlc1", db_size=1000,
+                      checksum="abc", timestamp=1.0)
+
+    assert download_queue.generate_download_list((555,)) == []

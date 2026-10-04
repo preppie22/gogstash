@@ -27,9 +27,12 @@ FAKE_GAME_2 = {"product_id": 222, "parent_id": None, "title": "Second Fake Game"
 def _stock_the_library(games, bonus=False):
     # Fetched means "every file the settings pick is on disk", so the DB has
     # to list some files. One 5 byte installer per game, plus a 5 byte manual
-    # for the ones that came with homework.
+    # for the ones that came with homework. A game with a parent_id goes in
+    # as that game's DLC, so the cache knows whose folder it lives in.
     library_db.update_cache([gog_product(
         game["product_id"], game["title"], game["slug"], osx=False,
+        game_type="dlc" if game.get("parent_id") else "game",
+        dlcs=[g["product_id"] for g in games if g.get("parent_id") == game["product_id"]],
         downloads={
             "installers": [{
                 "id": "installer_windows_en", "name": game["title"], "os": "windows", "language": "en", "total_size": 5,
@@ -43,20 +46,22 @@ def _stock_the_library(games, bonus=False):
     ) for game in games])
 
 
-def _record(download_dir, game, category):
+def _record(download_dir, game, category, folder=None):
     # Writes the file and its manifest entry with the same downlink and listed
     # size the DB has, so this passes for "downlink is in the manifest" and
-    # for the stricter check_exist_by_downlink alike.
-    game_dir = download_dir / game["slug"]
+    # for the stricter check_exist_by_downlink alike. A DLC passes its base
+    # game's slug as the folder, and the file name carries the product's own
+    # slug so roommates don't overwrite each other's manifest entries.
+    game_dir = download_dir / (folder or game["slug"])
     name = "setup" if category == "installers" else "manual"
-    path = game_dir / category / name
+    path = game_dir / category / f"{game['slug']}-{name}"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"hello")
     manifest.add_file(game_dir, path, category=category, downlink=f"https://example.com/{game['slug']}/{name}", db_size=5, checksum="abc", timestamp=1.0)
 
 
-def _record_installer(download_dir, game):
-    _record(download_dir, game, "installers")
+def _record_installer(download_dir, game, folder=None):
+    _record(download_dir, game, "installers", folder)
 
 
 def _row(window, row):
@@ -441,6 +446,10 @@ def test_toolbar_queue_while_busy_bitches_once_and_quits_trying():
     window = MainWindow()
     window.on_games_loaded([FAKE_GAME, FAKE_GAME_2])
     window.games_list.selectAll()
+    # Without this, a single-selection list turns selectAll() into a no-op,
+    # one game gets tried, and the test passes for entirely the wrong reason.
+    # Ask the tree that went single-selection behind everyone's back.
+    assert len(window.games_list.selectedItems()) == 2
     window.error_message.showMessage = MagicMock()
     window.download_window.add_to_queue = MagicMock(return_value=-1)
 
@@ -660,8 +669,8 @@ def test_doubleclick_on_a_dlc_queues_the_dlc_not_its_base_game():
     )
 
 
-def test_doubleclick_on_a_game_with_dlcs_queues_instead_of_unfolding():
-    # Double-click means "download this" here. Qt's habit of also expanding
+def test_doubleclick_on_a_game_with_dlcs_queues_instead_of_folding_it_up():
+    # Double-click means "download this" here. Qt's habit of also toggling
     # the row would turn every queued game into a surprise accordion.
     window = MainWindow()
     window.on_games_loaded([CULTIST, DANCER])
@@ -669,23 +678,25 @@ def test_doubleclick_on_a_game_with_dlcs_queues_instead_of_unfolding():
     QApplication.processEvents()
     tree = window.games_list
     rect = tree.visualItemRect(_row(window, 0))
+    assert _row(window, 0).isExpanded()  # DLCs start out on display
 
-    # A real double-click opens with a plain click, and the tree only unfolds
+    # A real double-click opens with a plain click, and the tree only toggles
     # rows it saw pressed first. QTest's double-click alone skips that part.
     QTest.mouseClick(tree.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
     QTest.mouseDClick(tree.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
 
-    assert not _row(window, 0).isExpanded()
+    assert _row(window, 0).isExpanded()
 
 
 def test_finished_dlc_download_ticks_the_dlc_row_tucked_under_its_game(tmp_path):
     # The old lookup only walked top-level rows, so a DLC's tick would have
-    # gone looking for it in all the wrong places.
+    # gone looking for it in all the wrong places. The DLC's file sits in its
+    # base game's folder, which is where the tick has to look for it too.
     update_setting("download_path", str(tmp_path))
     _stock_the_library([CULTIST, DANCER])
     window = MainWindow()
-    window.on_games_loaded([CULTIST, DANCER])
-    _record_installer(tmp_path, DANCER)
+    window.on_games_loaded(library_db.get_product_listing())
+    _record_installer(tmp_path, DANCER, folder=CULTIST["slug"])
 
     _finish_download(window, DANCER)
 
@@ -706,3 +717,43 @@ def test_finished_download_for_a_game_dropped_by_the_last_refresh_changes_nothin
     window._on_game_succeeded(FAKE_GAME["product_id"])  # should shrug, not raise
 
     assert _row_count(window) == 1
+
+
+def _queued_titles(window):
+    calls = window.download_window.add_to_queue.call_args_list
+    return sorted(call.args[0]["title"] for call in calls)
+
+
+def test_ctrl_a_then_queue_selection_queues_the_whole_library_dlcs_included():
+    # Regression: QTreeWidget ships in single-selection mode where the table
+    # was extended, so Ctrl+A did nothing and bulk queuing, the entire point
+    # of the app, quietly left the building. Ctrl+A also only grabs rows you
+    # can see, so the DLCs have to start out unfolded to come along.
+    window = MainWindow()
+    window.on_games_loaded([CULTIST, DANCER, PRIEST, FAKE_GAME])
+    window.download_window.add_to_queue = MagicMock(return_value=0)
+    window.show()
+    QApplication.processEvents()
+    window.games_list.setFocus()
+
+    QTest.keyClick(window.games_list, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    window.onclick_queue_download()
+
+    assert _queued_titles(window) == [
+        "Cultist Simulator", "Cultist Simulator: The Dancer", "Cultist Simulator: The Priest", "Fake Game",
+    ]
+
+
+def test_ctrl_click_adds_a_second_game_instead_of_swapping_the_first_one_out():
+    window = MainWindow()
+    window.on_games_loaded(SIZED_GAMES)  # Alpha, Beta, Gamma, with Alpha selected
+    window.download_window.add_to_queue = MagicMock(return_value=0)
+    window.show()
+    QApplication.processEvents()
+    tree = window.games_list
+    gamma = tree.visualItemRect(_row(window, 2)).center()
+
+    QTest.mouseClick(tree.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier, gamma)
+    window.onclick_queue_download()
+
+    assert _queued_titles(window) == ["Alpha", "Gamma"]

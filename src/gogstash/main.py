@@ -99,8 +99,6 @@ class GameListItem(QTreeWidgetItem):
             case Column.FETCHED:
                 return self.data(Column.FETCHED, Qt.ItemDataRole.UserRole) < other.data(Column.FETCHED, Qt.ItemDataRole.UserRole)
 
-
-
 class MainWindow(QMainWindow):
     """Main application window.
 
@@ -191,6 +189,7 @@ class MainWindow(QMainWindow):
         self.games_list.header().setStretchLastSection(False)
         self.games_list.setItemDelegateForColumn(Column.FETCHED, FetchedDelegate(self.games_list))
         self.games_list.setSortingEnabled(True)
+        self.games_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.games_list.sortByColumn(Column.TITLE, Qt.SortOrder.AscendingOrder)
 
         self.queue_download_button = QPushButton("Queue Selection")
@@ -408,6 +407,7 @@ class MainWindow(QMainWindow):
         self.games_list.setSortingEnabled(True)
         self.games_list.setCurrentItem(self.games_list.topLevelItem(0))
         self.games_list.setFocus()
+        self.games_list.expandAll()
 
     def _make_games_list_item(self, game: dict, fetched_games: dict) -> GameListItem:
         """Build a library row for a game or DLC, not yet added to the list.

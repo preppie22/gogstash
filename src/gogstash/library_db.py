@@ -304,8 +304,10 @@ def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
 
     Returns:
         list[dict]: Entries with ``product_id``, ``parent_id`` (None for
-        games), ``title``, ``slug`` and ``download_size``. Empty if the
-        cache does not exist.
+        games), ``title``, ``slug`` and ``download_size``. ``slug`` names
+        the product's download folder, so a DLC gets its base game's slug
+        and shares its folder. A DLC whose base game is not in the cache
+        keeps its own. Empty if the cache does not exist.
     """
     db_path = paths.config_file_path(paths.ConfigFile.DB_CACHE)
     if not db_path.exists():
@@ -320,8 +322,9 @@ def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
                 p.product_id,
                 p.parent_id,
                 p.title,
-                p.slug
+                COALESCE(parent.slug, p.slug)
             FROM product p
+            LEFT JOIN product parent ON parent.product_id = p.parent_id
             {where_block}
         """, product_id)
     files = get_downloadables(product_id, filtered=True)

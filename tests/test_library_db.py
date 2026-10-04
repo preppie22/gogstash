@@ -447,6 +447,37 @@ def test_get_product_listing_includes_dlcs_with_their_parent():
     assert listing[333]["parent_id"] is None
 
 
+def test_get_product_listing_moves_a_dlc_in_with_its_base_game():
+    # The slug is the download folder, and a DLC has no business living
+    # alone in "fake-game-extra-hats" when its game has a perfectly good room.
+    library_db.update_cache([FAKE_GAME_WITH_DLC, FAKE_DLC])
+
+    listing = {p["product_id"]: p for p in library_db.get_product_listing()}
+
+    assert listing[555]["slug"] == "hat-simulator"
+    assert listing[333]["slug"] == "hat-simulator"
+
+
+def test_get_product_listing_for_just_the_dlc_still_finds_the_parents_folder():
+    # The worker asks about one product at a time. The ID filter must not
+    # filter out the parent row the folder name comes from.
+    library_db.update_cache([FAKE_GAME_WITH_DLC, FAKE_DLC])
+
+    [dlc] = library_db.get_product_listing((555,))
+
+    assert dlc["slug"] == "hat-simulator"
+
+
+def test_get_product_listing_lets_an_orphan_dlc_keep_its_own_folder():
+    # Own the DLC, not the game: no parent to move in with, so it gets its own
+    # place rather than a folder called None.
+    library_db.update_cache([FAKE_DLC])
+
+    [dlc] = library_db.get_product_listing()
+
+    assert dlc["slug"] == "fake-game-extra-hats"
+
+
 def test_platform_helper_maps_settings_labels_to_gog_os_values():
     assert library_db._platform_helper(["Linux", "Windows", "MacOS"]) == [
         "linux",
