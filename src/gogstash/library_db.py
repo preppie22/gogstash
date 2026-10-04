@@ -346,7 +346,9 @@ def get_downloadables(product_id: tuple[int] = (), filtered: bool = False) -> li
         product_id (tuple[int]): Product IDs to filter by. Empty returns
             files for all products.
         filtered (bool): Only return files that match user settings and
-            filters.
+            filters. Installers are still used to work out each OS's
+            languages when the ``installers`` setting is off, so patches
+            keep following the installer language.
 
     Returns:
         list[dict]: Entries with ``product_id``, ``category``,
@@ -399,6 +401,7 @@ def get_downloadables(product_id: tuple[int] = (), filtered: bool = False) -> li
     bonus_content = settings.read_setting('bonus_content')
     platforms = _platform_helper(settings.read_setting('platform_filter'))
     patches = settings.read_setting('patches')
+    installers = settings.read_setting('installers')
     languages = settings.read_setting('languages') or ['en']
     filtered_files = []
     language_filter = {}
@@ -414,6 +417,7 @@ def get_downloadables(product_id: tuple[int] = (), filtered: bool = False) -> li
             (item['language'] not in language_filter.get((item['product_id'], item['os']), {'en'}) and item['language']) or
             (item['category'] == 'patches' and not patches) or
             (item['category'] == 'bonus_content' and not bonus_content) or
+            (item['category'] == 'installers' and not installers) or
             (item['category'] == 'language_packs')
         ):
             continue

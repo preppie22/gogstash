@@ -260,6 +260,27 @@ def test_bonus_content_ignores_the_language_filter():
     assert "polyglot_bonus" in files
 
 
+def test_unticking_installers_and_patches_leaves_only_the_extras():
+    # #13: the "I already own the game, I'm here for the soundtrack" setup.
+    settings.update_setting("installers", False)
+    settings.update_setting("patches", False)
+
+    assert polyglot_files(["en"]) == {"polyglot_bonus"}
+
+
+def test_patches_still_follow_the_installer_language_with_installers_unticked():
+    # Patches learn which languages a game speaks from its installers. Skip
+    # the installers too early and the patches forget, and German Linux
+    # users get handed the English patch as well.
+    settings.update_setting("installers", False)
+
+    files = polyglot_files(["de"])
+
+    assert not {"linux_en", "linux_de", "windows_en"} & files
+    assert {"patch_linux_de", "patch_windows_en"} <= files
+    assert "patch_linux_en" not in files
+
+
 def test_language_fallback_is_decided_per_game_in_a_batch():
     # Two games, one call, the way the game list asks. If the chosen
     # languages were pooled across the batch, the polyglot's German Linux

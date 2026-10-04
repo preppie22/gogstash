@@ -96,9 +96,6 @@ class SettingsDialog(QDialog):
             "bonus_content": QCheckBox("Bonus Content"),
             "patches": QCheckBox("Patches")
         }
-        self.download_categories_check['installers'].setChecked(True)
-        self.download_categories_check['installers'].setEnabled(False)
-        self.download_categories_check['installers'].setToolTip("Installers will always be downloaded")
         for checkbox in self.download_categories_check.items():
             self.download_categories_layout.addWidget(checkbox[1])
         self.window_layout.addRow("Download Categories", self.download_categories_layout)
@@ -192,7 +189,9 @@ class SettingsDialog(QDialog):
     def settings_buttons_handler(self, button):
         """Handle clicks on the dialog buttons.
 
-        Save writes the form to disk and closes the dialog.
+        Save writes the form to disk and closes the dialog, unless no
+        platform or no download category is ticked: then it shows one
+        warning listing both problems and saves nothing.
         Discard Changes reloads the saved settings. Restore Defaults fills the
         form with default values without saving. Close closes the dialog
         without saving.
@@ -217,11 +216,17 @@ class SettingsDialog(QDialog):
                 if entry.checkState() == Qt.CheckState.Checked:
                     languages.append(entry.data(Qt.ItemDataRole.UserRole))
             form_settings['languages'] = languages or settings.DEFAULT_SETTINGS['languages']
+            error_lines = []
             if not form_settings['platform_filter']:
+                error_lines.append("Pick at least one platform")
+            if not (form_settings['installers'] or form_settings['bonus_content'] or form_settings['patches']):
+                error_lines.append("Pick at least one download category")
+            if error_lines:
+                error_messages = '\n'.join(error_lines)
                 QMessageBox.warning(
                     self,
                     "Invalid Settings",
-                    "Pick at least one platform"
+                    f"Before saving:\n\n{error_messages}"
                 )
                 return
             settings.update_settings(form_settings)

@@ -12,6 +12,7 @@ suffix until the first stable release), not SemVer.
 - Pick which languages to download in Settings. Games that don't come in any of your languages fall back to English ([#10](https://github.com/preppie22/gogstash/issues/10))
 - GogStash warns you before downloading more than fits on the disk, and lets you pause (keeping what has already downloaded) or download anyway ([#4](https://github.com/preppie22/gogstash/issues/4))
 - Open Settings with Ctrl+, (Cmd+, on macOS)
+- Download only the extras: the Installers checkbox in Settings can now be unticked. Untick Installers and Patches and tick Bonus Content to get just the soundtracks, manuals and artwork. Settings won't save with no download category ticked ([#13](https://github.com/preppie22/gogstash/issues/13))
 - If the disk fills up in the middle of a download, GogStash pauses all downloads and tells you, instead of failing them, so you can free up some space and resume where it left off ([#4](https://github.com/preppie22/gogstash/issues/4))
 - Sort the library by any column by clicking its header ([#7](https://github.com/preppie22/gogstash/issues/7))
 - GogStash notices game updates by the installer and patch version GOG lists, not just by file size, so small patches that keep the same size are no longer missed. Games downloaded with an earlier version lose their check mark until you queue them once: files you already have are checked against GOG and skipped, not downloaded again ([#24](https://github.com/preppie22/gogstash/issues/24))

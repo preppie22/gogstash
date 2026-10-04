@@ -416,6 +416,18 @@ def test_get_product_listing_size_follows_the_download_filters():
     assert listing[0]["download_size"] == 2000
 
 
+def test_get_product_listing_size_counts_only_the_extras_with_installers_unticked():
+    # #13: two 1000-byte installer files leave the bill, the 500-byte
+    # manual is all that's left on it.
+    settings.update_setting("installers", False)
+    settings.update_setting("bonus_content", True)
+    library_db.update_cache([FAKE_PRODUCT])
+
+    listing = library_db.get_product_listing()
+
+    assert listing[0]["download_size"] == 500
+
+
 def test_get_product_listing_shows_zero_when_the_filters_leave_nothing():
     # A Windows-only game on a Linux-only setup has nothing left to
     # download. That's a zero in the size column, not a KeyError that

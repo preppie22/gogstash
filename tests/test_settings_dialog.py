@@ -65,15 +65,59 @@ def test_dialog_loads_saved_settings_on_construction():
     assert dialog.download_categories_check["patches"].isChecked() is False
 
 
-def test_installers_checkbox_is_always_checked_and_disabled():
-    # Regression: load_settings() has no "installers" key to read from settings.json
-    # (installers are never optional), so it must never let that checkbox be unchecked.
+def test_installers_checkbox_is_a_real_choice_now():
+    # #13: it spent its whole life ticked, greyed out and powerless, like a
+    # decorative light switch. Now it shows what's saved, and saves what's shown.
+    settings.update_settings({**SAVED_SETTINGS, "installers": False})
+    dialog = SettingsDialog()
+    installers = dialog.download_categories_check["installers"]
+    assert installers.isEnabled() is True
+    assert installers.isChecked() is False
+
+    installers.setChecked(True)
+    click(dialog, QDialogButtonBox.StandardButton.Save)
+
+    assert settings._read_settings()["installers"] is True
+
+
+def untick_every_category(dialog):
+    for checkbox in dialog.download_categories_check.values():
+        checkbox.setChecked(False)
+
+
+@patch("gogstash.settings_dialog.QMessageBox.warning")
+def test_save_refuses_when_no_download_category_is_ticked(mock_warning):
+    # Nothing ticked means every game is a 0 byte download that "finishes"
+    # instantly. Very fast, very useless.
     settings.update_settings(SAVED_SETTINGS)
     dialog = SettingsDialog()
+    untick_every_category(dialog)
 
-    installers = dialog.download_categories_check["installers"]
-    assert installers.isChecked() is True
-    assert installers.isEnabled() is False
+    click(dialog, QDialogButtonBox.StandardButton.Save)
+
+    mock_warning.assert_called_once()
+    assert "category" in mock_warning.call_args.args[2]
+    assert "platform" not in mock_warning.call_args.args[2]
+    assert settings._read_settings()["bonus_content"] is True  # nothing written
+    assert dialog.result() != dialog.DialogCode.Accepted
+
+
+@patch("gogstash.settings_dialog.QMessageBox.warning")
+def test_save_lists_every_problem_in_one_warning(mock_warning):
+    # One dialog with both complaints, not a game of whack-a-mole where
+    # fixing the platforms reveals the categories were empty too.
+    settings.update_settings(SAVED_SETTINGS)
+    dialog = SettingsDialog()
+    untick_every_category(dialog)
+    for checkbox in dialog.platform_filter_check.values():
+        checkbox.setChecked(False)
+
+    click(dialog, QDialogButtonBox.StandardButton.Save)
+
+    mock_warning.assert_called_once()
+    message = mock_warning.call_args.args[2]
+    assert "platform" in message and "category" in message
+    assert settings._read_settings()["platform_filter"] == ["Linux"]
 
 
 def test_save_persists_edited_values():

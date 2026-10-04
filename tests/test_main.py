@@ -226,6 +226,21 @@ def test_on_games_loaded_does_not_mark_fetched_for_bonus_content_alone(tmp_path)
     assert _is_fetched(window, 0) is False
 
 
+def test_on_games_loaded_marks_an_extras_only_game_fetched_without_its_installer(tmp_path):
+    # #13 flips the test above on its head: with installers unticked, the
+    # manual is the whole shopping list, and the installer stays off it.
+    update_setting("download_path", str(tmp_path))
+    update_setting("installers", False)
+    update_setting("bonus_content", True)
+    _stock_the_library([FAKE_GAME], bonus=True)
+    _record(tmp_path, FAKE_GAME, "bonus_content")
+    window = MainWindow()
+
+    window.on_games_loaded([FAKE_GAME])
+
+    assert _is_fetched(window, 0) is True
+
+
 def test_on_games_loaded_does_not_mark_a_half_finished_game_fetched(tmp_path):
     # Issue #3's other half: the installer made it, the manual didn't. One
     # out of two used to be good enough for a tick.
