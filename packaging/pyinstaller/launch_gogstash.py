@@ -10,4 +10,6 @@ if __name__ == "__main__":
             os.environ['LD_LIBRARY_PATH'] = original
         else:
             os.environ.pop('LD_LIBRARY_PATH', None)
+        os.environ.pop('QT_PLUGIN_PATH', None)
+        os.environ.pop('QML2_IMPORT_PATH', None)
     main()
