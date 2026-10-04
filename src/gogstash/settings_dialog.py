@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QFileDialog,
     QSpinBox,
-    QComboBox,
     QCheckBox,
     QGroupBox,
     QLabel,
@@ -84,11 +83,6 @@ class SettingsDialog(QDialog):
         for checkbox in self.platform_filter_check.items():
             self.platform_filter_layout.addWidget(checkbox[1])
         self.window_layout.addRow("Platforms", self.platform_filter_layout)
-
-        # Theme
-        self.theme_select = QComboBox()
-        self.theme_select.addItems(['Dark','Light','System'])
-        self.window_layout.addRow("Theme", self.theme_select)
 
         # Verify Downloads
         self.verify_downloads_check = QCheckBox()
@@ -181,7 +175,6 @@ class SettingsDialog(QDialog):
                 checkbox[1].setChecked(True)
             else:
                 checkbox[1].setChecked(False)
-        self.theme_select.setCurrentText(form_settings.get('theme'))
         self.verify_downloads_check.setChecked(form_settings.get('verify_downloads'))
         for checkbox in self.download_categories_check.items():
             if form_settings.get(checkbox[0]):
@@ -199,7 +192,7 @@ class SettingsDialog(QDialog):
     def settings_buttons_handler(self, button):
         """Handle clicks on the dialog buttons.
 
-        Save writes the form to disk, applies the theme and closes the dialog.
+        Save writes the form to disk and closes the dialog.
         Discard Changes reloads the saved settings. Restore Defaults fills the
         form with default values without saving. Close closes the dialog
         without saving.
@@ -217,7 +210,6 @@ class SettingsDialog(QDialog):
                 'installers': self.download_categories_check['installers'].isChecked(),
                 'bonus_content': self.download_categories_check['bonus_content'].isChecked(),
                 'patches': self.download_categories_check['patches'].isChecked(),
-                'theme': self.theme_select.currentText()
             }
             languages = []
             for row_idx in range(self.language_picker.count()):
@@ -233,7 +225,6 @@ class SettingsDialog(QDialog):
                 )
                 return
             settings.update_settings(form_settings)
-            self.set_color_theme()
             self.accept()
         if role == QDialogButtonBox.ButtonRole.DestructiveRole:
             self.load_settings()

@@ -17,6 +17,7 @@ suffix until the first stable release), not SemVer.
 - GogStash notices game updates by the installer and patch version GOG lists, not just by file size, so small patches that keep the same size are no longer missed. Games downloaded with an earlier version lose their check mark until you queue them once: files you already have are checked against GOG and skipped, not downloaded again ([#24](https://github.com/preppie22/gogstash/issues/24))
 
 ### Changed
+- The theme picker moved from Settings to a Theme button on the toolbar, so you can switch between Dark, Light and System while downloads are running
 - The status indicators in the download queue now have a different shape for each state (ring, triangle, check mark, X, pause bars) and colors that are easier to tell apart, including for color blindness ([#22](https://github.com/preppie22/gogstash/issues/22))
 - The download queue shows how much is left to download for each game, leaving out files you already have
 - Games you've already fully downloaded finish right away, instead of checking every file with GOG again

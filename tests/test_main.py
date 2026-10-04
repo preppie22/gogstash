@@ -386,7 +386,8 @@ def test_onclick_queue_download_does_nothing_without_a_selection():
 def test_color_scheme_refresh_reloads_each_toolbar_action_and_button_from_its_own_icon_file(mock_get_icon):
     # The Queue Selection button got an icon too, so it gets a seat on the
     # theme-change bus alongside the toolbar crew. The About button hopped
-    # on later, question mark and all.
+    # on later, question mark and all. Then the theme picker itself, which
+    # would be embarrassing to leave in the wrong colors.
     mock_get_icon.return_value = _non_null_icon()
     window = MainWindow()
     mock_get_icon.reset_mock()
@@ -394,7 +395,9 @@ def test_color_scheme_refresh_reloads_each_toolbar_action_and_button_from_its_ow
     window._color_scheme_refresh()
 
     called_files = {call.args[0] for call in mock_get_icon.call_args_list}
-    assert called_files == {"login.svg", "logout.svg", "fetch.svg", "settings.svg", "question.svg", "enqueue.svg"}
+    assert called_files == {
+        "login.svg", "logout.svg", "fetch.svg", "settings.svg", "theme_mode.svg", "question.svg", "enqueue.svg",
+    }
 
 
 def test_theme_change_mid_construction_doesnt_trip_over_half_built_widgets(monkeypatch):
@@ -823,3 +826,61 @@ def test_a_new_installer_version_takes_the_check_mark_away_even_at_the_same_size
     window.on_games_loaded([FAKE_GAME])
 
     assert _is_fetched(window, 0) is False
+
+
+def _theme_action(window, label):
+    return next(a for a in window.theme_toggle_group.actions() if a.text() == label)
+
+
+def test_picking_a_theme_saves_it_before_applying_it():
+    # set_color_theme reads the theme back from disk, so the order matters.
+    # Apply first and you get last time's theme, a very confident one-click lag.
+    from gogstash import settings
+    window = MainWindow()
+    applied_with = []
+
+    with patch("gogstash.main.SettingsDialog.set_color_theme",
+               side_effect=lambda: applied_with.append(settings.read_setting("theme"))):
+        _theme_action(window, "Light").trigger()
+
+    assert applied_with == ["Light"]
+    assert _theme_action(window, "Light").isChecked() is True
+    assert _theme_action(window, "Dark").isChecked() is False
+
+
+@pytest.mark.parametrize("saved", ["Dark", "Light", "System"])
+def test_theme_menu_starts_with_the_saved_theme_ticked(saved):
+    update_setting("theme", saved)
+
+    window = MainWindow()
+
+    assert [a.text() for a in window.theme_toggle_group.actions() if a.isChecked()] == [saved]
+
+
+def test_theme_button_opens_its_menu_on_a_plain_click():
+    # A toolbar button with a menu defaults to a split button, where the big
+    # part does nothing and the menu hides behind a sliver of an arrow.
+    from PySide6.QtWidgets import QToolButton
+    window = MainWindow()
+
+    button = window.main_toolbar.widgetForAction(window.theme_set_button)
+
+    assert button.popupMode() == QToolButton.ToolButtonPopupMode.InstantPopup
+    assert window.theme_set_button.menu() is window.theme_toggle_menu
+
+
+def test_theme_stays_changeable_while_settings_is_locked():
+    # The whole reason it moved out of Settings. Changing colors never
+    # stranded a .part file.
+    from gogstash import settings
+    from gogstash.download_window import DownloadState
+    update_setting("theme", "Dark")
+    window = MainWindow()
+    window.download_window.current_state = DownloadState.RUNNING
+
+    with patch("gogstash.main.SettingsDialog.set_color_theme"):
+        _theme_action(window, "Light").trigger()
+
+    assert window.settings_button.isEnabled() is False
+    assert window.theme_set_button.isEnabled() is True
+    assert settings.read_setting("theme") == "Light"

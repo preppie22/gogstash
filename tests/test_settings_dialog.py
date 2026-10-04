@@ -60,7 +60,6 @@ def test_dialog_loads_saved_settings_on_construction():
     assert dialog.platform_filter_check["Linux"].isChecked() is True
     assert dialog.platform_filter_check["Windows"].isChecked() is False
     assert dialog.platform_filter_check["MacOS"].isChecked() is False
-    assert dialog.theme_select.currentText() == "Dark"
     assert dialog.verify_downloads_check.isChecked() is False
     assert dialog.download_categories_check["bonus_content"].isChecked() is True
     assert dialog.download_categories_check["patches"].isChecked() is False
@@ -81,7 +80,6 @@ def test_save_persists_edited_values():
     dialog = SettingsDialog()
     dialog.download_edit_path.setText("/new/path")
     dialog.download_concurrency_edit.setValue(7)
-    dialog.theme_select.setCurrentText("Light")
     dialog.verify_downloads_check.setChecked(False)
     dialog.platform_filter_check["Windows"].setChecked(True)
     dialog.platform_filter_check["Linux"].setChecked(False)
@@ -94,11 +92,22 @@ def test_save_persists_edited_values():
     saved = settings._read_settings()
     assert saved["download_path"] == "/new/path"
     assert saved["download_concurrency"] == 7
-    assert saved["theme"] == "Light"
     assert saved["verify_downloads"] is False
     assert saved["platform_filter"] == ["Windows"]
     assert saved["bonus_content"] is True
     assert saved["patches"] is False
+
+
+def test_saving_settings_leaves_the_theme_picked_in_the_toolbar_alone():
+    # The theme moved out to the toolbar so it can change mid-download. The
+    # form no longer has a say in it, and must not quietly reset it to
+    # whatever it thinks the default is on the way out.
+    settings.update_settings(SAVED_SETTINGS)
+    dialog = SettingsDialog()
+
+    click(dialog, QDialogButtonBox.StandardButton.Save)
+
+    assert settings._read_settings()["theme"] == "Dark"
 
 
 def test_save_closes_the_dialog():
@@ -111,12 +120,10 @@ def test_discard_reverts_unsaved_edits_without_touching_disk():
     settings.update_settings(SAVED_SETTINGS)
     dialog = SettingsDialog()
     dialog.download_edit_path.setText("/unsaved/edit")
-    dialog.theme_select.setCurrentText("Light")
 
     click(dialog, QDialogButtonBox.StandardButton.Discard)
 
     assert dialog.download_edit_path.text() == "/saved/path"
-    assert dialog.theme_select.currentText() == "Dark"
     assert settings._read_settings()["download_path"] == "/saved/path"
 
 
@@ -141,9 +148,8 @@ def test_restore_defaults_populates_widgets_without_saving_to_disk():
 
     click(dialog, QDialogButtonBox.StandardButton.RestoreDefaults)
 
-    assert dialog.theme_select.currentText() == settings.DEFAULT_SETTINGS["theme"]
     assert dialog.download_concurrency_edit.value() == settings.DEFAULT_SETTINGS["download_concurrency"]
-    assert settings._read_settings()["theme"] == "Dark"  # disk still holds the saved value
+    assert settings._read_settings()["download_concurrency"] == 3  # disk still holds the saved value
 
 
 def test_restore_defaults_unchecks_bonus_content_when_default_is_false():

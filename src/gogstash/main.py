@@ -24,10 +24,13 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QDialogButtonBox,
     QMessageBox,
-    QStyledItemDelegate
+    QStyledItemDelegate,
+    QMenu,
+    QToolButton
 )
 from PySide6.QtGui import (
     QAction,
+    QActionGroup,
     QKeySequence
 )
 from PySide6.QtCore import Qt, QSize
@@ -36,7 +39,7 @@ from gogstash import gog_auth
 from gogstash.login_window import LoginWindow
 from gogstash import library_db
 from gogstash.settings_dialog import SettingsDialog
-from gogstash.settings import read_setting
+from gogstash.settings import read_setting, update_setting
 from gogstash.manifest import read_manifest, check_exist_by_downlink
 from gogstash.download_window import DownloadWindow, UserRole
 from gogstash.icon_utils import get_icon, get_logo, status_indicator
@@ -135,26 +138,31 @@ class MainWindow(QMainWindow):
         
         self.error_message = QErrorMessage()
 
+        # Login
         self.login_button = QAction("Login", self, icon=get_icon('login.svg'))
         self.login_button.setProperty('iconFile', 'login.svg')
         self.login_button.triggered.connect(self.open_login_window)
         self.main_toolbar.addAction(self.login_button)
 
+        # Logout
         self.logout_button = QAction("Logout", self, icon=get_icon('logout.svg'))
         self.logout_button.setProperty('iconFile', 'logout.svg')
         self.logout_button.triggered.connect(self.logout)
         self.main_toolbar.addAction(self.logout_button)
         self.main_toolbar.addSeparator()
 
+        # Fetch Games
         self.fetch_games_button = QAction("Refresh Games List", self, icon=get_icon('fetch.svg'))
         self.fetch_games_button.setProperty('iconFile', 'fetch.svg')
         self.fetch_games_button.triggered.connect(self.fetch_games)
         self.main_toolbar.addAction(self.fetch_games_button)
 
+        # Spacer
         self.spacer = QWidget()
         self.spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.main_toolbar.addWidget(self.spacer)
 
+        # Settings
         self.settings_button = QAction("Settings", self, icon=get_icon('settings.svg'))
         self.settings_button.setProperty('iconFile', 'settings.svg')
         self.settings_button.triggered.connect(self.open_settings)
@@ -163,11 +171,34 @@ class MainWindow(QMainWindow):
         self.main_toolbar.addAction(self.settings_button)
         self.download_window.busy_changed.connect(self._on_busy_changed)
 
+        # Theme
+        self.theme_toggle_group = QActionGroup(self)
+        self.theme_toggle_group.addAction(QAction("Dark", self.theme_toggle_group, checkable=True))
+        self.theme_toggle_group.addAction(QAction("Light", self.theme_toggle_group, checkable=True))
+        self.theme_toggle_group.addAction(QAction("System", self.theme_toggle_group, checkable=True))
+        self.theme_toggle_menu = QMenu(self)
+        self.theme_toggle_menu.addActions(self.theme_toggle_group.actions())
+        self.theme_set_button = QAction("Theme", self, icon=get_icon('theme_mode.svg'))
+        self.theme_set_button.setMenu(self.theme_toggle_menu)
+        self.theme_set_button.setProperty('iconFile', 'theme_mode.svg')
+        self.main_toolbar.addAction(self.theme_set_button)
+        self.main_toolbar.widgetForAction(self.theme_set_button).setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.theme_toggle_group.triggered.connect(self._on_theme_changed)
+
+        # Set Theme Buttons
+        current_theme = read_setting('theme')
+        for theme_setting in self.theme_toggle_group.actions():
+            if current_theme == theme_setting.text():
+                theme_setting.setChecked(True)
+                break
+
+        # About
         self.about_button = QAction("About", self, icon=get_icon('question.svg'))
         self.about_button.setProperty('iconFile', 'question.svg')
         self.about_button.triggered.connect(self.open_about_page)
         self.main_toolbar.addAction(self.about_button)
 
+        # Left Dock
         self.left_dock = QDockWidget()
         self.library_widget = QWidget()
         self.library_layout = QVBoxLayout()
@@ -176,6 +207,7 @@ class MainWindow(QMainWindow):
         self.left_dock.setWindowTitle("Library")
         self.left_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
 
+        # Main Games List
         self.games_list = QTreeWidget()
         self.games_list.setUniformRowHeights(True)
         self.games_list.itemDoubleClicked.connect(self.doubleclick_game_list)
@@ -196,17 +228,19 @@ class MainWindow(QMainWindow):
         self.games_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.games_list.sortByColumn(Column.TITLE, Qt.SortOrder.AscendingOrder)
 
+        # Enqueue Selection
         self.queue_download_button = QPushButton("Queue Selection")
         self.queue_download_button.setIcon(get_icon('enqueue.svg'))
         self.queue_download_button.setProperty('iconFile', 'enqueue.svg')
         self.queue_download_button.clicked.connect(self.onclick_queue_download)
-
         self.button_layout = QDialogButtonBox()
         self.button_layout.addButton(self.queue_download_button, QDialogButtonBox.ButtonRole.ActionRole)
 
+        # Main Window Layout
         self.library_layout.addWidget(self.games_list)
         self.library_layout.addWidget(self.button_layout)
 
+        # Verify Cache
         if not library_db.verify_schema_version():
             QMessageBox.information(
                 self,
@@ -216,7 +250,10 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Ok
             )
 
+        # Add Download Window
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea,self.left_dock)
+        
+        # Init Stuff
         self._update_login_status()
         QApplication.instance().styleHints().colorSchemeChanged.connect(self._color_scheme_refresh)
         SettingsDialog.set_color_theme()
@@ -471,6 +508,18 @@ class MainWindow(QMainWindow):
         self.settings_button.setToolTip("Can't change settings while downloads are running or paused" if is_busy else
                                          f"Settings ({self.settings_button.shortcut().toString(QKeySequence.SequenceFormat.NativeText)})")
 
+    def _on_theme_changed(self, action: QAction):
+        """Save and apply the theme picked from the toolbar menu.
+
+        The theme is saved first, since ``SettingsDialog.set_color_theme``
+        reads it back from the settings file.
+
+        Args:
+            action (QAction): The checked menu entry. Its text is the theme
+                name stored in the settings.
+        """
+        update_setting('theme', action.text())
+        SettingsDialog.set_color_theme()
 
     def _check_fetched(self, product_listing: list[dict]) -> dict:
         """Check which games have every selected file downloaded.
