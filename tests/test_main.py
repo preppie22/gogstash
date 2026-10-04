@@ -411,7 +411,8 @@ def test_color_scheme_refresh_reloads_each_toolbar_action_and_button_from_its_ow
 
     called_files = {call.args[0] for call in mock_get_icon.call_args_list}
     assert called_files == {
-        "login.svg", "logout.svg", "fetch.svg", "settings.svg", "theme_mode.svg", "question.svg", "enqueue.svg",
+        "login.svg", "logout.svg", "fetch.svg", "download_folder.svg", "settings.svg", "theme_mode.svg",
+        "question.svg", "enqueue.svg",
     }
 
 
@@ -899,3 +900,68 @@ def test_theme_stays_changeable_while_settings_is_locked():
     assert window.settings_button.isEnabled() is False
     assert window.theme_set_button.isEnabled() is True
     assert settings.read_setting("theme") == "Light"
+
+
+@patch("gogstash.main.QDesktopServices.openUrl", return_value=True)
+def test_open_downloads_folder_hands_the_download_path_to_the_file_manager(mock_open_url, tmp_path):
+    # A space in the path, like the real NAS share. QUrl has to escape it,
+    # not the file manager squinting at "Game%20Setups" and giving up.
+    download_dir = tmp_path / "Game Setups" / "gogstash"
+    download_dir.mkdir(parents=True)
+    update_setting("download_path", str(download_dir))
+    window = MainWindow()
+
+    window.open_downloads_button.trigger()
+
+    [url] = mock_open_url.call_args.args
+    assert url.isLocalFile()
+    assert url.toLocalFile() == str(download_dir)
+
+
+@patch("gogstash.main.QDesktopServices.openUrl", return_value=True)
+def test_open_downloads_folder_makes_the_folder_on_a_fresh_install(mock_open_url, tmp_path):
+    # Nothing downloaded yet means no folder yet. Opening a folder that
+    # doesn't exist gets you an error dialog or a shrug, depending on the
+    # file manager's mood.
+    download_dir = tmp_path / "not" / "yet"
+    update_setting("download_path", str(download_dir))
+    window = MainWindow()
+
+    window.open_downloads_folder()
+
+    assert download_dir.is_dir()
+    mock_open_url.assert_called_once()
+
+
+@patch("gogstash.main.QMessageBox.warning")
+@patch("gogstash.main.QDesktopServices.openUrl")
+def test_open_downloads_folder_says_so_when_the_folder_cant_be_made(mock_open_url, mock_warning, tmp_path):
+    # A file squatting where a folder should go stands in for an unmounted
+    # share or a read-only drive. The user hears about it, the file
+    # manager is spared.
+    squatter = tmp_path / "squatter"
+    squatter.write_text("I live here now")
+    update_setting("download_path", str(squatter / "gogstash"))
+    window = MainWindow()
+
+    window.open_downloads_folder()
+
+    mock_open_url.assert_not_called()
+    mock_warning.assert_called_once()
+    assert str(squatter / "gogstash") in mock_warning.call_args.args[2]
+
+
+@patch("gogstash.main.QMessageBox.critical")
+@patch("gogstash.main.QDesktopServices.openUrl", return_value=False)
+def test_open_downloads_folder_speaks_up_when_nothing_can_open_folders(mock_open_url, mock_critical, tmp_path):
+    # A desktop with no file manager. Rare, but a button that silently
+    # does nothing is how bug reports titled "button broken" are born.
+    update_setting("download_path", str(tmp_path))
+    window = MainWindow()
+
+    window.open_downloads_folder()
+
+    mock_critical.assert_called_once()
+    _parent, title, text = mock_critical.call_args.args
+    assert title == "No Folder Handler"
+    assert "open folders" in text

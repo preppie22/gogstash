@@ -31,9 +31,10 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
-    QKeySequence
+    QKeySequence,
+    QDesktopServices
 )
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QUrl
 
 from gogstash import gog_auth
 from gogstash.login_window import LoginWindow
@@ -156,6 +157,12 @@ class MainWindow(QMainWindow):
         self.fetch_games_button.setProperty('iconFile', 'fetch.svg')
         self.fetch_games_button.triggered.connect(self.fetch_games)
         self.main_toolbar.addAction(self.fetch_games_button)
+
+        # Open Downloads Folder
+        self.open_downloads_button = QAction("Open Downloads Folder", self, icon=get_icon('download_folder.svg'))
+        self.open_downloads_button.setProperty('iconFile', 'download_folder.svg')
+        self.open_downloads_button.triggered.connect(self.open_downloads_folder)
+        self.main_toolbar.addAction(self.open_downloads_button)
 
         # Spacer
         self.spacer = QWidget()
@@ -301,6 +308,32 @@ class MainWindow(QMainWindow):
         settings_dialog.exec()
         self.on_games_loaded(library_db.get_product_listing())
         settings_dialog.deleteLater()
+
+    def open_downloads_folder(self):
+        """Open the download folder in the system file manager.
+
+        The folder is created first if it doesn't exist yet. If it can't
+        be created, for example on an unmounted network share, a warning
+        shows the path and the error instead. If the system has nothing
+        that can open folders, an error says so.
+        """
+        folder_path = Path(read_setting('download_path'))
+        try:
+            folder_path.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            QMessageBox.warning(
+                self,
+                "Path Error",
+                f"Error opening {str(folder_path)}\n\n{str(e)}"
+            )
+            return
+        check = QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder_path)))
+        if not check:
+            QMessageBox.critical(
+                self,
+                "No Folder Handler",
+                "Your system does not have a way to open folders!"
+            )
 
     def open_about_page(self):
         """Show the about page."""
