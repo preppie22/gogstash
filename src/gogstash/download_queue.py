@@ -47,21 +47,25 @@ class DownloadScheduler(QObject):
 
     Jobs move between three queues: idle (waiting to start), active (a
     worker is running) and paused (holding resume information for a
-    partly downloaded file). Each job carries the row index of its entry
-    in the download window, and every per-game signal reports that index.
+    partly downloaded file). Each job carries its game's product ID,
+    which every per-game signal reports as a 64-bit integer (GOG product
+    IDs are close to the 32-bit limit), and a priority that decides
+    which waiting job starts first. Priorities only need to sort in the
+    right order, so gaps and ties are fine.
 
     Before starting jobs, the scheduler checks that everything still to be
     downloaded fits on the disk, and holds every job back if it does not.
 
     Attributes:
-        game_succeeded (Signal(int)): A game finished downloading.
-        game_started (Signal(int)): A game started downloading.
-        game_failed (Signal(int, str)): A game failed, with an error
-            message.
-        game_stopped (Signal(int)): A game was stopped.
-        game_paused (Signal(int)): A game was paused.
-        progress_updated (Signal(int, float, float)): Bytes fetched and
-            total bytes for a game.
+        game_succeeded (Signal('qlonglong')): A game finished
+            downloading.
+        game_started (Signal('qlonglong')): A game started downloading.
+        game_failed (Signal('qlonglong', str)): A game failed, with an
+            error message.
+        game_stopped (Signal('qlonglong')): A game was stopped.
+        game_paused (Signal('qlonglong')): A game was paused.
+        progress_updated (Signal('qlonglong', float, float)): Bytes
+            fetched and total bytes for a game.
         finished (Signal): All jobs have completed.
         stopped (Signal): All jobs have stopped after ``stop_all``.
         paused (Signal): All active jobs have paused after ``pause_all``.
@@ -72,12 +76,12 @@ class DownloadScheduler(QObject):
             downloads are being paused. Emitted once per pause, before
             ``paused``.
     """
-    game_succeeded = Signal(int)
-    game_started = Signal(int)
-    game_failed = Signal(int, str)
-    game_stopped = Signal(int)
-    game_paused = Signal(int)
-    progress_updated = Signal(int, float, float)
+    game_succeeded = Signal('qlonglong')
+    game_started = Signal('qlonglong')
+    game_failed = Signal('qlonglong', str)
+    game_stopped = Signal('qlonglong')
+    game_paused = Signal('qlonglong')
+    progress_updated = Signal('qlonglong', float, float)
     finished = Signal()
     stopped = Signal()
     paused = Signal()
@@ -142,23 +146,24 @@ class DownloadScheduler(QObject):
         """Add a job to the idle queue.
 
         The game's download list is built here, without the files that are
-        already downloaded. A job for a row that is already waiting is
-        ignored. If downloads are running, the scheduler tries to start the
-        job right away.
+        already downloaded. A job for a game that is already waiting is
+        ignored. Nothing is started here, even while downloads are
+        running: the caller calls ``schedule`` once it is ready for the
+        job's signals.
 
         Args:
-            product (dict): Job with ``idx`` (row index) and ``product_id``.
+            product (dict): Job with ``priority`` and ``product_id``.
 
         Returns:
             int: Estimated bytes still to download for the game. 0 if the
-            row was already waiting.
+            game was already waiting.
         """
         for item in self.idle_queue:
-            if item.get('row_idx') == product['idx']:
+            if item.get('product_id') == product['product_id']:
                 return 0
         file_queue = generate_download_list((product['product_id'],))
         queue_item = {
-            'row_idx': product['idx'],
+            'priority': product['priority'],
             'product_id': product['product_id'],
             'worker': None,
             'file_queue': file_queue,
@@ -167,8 +172,6 @@ class DownloadScheduler(QObject):
         }
         self.idle_queue.append(queue_item)
         download_size = sum(file['size'] for file in file_queue)
-        if self.active_queue:
-            self.schedule()
         return download_size
 
     def stop_all(self):
@@ -188,7 +191,7 @@ class DownloadScheduler(QObject):
             task['stopped'] = True
         while self.paused_queue:
             job = self.paused_queue.pop()
-            self.game_stopped.emit(job['row_idx'])
+            self.game_stopped.emit(job['product_id'])
             part_path : Path = job['resume_link'].get('partpath', None)
             if part_path: 
                 _discard_partial_downloads(part_path.parent.parent)
@@ -269,7 +272,8 @@ class DownloadScheduler(QObject):
     def schedule(self):
         """Start waiting jobs while the concurrency limit allows.
 
-        Jobs start in row order. Jobs marked as stopped are reported through
+        Jobs start in priority order, lowest first. Jobs marked as stopped
+        are reported through
         ``game_stopped`` instead of starting, and jobs with nothing left to
         download are reported through ``game_succeeded`` without a worker.
         If the free space check is on and the remaining downloads do not
@@ -277,7 +281,7 @@ class DownloadScheduler(QObject):
         ``finished``, ``stopped`` or ``paused`` when there is nothing left
         to run.
         """
-        self.idle_queue.sort(key=lambda x: x['row_idx'])
+        self.idle_queue.sort(key=lambda x: x['priority'])
         if self._paused_flag:
             if not self.active_queue:
                 self.paused.emit()
@@ -290,9 +294,9 @@ class DownloadScheduler(QObject):
         while self.tokens > 0 and self.idle_queue:
             job = self.idle_queue.pop(0)
             if job['stopped']:
-                self.game_stopped.emit(job['row_idx'])
+                self.game_stopped.emit(job['product_id'])
             elif not job.get('file_queue'):
-                self.game_succeeded.emit(job['row_idx'])
+                self.game_succeeded.emit(job['product_id'])
             else:
                 self._dispatch(job)
         if not self.idle_queue and not self.active_queue:
@@ -319,7 +323,7 @@ class DownloadScheduler(QObject):
         self.active_queue.append(job)
         self.tokens = self.tokens - 1
         job['worker'].start()
-        self.game_started.emit(job['row_idx'])
+        self.game_started.emit(job['product_id'])
 
     def _reap(self, job: dict):
         """Remove a job from the active queue and free its concurrency slot.
@@ -420,7 +424,7 @@ class DownloadScheduler(QObject):
         Args:
             job (dict): The finished job.
         """
-        self.game_succeeded.emit(job['row_idx'])
+        self.game_succeeded.emit(job['product_id'])
         self._reap(job)
         self.schedule()
 
@@ -430,7 +434,7 @@ class DownloadScheduler(QObject):
         Args:
             job (dict): The stopped job.
         """
-        self.game_stopped.emit(job['row_idx'])
+        self.game_stopped.emit(job['product_id'])
         self._reap(job)
         self.schedule()
 
@@ -443,7 +447,7 @@ class DownloadScheduler(QObject):
                 ``partpath`` and ``downlink`` of the partial file. Empty if
                 the worker paused between files.
         """
-        self.game_paused.emit(job['row_idx'])
+        self.game_paused.emit(job['product_id'])
         if job in self.active_queue:
             paused_job = job.copy()
             paused_job['resume_link'] = resume_link
@@ -471,7 +475,7 @@ class DownloadScheduler(QObject):
         if self._stopped_flag:
             _write_log_msg("Download folder ran out of space while stopping")
             if job in self.active_queue:
-                self.game_stopped.emit(job['row_idx'])
+                self.game_stopped.emit(job['product_id'])
                 part_path : Path = resume_link.get('partpath', None)
                 if part_path: 
                     _discard_partial_downloads(part_path.parent.parent)
@@ -480,7 +484,7 @@ class DownloadScheduler(QObject):
             if not self._paused_flag:
                 self.pause_all()
                 self.disk_full.emit()
-            self.game_paused.emit(job['row_idx'])
+            self.game_paused.emit(job['product_id'])
             if job in self.active_queue:
                 paused_job = job.copy()
                 paused_job['resume_link'] = resume_link
@@ -496,19 +500,19 @@ class DownloadScheduler(QObject):
             job (dict): The failed job.
             msg (str): The error message.
         """
-        self.game_failed.emit(job['row_idx'], msg)
+        self.game_failed.emit(job['product_id'], msg)
         self._reap(job)
         self.schedule()
 
     def _report_progress(self, job: dict, fetched: int, total: int) -> None:
-        """Forward a worker's progress with the job's row index.
+        """Forward a worker's progress with the job's product ID.
 
         Args:
             job (dict): The job reporting progress.
             fetched (int): Bytes downloaded so far.
             total (int): Total bytes for the game.
         """
-        self.progress_updated.emit(job['row_idx'], fetched, total)
+        self.progress_updated.emit(job['product_id'], fetched, total)
     
 class DownloadWorkerThread(QThread):
     """Downloads all files for one game.

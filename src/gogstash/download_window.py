@@ -137,6 +137,11 @@ class DownloadWindow(QDockWidget):
     dot, progress fill and size text, as well as the overall progress
     bar.
 
+    Scheduler signals name a game by its product ID. Each game's row items
+    are kept in a map keyed by product ID, so a signal finds its row
+    wherever that row sits in the table. Every place that removes rows
+    from the table removes them from the map too.
+
     Attributes:
         current_state (DownloadState): State of the queue.
         scheduler (DownloadScheduler): Scheduler running the downloads.
@@ -163,6 +168,7 @@ class DownloadWindow(QDockWidget):
         self.scheduler = None
         self.clear_queue = False
         self._disk_space_error = False
+        self.__queue_map = {}
 
         self._reset_scheduler()
 
@@ -264,7 +270,10 @@ class DownloadWindow(QDockWidget):
     def add_to_queue(self, row_data: dict) -> int:
         """Add a game to the queue.
 
-        If the game is already queued, its row is selected instead.
+        If the game is already queued, its row is selected instead. The
+        row is filled in before the scheduler gets the game, and while
+        downloads are running the scheduler is then asked to start it if
+        there is a free slot.
 
         Args:
             row_data (dict): Game with ``product_id`` and ``title``.
@@ -275,10 +284,11 @@ class DownloadWindow(QDockWidget):
         """
         if not self.start_button.isEnabled():
             return -1
-        for row_idx in range(self.game_queue_table.rowCount()):
-            if self.game_queue_table.item(row_idx, Column.TITLE).data(UserRole.PRODUCT_ID_ROLE) == row_data['product_id']:
-                self.game_queue_table.selectRow(row_idx)
-                return row_idx
+        if row_data['product_id'] in self.__queue_map:
+            row_idx = self.__queue_map[row_data['product_id']][Column.TITLE].row()
+            self.game_queue_table.selectRow(row_idx)
+            return row_idx
+
         row_idx = self.game_queue_table.rowCount()
         self.game_queue_table.insertRow(row_idx)
         column_data = []
@@ -287,29 +297,32 @@ class DownloadWindow(QDockWidget):
         column_data.append(QTableWidgetItem(row_data['title']))
         column_data[Column.TITLE].setData(UserRole.PRODUCT_ID_ROLE, row_data['product_id'])
         column_data.append(QTableWidgetItem(""))
+        self.__queue_map[row_data['product_id']] = column_data
         for i in range(len(column_data)):
             self.game_queue_table.setItem(row_idx, i, column_data[i])
-        self.set_progress(row_idx, 0)
-        self.set_row_status(row_idx, 'base')
+        self.set_progress(row_data['product_id'], 0)
+        self.set_row_status(row_data['product_id'], 'base')
         self.game_queue_table.selectRow(row_idx)
         estimated_size = self.scheduler.enqueue({
-            'idx': row_idx,
+            'priority': row_idx,
             'product_id': row_data['product_id']
         })
-        self._on_progress(row_idx, 0, estimated_size)
+        self._on_progress(row_data['product_id'], 0, estimated_size)
+        if self.current_state == DownloadState.RUNNING:
+            self.scheduler.schedule()
         self._update_progress_bar()
         return row_idx
 
-    def set_row_status(self, row: int, color: str):
+    def set_row_status(self, pid: int, color: str):
         """Set a row's status dot.
 
         Only the color is stored, ``StatusDelegate`` draws the dot from it.
 
         Args:
-            row (int): Row index.
+            pid (int): Product ID of the game.
             color (str): Status color, see ``icon_utils.status_indicator``.
         """
-        self.game_queue_table.item(row, Column.STATUS).setData(UserRole.STATUS_ROLE, color)
+        self.__queue_map[pid][Column.STATUS].setData(UserRole.STATUS_ROLE, color)
 
     def _onclick_start_button(self):
         """Start, pause or resume downloads depending on the current state."""
@@ -331,11 +344,11 @@ class DownloadWindow(QDockWidget):
         if self.game_queue_table.rowCount() == 0 or self.current_state == DownloadState.RUNNING:
             return
         if self.current_state == DownloadState.IDLE:
-            for row_idx in range(self.game_queue_table.rowCount()):
-                if self.game_queue_table.item(row_idx, Column.STATUS).data(UserRole.STATUS_ROLE) == 'green':
-                    completed_downloads.append(row_idx)
-                elif self.game_queue_table.item(row_idx, Column.STATUS).data(UserRole.STATUS_ROLE) == 'red':
-                    self._on_game_stopped(row_idx)
+            for pid, row_items in self.__queue_map.items():
+                if row_items[Column.STATUS].data(UserRole.STATUS_ROLE) == 'green':
+                    completed_downloads.append(pid)
+                elif row_items[Column.STATUS].data(UserRole.STATUS_ROLE) == 'red':
+                    self._on_game_stopped(pid)
             if completed_downloads:
                 confirmation = QMessageBox(self)
                 confirmation.setWindowTitle("Start Downloads")
@@ -346,15 +359,15 @@ class DownloadWindow(QDockWidget):
                 confirmation.setIcon(QMessageBox.Icon.Information)
                 ans = confirmation.exec()
                 if ans == QMessageBox.StandardButton.Yes:
-                    completed_downloads.sort(reverse=True)
-                    for row_idx in completed_downloads:
-                        self.game_queue_table.removeRow(row_idx)
+                    for pid in completed_downloads:
+                        row_items = self.__queue_map.pop(pid)
+                        self.game_queue_table.removeRow(row_items[Column.TITLE].row())
                     self._reset_all()
                     if self.game_queue_table.rowCount() == 0:
                         return
                 else:
-                    for row_idx in completed_downloads:
-                        self._on_game_stopped(row_idx)
+                    for pid in completed_downloads:
+                        self._on_game_stopped(pid)
                     self._update_progress_bar()
         concurrency = read_setting('download_concurrency')
         self.scheduler.set_concurrency(concurrency)
@@ -404,88 +417,92 @@ class DownloadWindow(QDockWidget):
         else:
             self.progress_bar.setValue(fetched_size * 100 / total_size)
 
-    def _on_progress(self, row_idx, fetched, total):
+    def _on_progress(self, pid, fetched, total):
         """Update a row's progress.
 
         Args:
-            row_idx (int): Row index.
+            pid (int): Product ID of the game.
             fetched (float): Bytes downloaded so far.
             total (float): Total bytes for the game.
         """
         if total == 0:
-            self.set_progress(row_idx, 0)
+            self.set_progress(pid, 0)
         else:
-            self.set_progress(row_idx, fetched*100/total)
-        self.game_queue_table.item(row_idx, Column.PROGRESS).setText(f"{humanize.naturalsize(fetched)} / {humanize.naturalsize(total)}")
-        self.game_queue_table.item(row_idx, Column.PROGRESS).setData(UserRole.FETCHED_SIZE, fetched)
-        self.game_queue_table.item(row_idx, Column.PROGRESS).setData(UserRole.TOTAL_SIZE, total)
+            self.set_progress(pid, fetched*100/total)
+        row_items = self.__queue_map[pid]
+        row_items[Column.PROGRESS].setText(f"{humanize.naturalsize(fetched)} / {humanize.naturalsize(total)}")
+        row_items[Column.PROGRESS].setData(UserRole.FETCHED_SIZE, fetched)
+        row_items[Column.PROGRESS].setData(UserRole.TOTAL_SIZE, total)
         self._update_progress_bar()
         return
 
-    def _on_game_started(self, row_idx):
+    def _on_game_started(self, pid):
         """Mark a row as downloading.
 
         Args:
-            row_idx (int): Row index.
+            pid (int): Product ID of the game.
         """
-        self.set_row_status(row_idx, 'blue')
-        self.game_queue_table.item(row_idx, Column.STATUS).setToolTip('Downloading')
+        self.set_row_status(pid, 'blue')
+        self.__queue_map[pid][Column.STATUS].setToolTip('Downloading')
 
-    def _on_game_succeeded(self, row_idx):
+    def _on_game_succeeded(self, pid):
         """Mark a row as finished.
 
         Args:
-            row_idx (int): Row index.
+            pid (int): Product ID of the game.
         """
-        self.set_progress(row_idx, 100)
-        total = self.game_queue_table.item(row_idx, Column.PROGRESS).data(UserRole.TOTAL_SIZE)
-        self.game_queue_table.item(row_idx, Column.PROGRESS).setData(UserRole.FETCHED_SIZE, total)
-        self.game_queue_table.item(row_idx, Column.PROGRESS).setText(f"{humanize.naturalsize(total)} / {humanize.naturalsize(total)}")
-        self.set_row_status(row_idx, 'green')
-        self.game_queue_table.item(row_idx, Column.STATUS).setToolTip('Finished')
-        self.game_succeeded.emit(self.game_queue_table.item(row_idx, Column.TITLE).data(UserRole.PRODUCT_ID_ROLE))
+        self.set_progress(pid, 100)
+        row_items = self.__queue_map[pid]
+        total = row_items[Column.PROGRESS].data(UserRole.TOTAL_SIZE)
+        row_items[Column.PROGRESS].setData(UserRole.FETCHED_SIZE, total)
+        row_items[Column.PROGRESS].setText(f"{humanize.naturalsize(total)} / {humanize.naturalsize(total)}")
+        self.set_row_status(pid, 'green')
+        row_items[Column.STATUS].setToolTip('Finished')
+        self.game_succeeded.emit(pid)
 
-    def _on_game_failed(self, row_idx, msg):
+    def _on_game_failed(self, pid, msg):
         """Mark a row as failed and reset its progress.
 
         Args:
-            row_idx (int): Row index.
+            pid (int): Product ID of the game.
             msg (str): Error shown in the status tooltip.
         """
-        self.set_progress(row_idx, 0)
-        total = self.game_queue_table.item(row_idx, Column.PROGRESS).data(UserRole.TOTAL_SIZE)
-        self.game_queue_table.item(row_idx, Column.PROGRESS).setText(f"{humanize.naturalsize(0)} / {humanize.naturalsize(total)}")
-        self.game_queue_table.item(row_idx, Column.PROGRESS).setData(UserRole.FETCHED_SIZE, 0)
-        self.set_row_status(row_idx, 'red')
-        self.game_queue_table.item(row_idx, Column.STATUS).setToolTip(f'Failed: {msg}')
+        self.set_progress(pid, 0)
+        row_items = self.__queue_map[pid]
+        total = row_items[Column.PROGRESS].data(UserRole.TOTAL_SIZE)
+        row_items[Column.PROGRESS].setText(f"{humanize.naturalsize(0)} / {humanize.naturalsize(total)}")
+        row_items[Column.PROGRESS].setData(UserRole.FETCHED_SIZE, 0)
+        self.set_row_status(pid, 'red')
+        row_items[Column.STATUS].setToolTip(f'Failed: {msg}')
 
-    def _on_game_stopped(self, row_idx):
+    def _on_game_stopped(self, pid):
         """Reset a row to the queued state.
 
         Args:
-            row_idx (int): Row index.
+            pid (int): Product ID of the game.
         """
-        self.set_progress(row_idx, 0)
-        total = self.game_queue_table.item(row_idx, Column.PROGRESS).data(UserRole.TOTAL_SIZE)
-        self.game_queue_table.item(row_idx, Column.PROGRESS).setText(f"{humanize.naturalsize(0)} / {humanize.naturalsize(total)}")
-        self.game_queue_table.item(row_idx, Column.PROGRESS).setData(UserRole.FETCHED_SIZE, 0)
-        self.set_row_status(row_idx, 'base')
-        self.game_queue_table.item(row_idx, Column.STATUS).setToolTip('Queued')
+        self.set_progress(pid, 0)
+        row_items = self.__queue_map[pid]
+        total = row_items[Column.PROGRESS].data(UserRole.TOTAL_SIZE)
+        row_items[Column.PROGRESS].setText(f"{humanize.naturalsize(0)} / {humanize.naturalsize(total)}")
+        row_items[Column.PROGRESS].setData(UserRole.FETCHED_SIZE, 0)
+        self.set_row_status(pid, 'base')
+        row_items[Column.STATUS].setToolTip('Queued')
 
-    def _on_game_paused(self, row_idx):
+    def _on_game_paused(self, pid):
         """Mark a row as paused.
 
         Args:
-            row_idx (int): Row index.
+            pid (int): Product ID of the game.
         """
-        self.set_row_status(row_idx, 'yellow')
-        self.game_queue_table.item(row_idx, Column.STATUS).setToolTip('Paused')
+        self.set_row_status(pid, 'yellow')
+        self.__queue_map[pid][Column.STATUS].setToolTip('Paused')
 
     def _reset_all(self):
         """Return to the idle state with a new scheduler.
 
         Re-enables the buttons and queues every row still in the table on
-        the new scheduler.
+        the new scheduler, with its current row as its priority.
         """
         self.start_button.setDisabled(False)
         self.clear_queue_button.setDisabled(False)
@@ -494,13 +511,13 @@ class DownloadWindow(QDockWidget):
         self.start_button.setIcon(get_icon('start_download.svg'))
         self.start_button.setProperty('iconFile', 'start_download.svg')
         self._reset_scheduler()
-        for row_idx in range(self.game_queue_table.rowCount()):
+        for pid, row_items in self.__queue_map.items():
             estimated_size = self.scheduler.enqueue({
-                'idx': row_idx,
-                'product_id': self.game_queue_table.item(row_idx, Column.TITLE).data(UserRole.PRODUCT_ID_ROLE)
+                'priority': row_items[Column.TITLE].row(),
+                'product_id': pid
             })
-            if self.game_queue_table.item(row_idx, Column.STATUS).data(UserRole.STATUS_ROLE) != 'green':
-                self._on_progress(row_idx, 0, estimated_size)
+            if row_items[Column.STATUS].data(UserRole.STATUS_ROLE) != 'green':
+                self._on_progress(pid, 0, estimated_size)
         self._update_progress_bar()
         self._disk_space_error = False
 
@@ -527,6 +544,7 @@ class DownloadWindow(QDockWidget):
             self.stop_downloads()
         else:
             self.game_queue_table.setRowCount(0)
+            self.__queue_map.clear()
             self._reset_all()
 
     def _on_stopped(self):
@@ -536,6 +554,7 @@ class DownloadWindow(QDockWidget):
         if self.clear_queue:
             self.clear_queue = False
             self.game_queue_table.setRowCount(0)
+            self.__queue_map.clear()
         self._reset_all()
 
     def _on_paused(self):
@@ -623,20 +642,18 @@ class DownloadWindow(QDockWidget):
         confirmation.setIcon(QMessageBox.Icon.Warning)
         confirmation.exec()
 
-
-
     def _reset_status(self):
         """Show the ready message if the queue is idle."""
         if self.current_state == DownloadState.IDLE:
             self.downloads_status.setText("Ready!")
 
-    def set_progress(self, row, percent = 0):
+    def set_progress(self, pid, percent = 0):
         """Store a row's progress for the title cell delegate.
 
         Args:
-            row (int): Row index.
+            pid (int): Product ID of the game.
             percent (float): Progress from 0 to 100.
         """
-        item = self.game_queue_table.item(row, Column.TITLE)
+        item = self.__queue_map[pid][Column.TITLE]
         item.setData(UserRole.PROGRESS_ROLE, percent)
 

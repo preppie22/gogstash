@@ -43,6 +43,7 @@ suffix until the first stable release), not SemVer.
 - Games whose installer was saved under another language's folder by an earlier version, or whose files GOG renamed, now get their check mark once their files are found, instead of being counted toward the download size and skipped again on every download ([#25](https://github.com/preppie22/gogstash/issues/25))
 - Switching between light and dark theme while downloading no longer freezes the window for a few seconds ([#23](https://github.com/preppie22/gogstash/issues/23))
 - Settings is locked while downloads are running or paused. Changing the download folder mid-run used to make a paused game start its file over from zero in the new folder, and games already in the queue kept the old language and file choices while new ones got the new ones ([#26](https://github.com/preppie22/gogstash/issues/26))
+- Adding a game you've already fully downloaded while other downloads are running now marks it finished and gives it its check mark in the library, instead of leaving it stuck on "Queued" until the next run
 
 ## [2026.9.26-beta2] - 2026-09-26
 

@@ -1375,7 +1375,7 @@ def make_scheduler(concurrency, count):
     # still leaves every job waiting for the test to call schedule().
     scheduler = download_queue.DownloadScheduler(concurrency)
     for i in range(count):
-        scheduler.enqueue({"idx": i, "product_id": i})
+        scheduler.enqueue({"priority": i, "product_id": i})
     return scheduler
 
 
@@ -1749,7 +1749,7 @@ def test_pause_all_pauses_active_workers_and_leaves_pending_ones_alone():
 
     active_worker.pause_worker.assert_called_once()
     active_worker.stop_worker.assert_not_called()
-    assert [job["row_idx"] for job in scheduler.idle_queue] == [1]
+    assert [job["priority"] for job in scheduler.idle_queue] == [1]
     assert scheduler.idle_queue[0]["stopped"] is False
 
 
@@ -1781,7 +1781,7 @@ def test_paused_worker_moves_to_paused_queue_and_frees_its_token(tmp_path):
     assert scheduler.active_queue == []
     assert scheduler.tokens == 1
     [paused_job] = scheduler.paused_queue
-    assert paused_job["row_idx"] == 0
+    assert paused_job["priority"] == 0
     assert paused_job["resume_link"] == resume_link
 
 
@@ -1815,7 +1815,7 @@ def test_pausing_does_not_dispatch_pending_jobs_or_announce_finished():
     # The freed token is right there begging to be used, but the scheduler
     # is supposed to be sitting on its hands.
     assert scheduler.active_queue == []
-    assert [j["row_idx"] for j in scheduler.idle_queue] == [1]
+    assert [j["priority"] for j in scheduler.idle_queue] == [1]
     assert finished_events == []
 
 
@@ -1833,10 +1833,10 @@ def test_resume_all_redispatches_paused_jobs_with_a_fresh_worker_and_their_resum
     scheduler.resume_all()
 
     [resumed] = scheduler.active_queue
-    assert resumed["row_idx"] == 0
+    assert resumed["priority"] == 0
     assert resumed["worker"] is not old_worker  # a finished QThread with its pause flag still set is no use to anyone
     assert resumed["worker"].resume_link == resume_link
-    assert [j["row_idx"] for j in scheduler.idle_queue] == [1]
+    assert [j["priority"] for j in scheduler.idle_queue] == [1]
     assert scheduler.paused_queue == []
 
 
@@ -1851,7 +1851,7 @@ def test_resume_all_lets_the_rest_of_the_queue_flow_again():
     scheduler.finished.connect(lambda: finished_events.append(True))
 
     scheduler.active_queue[0]["worker"].succeeded.emit()  # row 0 done, row 1 should start
-    assert [j["row_idx"] for j in scheduler.active_queue] == [1]
+    assert [j["priority"] for j in scheduler.active_queue] == [1]
     scheduler.active_queue[0]["worker"].succeeded.emit()
 
     assert finished_events == [True]
@@ -1865,7 +1865,7 @@ def test_resume_all_is_a_noop_when_nothing_is_paused():
 
     scheduler.resume_all()
 
-    assert [j["row_idx"] for j in scheduler.active_queue] == [0]
+    assert [j["priority"] for j in scheduler.active_queue] == [0]
     assert scheduler.active_queue[0]["worker"] is worker  # not rebuilt out from under the running download
 
 
@@ -1969,10 +1969,10 @@ def test_enqueue_ignores_a_row_that_is_already_waiting():
     # Double-clicking a game twice shouldn't mean downloading that shit
     # twice.
     scheduler = download_queue.DownloadScheduler()
-    scheduler.enqueue({"idx": 0, "product_id": 7})
-    scheduler.enqueue({"idx": 0, "product_id": 7})
+    scheduler.enqueue({"priority": 0, "product_id": 7})
+    scheduler.enqueue({"priority": 0, "product_id": 7})
 
-    assert [(j["row_idx"], j["product_id"]) for j in scheduler.idle_queue] == [(0, 7)]
+    assert [(j["priority"], j["product_id"]) for j in scheduler.idle_queue] == [(0, 7)]
 
 
 @with_fake_workers
@@ -1983,22 +1983,45 @@ def test_enqueue_on_an_idle_scheduler_just_waits_for_start():
     finished_events = []
     scheduler.finished.connect(lambda: finished_events.append(True))
 
-    scheduler.enqueue({"idx": 0, "product_id": 0})
+    scheduler.enqueue({"priority": 0, "product_id": 0})
 
     assert scheduler.active_queue == []
-    assert [j["row_idx"] for j in scheduler.idle_queue] == [0]
+    assert [j["priority"] for j in scheduler.idle_queue] == [0]
     assert finished_events == []
 
 
 @with_fake_workers
-def test_enqueue_mid_run_grabs_a_free_slot_right_away():
+def test_enqueue_mid_run_only_queues_and_leaves_starting_to_schedule():
+    # enqueue() used to call schedule() on its own mid-run, which could
+    # report a game finished before the window had even written down its
+    # size. Now it just takes a number, and schedule() calls it.
     scheduler = make_scheduler(concurrency=2, count=1)
     scheduler.schedule()
 
-    scheduler.enqueue({"idx": 1, "product_id": 1})
+    scheduler.enqueue({"priority": 1, "product_id": 1})
+    assert [j["priority"] for j in scheduler.active_queue] == [0]
+    assert [j["priority"] for j in scheduler.idle_queue] == [1]
 
-    assert [j["row_idx"] for j in scheduler.active_queue] == [0, 1]
+    scheduler.schedule()
+
+    assert [j["priority"] for j in scheduler.active_queue] == [0, 1]
     assert scheduler.idle_queue == []
+
+
+@with_fake_workers
+def test_enqueue_mid_run_with_nothing_to_download_doesnt_succeed_behind_the_windows_back():
+    # Regression: a game already on disk, queued mid-run with a free slot,
+    # was announced finished from inside enqueue(), while the window still
+    # had None where its size should be. naturalsize(None) took it from there.
+    scheduler = make_scheduler(concurrency=2, count=1)
+    scheduler.schedule()
+    succeeded = []
+    scheduler.game_succeeded.connect(succeeded.append)
+
+    with patch("gogstash.download_queue.generate_download_list", lambda ids: []):
+        scheduler.enqueue({"priority": 1, "product_id": 7})
+
+    assert succeeded == []
 
 
 @with_fake_workers
@@ -2006,12 +2029,12 @@ def test_enqueue_mid_run_waits_its_turn_when_every_slot_is_busy():
     scheduler = make_scheduler(concurrency=1, count=1)
     scheduler.schedule()
 
-    scheduler.enqueue({"idx": 1, "product_id": 1})
-    assert [j["row_idx"] for j in scheduler.active_queue] == [0]
+    scheduler.enqueue({"priority": 1, "product_id": 1})
+    assert [j["priority"] for j in scheduler.active_queue] == [0]
 
     scheduler.active_queue[0]["worker"].succeeded.emit()
 
-    assert [j["row_idx"] for j in scheduler.active_queue] == [1]
+    assert [j["priority"] for j in scheduler.active_queue] == [1]
 
 
 @with_fake_workers
@@ -2023,10 +2046,10 @@ def test_enqueue_while_pausing_does_not_sneak_a_new_download_in():
     scheduler.schedule()
     scheduler.pause_all()
 
-    scheduler.enqueue({"idx": 1, "product_id": 1})
+    scheduler.enqueue({"priority": 1, "product_id": 1})
 
-    assert [j["row_idx"] for j in scheduler.active_queue] == [0]
-    assert [j["row_idx"] for j in scheduler.idle_queue] == [1]
+    assert [j["priority"] for j in scheduler.active_queue] == [0]
+    assert [j["priority"] for j in scheduler.idle_queue] == [1]
 
 
 def test_set_concurrency_refuses_zero():
@@ -2049,7 +2072,7 @@ def test_set_concurrency_raised_mid_run_fills_the_new_slots_on_the_next_schedule
 
     scheduler.active_queue[0]["worker"].succeeded.emit()
 
-    assert [j["row_idx"] for j in scheduler.active_queue] == [1, 2]
+    assert [j["priority"] for j in scheduler.active_queue] == [1, 2]
     assert scheduler.tokens == 1
 
 
@@ -2065,12 +2088,12 @@ def test_set_concurrency_lowered_mid_run_lets_the_extra_workers_drain_first():
 
     scheduler.active_queue[0]["worker"].succeeded.emit()
     scheduler.active_queue[0]["worker"].succeeded.emit()
-    assert [j["row_idx"] for j in scheduler.active_queue] == [2]
-    assert [j["row_idx"] for j in scheduler.idle_queue] == [3]
+    assert [j["priority"] for j in scheduler.active_queue] == [2]
+    assert [j["priority"] for j in scheduler.idle_queue] == [3]
 
     scheduler.active_queue[0]["worker"].succeeded.emit()
 
-    assert [j["row_idx"] for j in scheduler.active_queue] == [3]
+    assert [j["priority"] for j in scheduler.active_queue] == [3]
     assert scheduler.tokens == 0
 
 
@@ -2087,7 +2110,7 @@ def test_a_stop_does_not_haunt_the_next_run_on_the_same_scheduler():
     scheduler.finished.connect(lambda: finished_events.append(True))
     scheduler.stopped.connect(lambda: stopped_events.append(True))
 
-    scheduler.enqueue({"idx": 1, "product_id": 1})
+    scheduler.enqueue({"priority": 1, "product_id": 1})
     scheduler.schedule()
     scheduler.active_queue[0]["worker"].succeeded.emit()
 
@@ -2118,19 +2141,76 @@ def test_reap_waits_for_the_thread_to_actually_die_before_dropping_it():
 
 
 @with_fake_workers
-def test_game_started_announces_the_row_not_the_product_id():
-    # Regression: it emitted the product id, so the window went looking for
-    # row 1207658924 and found a None instead of a dot to paint blue.
-    # make_scheduler uses idx == product_id, which would hide exactly this.
+def test_game_started_announces_the_product_id_not_the_priority():
+    # This test used to insist on the exact opposite. Then rows learned to
+    # move, and a row number stopped being a name. make_scheduler uses
+    # priority == product_id, which would hide exactly this.
     scheduler = download_queue.DownloadScheduler(2)
-    scheduler.enqueue({"idx": 0, "product_id": 1207658924})
-    scheduler.enqueue({"idx": 1, "product_id": 1207664663})
+    scheduler.enqueue({"priority": 0, "product_id": 1207658924})
+    scheduler.enqueue({"priority": 1, "product_id": 1207664663})
     started = []
     scheduler.game_started.connect(started.append)
 
     scheduler.schedule()
 
-    assert started == [0, 1]
+    assert started == [1207658924, 1207664663]
+
+
+@with_fake_workers
+def test_every_per_game_signal_survives_a_product_id_past_32_bits():
+    # GOG IDs are a few hundred short of 2**31. A plain int signal would
+    # mangle the first one past it, so every per-game signal is a qlonglong.
+    big_id = 2**31 + 7
+    heard = {}
+    for name in ("game_started", "game_succeeded", "game_stopped", "game_paused"):
+        scheduler = download_queue.DownloadScheduler()
+        getattr(scheduler, name).connect(lambda pid, name=name: heard.setdefault(name, pid))
+        getattr(scheduler, name).emit(big_id)
+    scheduler = download_queue.DownloadScheduler()
+    scheduler.game_failed.connect(lambda pid, msg: heard.setdefault("game_failed", pid))
+    scheduler.progress_updated.connect(lambda pid, fetched, total: heard.setdefault("progress_updated", pid))
+    scheduler.game_failed.emit(big_id, "nope")
+    scheduler.progress_updated.emit(big_id, 1.0, 2.0)
+
+    assert heard == dict.fromkeys(
+        ("game_started", "game_succeeded", "game_stopped", "game_paused", "game_failed", "progress_updated"),
+        big_id,
+    )
+
+
+@with_fake_workers
+def test_priority_not_arrival_order_decides_who_starts_first():
+    scheduler = download_queue.DownloadScheduler(1)
+    scheduler.enqueue({"priority": 5, "product_id": 50})
+    scheduler.enqueue({"priority": 2, "product_id": 20})
+    started = []
+    scheduler.game_started.connect(started.append)
+
+    scheduler.schedule()
+
+    assert started == [20]
+
+
+@with_fake_workers
+def test_two_games_sharing_a_priority_both_get_queued():
+    # Priorities can collide once rows get removed: drop the middle of three
+    # rows and the next game added lands on the last one's number. The
+    # duplicate check goes by product ID, so nobody gets bounced.
+    scheduler = download_queue.DownloadScheduler(1)
+    scheduler.enqueue({"priority": 2, "product_id": 30})
+
+    scheduler.enqueue({"priority": 2, "product_id": 40})
+
+    assert [j["product_id"] for j in scheduler.idle_queue] == [30, 40]
+
+
+@with_fake_workers
+def test_the_same_game_at_a_new_priority_is_still_a_duplicate():
+    scheduler = download_queue.DownloadScheduler(1)
+    scheduler.enqueue({"priority": 0, "product_id": 7})
+
+    assert scheduler.enqueue({"priority": 3, "product_id": 7}) == 0
+    assert [j["product_id"] for j in scheduler.idle_queue] == [7]
 
 
 # --- skipping what's already on disk ---
@@ -2205,15 +2285,15 @@ def test_enqueue_reports_how_much_the_game_will_download():
     scheduler = download_queue.DownloadScheduler()
 
     with patch("gogstash.download_queue.generate_download_list", lambda ids: canned_download_list(ids) * 3):
-        assert scheduler.enqueue({"idx": 0, "product_id": 7}) == 3
+        assert scheduler.enqueue({"priority": 0, "product_id": 7}) == 3
 
 
 @with_fake_workers
 def test_enqueue_reports_nothing_for_a_row_that_is_already_waiting():
     scheduler = download_queue.DownloadScheduler()
-    scheduler.enqueue({"idx": 0, "product_id": 7})
+    scheduler.enqueue({"priority": 0, "product_id": 7})
 
-    assert scheduler.enqueue({"idx": 0, "product_id": 7}) == 0
+    assert scheduler.enqueue({"priority": 0, "product_id": 7}) == 0
 
 
 @with_fake_workers
@@ -2222,14 +2302,14 @@ def test_game_with_nothing_left_to_download_succeeds_without_a_worker():
     # at its empty list and reported "No files to download" as a failure.
     scheduler = download_queue.DownloadScheduler()
     with patch("gogstash.download_queue.generate_download_list", lambda ids: []):
-        scheduler.enqueue({"idx": 0, "product_id": 7})
+        scheduler.enqueue({"priority": 0, "product_id": 7})
     succeeded, finished_events = [], []
     scheduler.game_succeeded.connect(succeeded.append)
     scheduler.finished.connect(lambda: finished_events.append(True))
 
     scheduler.schedule()
 
-    assert succeeded == [0]
+    assert succeeded == [7]
     assert scheduler.active_queue == []
     assert scheduler.tokens == 1  # never took a slot, never has to give one back
     assert finished_events == [True]
@@ -2257,7 +2337,7 @@ def test_schedule_holds_everything_back_when_the_queue_wont_fit():
 
     assert events == [(2, 1)]  # two 1-byte games, one byte of disk
     assert scheduler.active_queue == []
-    assert [j["row_idx"] for j in scheduler.idle_queue] == [0, 1]
+    assert [j["priority"] for j in scheduler.idle_queue] == [0, 1]
 
 
 @with_fake_workers
@@ -2280,7 +2360,7 @@ def test_schedule_starts_the_queue_when_it_fits():
         scheduler.schedule()
 
     assert events == []
-    assert [j["row_idx"] for j in scheduler.active_queue] == [0, 1]
+    assert [j["priority"] for j in scheduler.active_queue] == [0, 1]
 
 
 @with_fake_workers
@@ -2293,7 +2373,8 @@ def test_free_space_check_counts_what_active_downloads_still_need():
     events = _low_space_events(scheduler)
 
     with _disk_with(free=50), patch("gogstash.download_queue.generate_download_list", lambda ids: []):
-        scheduler.enqueue({"idx": 1, "product_id": 1})
+        scheduler.enqueue({"priority": 1, "product_id": 1})
+        scheduler.schedule()
 
     assert events == [(60, 50)]
 
@@ -2360,7 +2441,7 @@ def test_pause_all_with_nothing_running_announces_paused_right_away():
 
     assert paused_events == [True]
     assert scheduler.active_queue == []
-    assert [j["row_idx"] for j in scheduler.idle_queue] == [0]  # still waiting its turn
+    assert [j["priority"] for j in scheduler.idle_queue] == [0]  # still waiting its turn
 
 
 @with_fake_workers
@@ -2374,7 +2455,7 @@ def test_turning_the_free_space_check_off_lets_the_queue_run_anyway():
         scheduler.schedule()
 
     assert events == []
-    assert [j["row_idx"] for j in scheduler.active_queue] == [0]
+    assert [j["priority"] for j in scheduler.active_queue] == [0]
 
 
 @with_fake_workers
@@ -2436,7 +2517,7 @@ def test_free_space_check_creates_a_download_folder_that_isnt_there_yet(tmp_path
     scheduler.schedule()
 
     assert download_dir.is_dir()
-    assert [j["row_idx"] for j in scheduler.active_queue] == [0]
+    assert [j["priority"] for j in scheduler.active_queue] == [0]
 
 
 # --- the disk fills up mid-run ---
@@ -2473,8 +2554,8 @@ def test_a_full_disk_pauses_the_queue_and_keeps_the_game_resumable(tmp_path):
     assert paused_rows == [0]
     assert paused_events == [True]
     assert failed_rows == []
-    assert [(j["row_idx"], j["resume_link"]) for j in scheduler.paused_queue] == [(0, payload)]
-    assert [j["row_idx"] for j in scheduler.idle_queue] == [1]  # not thrown into the fire
+    assert [(j["priority"], j["resume_link"]) for j in scheduler.paused_queue] == [(0, payload)]
+    assert [j["priority"] for j in scheduler.idle_queue] == [1]  # not thrown into the fire
     assert scheduler.active_queue == []
     assert scheduler.tokens == 1
     assert part_path.exists()
@@ -2497,7 +2578,7 @@ def test_a_full_disk_pauses_the_other_downloads_too(tmp_path):
     assert paused_events == []
     _pause_active_worker(other_job)
     assert paused_events == [True]
-    assert sorted(j["row_idx"] for j in scheduler.paused_queue) == [0, 1]
+    assert sorted(j["priority"] for j in scheduler.paused_queue) == [0, 1]
 
 
 @with_fake_workers
@@ -2572,7 +2653,7 @@ def test_two_downloads_hitting_a_full_disk_only_raise_the_alarm_once(tmp_path):
     second["worker"].disk_full.emit({"partpath": tmp_path / "other" / "x" / "y.part", "downlink": "y"})
 
     assert events == ["disk_full", "paused"]
-    assert sorted(j["row_idx"] for j in scheduler.paused_queue) == [0, 1]
+    assert sorted(j["priority"] for j in scheduler.paused_queue) == [0, 1]
 
 
 @with_fake_workers
@@ -2588,7 +2669,7 @@ def test_a_full_disk_during_a_pause_the_user_asked_for_stays_quiet(tmp_path):
     _run_out_of_space(job, _part_file(tmp_path))
 
     assert events == ["paused"]
-    assert [j["row_idx"] for j in scheduler.paused_queue] == [0]
+    assert [j["priority"] for j in scheduler.paused_queue] == [0]
 
 
 @with_fake_workers
@@ -2630,7 +2711,7 @@ def test_resuming_a_paused_game_only_needs_room_for_what_is_left():
         scheduler.resume_all()
 
     assert events == []
-    assert [j["row_idx"] for j in scheduler.active_queue] == [0]
+    assert [j["priority"] for j in scheduler.active_queue] == [0]
 
 
 @with_fake_workers
@@ -2761,7 +2842,7 @@ def test_a_waiting_record_for_a_file_that_vanished_is_dropped_and_resume_still_w
 
     _pause_and_resume(scheduler)
 
-    assert [j["row_idx"] for j in scheduler.active_queue] == [0]
+    assert [j["priority"] for j in scheduler.active_queue] == [0]
     errors = [line for line in _log_lines() if "Error recording file" in line]
     assert len(errors) == 1
     worker = scheduler.active_queue[0]["worker"]

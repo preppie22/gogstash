@@ -82,10 +82,11 @@ def _is_fetched(window, row):
 
 
 def _finish_download(window, game):
-    # Same trip a real download takes: the scheduler reports the queue row,
-    # the queue turns it into a product ID, the library takes it from there.
-    row_idx = window.download_window.add_to_queue({"product_id": game["product_id"], "title": game["title"], "size": "5 Bytes"})
-    window.download_window.scheduler.game_succeeded.emit(row_idx)
+    # Same trip a real download takes: the scheduler reports the product ID,
+    # the queue paints its row and passes the ID on, the library takes it
+    # from there.
+    window.download_window.add_to_queue({"product_id": game["product_id"], "title": game["title"], "size": "5 Bytes"})
+    window.download_window.scheduler.game_succeeded.emit(game["product_id"])
 
 
 def test_not_logged_in_shows_red_indicator_and_status_text():
