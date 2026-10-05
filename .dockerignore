@@ -36,3 +36,6 @@ appimage-build/
 
 # Git
 .git/
+
+# Custom
+scratch/

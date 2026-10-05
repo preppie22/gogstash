@@ -17,8 +17,6 @@ classifiers = [
 ]
 dependencies = [
     "requests",
-    "html5lib",
-    "psutil",
     "PySide6",
     "platformdirs",
     "humanize",

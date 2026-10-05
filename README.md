@@ -65,7 +65,7 @@ I'd appreciate your feedback on bugs, features, or improvements in the [issues s
 
 ### Windows Users
 
-Extract the zip and run the `gogstash.exe` file inside the extracted folder. Note that `gogstash.exe` depends on the `_internal` folder.
+Extract the zip and run the `gogstash.exe` file inside the extracted folder. Note that `gogstash.exe` depends on the `lib` folder.
 So, make sure it's there alongside the exe file. Auto-update functionality is for Linux only.
 
 > [!IMPORTANT]

@@ -9,7 +9,39 @@ datas += copy_metadata('gogstash')
 
 # Exclude "libstdc++.so.6", "libgcc_s.so.1", "libgbm.so.1" to fix #1
 excluded_files_linux = {
-    "libstdc++.so.6", "libgcc_s.so.1", "libgbm.so.1"  
+    "libstdc++.so.6", "libgcc_s.so.1", "libgbm.so.1",
+}
+
+# GogStash has no QML. QtWebEngine pulls these modules in, and their hooks
+# copy Qt's whole QML folder plus every library it needs (3D, Charts,
+# Multimedia...). The libraries WebEngine links against are still bundled.
+excluded_modules = [
+    "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtQuickWidgets"
+]
+
+# Qt plugins GogStash never loads on Linux: printing, geolocation,
+# touchscreens and embedded displays, image formats other than SVG (every
+# icon is an SVG), platforms other than X11 and Wayland, the virtual
+# keyboard, and Wayland shells nobody's desktop uses.
+unused_plugin_dirs_linux = {
+    "printsupport", "position", "generic", "egldeviceintegrations"
+}
+unused_plugins_linux = {
+    "libqjpeg.so", "libqwebp.so", "libqtiff.so", "libqicns.so", "libqpdf.so",
+    "libqgif.so", "libqico.so", "libqwbmp.so", "libqtga.so",
+    "libqlinuxfb.so", "libqvnc.so", "libqminimal.so", "libqminimalegl.so",
+    "libqeglfs.so", "libqvkkhrdisplay.so", "libqoffscreen.so",
+    "libqtvirtualkeyboardplugin.so",
+    "libivi-shell.so", "libqt-shell.so", "libfullscreen-shell-v1.so",
+    "libwl-shell-plugin.so", "libdmabuf-server.so", "libshm-emulation-server.so",
+    "libvulkan-server.so", "libdrm-egl-server.so"
+}
+# Libraries that only those plugins need. PyInstaller collects them along
+# with the plugins and doesn't drop them when the plugins go.
+plugin_only_libs_linux = {
+    "libQt6Pdf.so.6", "libQt6VirtualKeyboard.so.6", "libQt6VirtualKeyboardQml.so.6",
+    "libQt6EglFSDeviceIntegration.so.6", "libQt6EglFsKmsSupport.so.6",
+    "libQt6WlShellIntegration.so.6", "libQt6SerialPort.so.6", "libcups.so.2"
 }
 
 a = Analysis(
@@ -21,7 +53,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=excluded_modules,
     noarchive=False,
     optimize=0,
 )
@@ -30,8 +62,26 @@ pyz = PYZ(a.pure)
 if sys.platform.startswith('linux'):
     for entry in a.binaries.copy():
         filename = os.path.basename(entry[0])
-        if filename in excluded_files_linux:
+        plugin_dir = os.path.basename(os.path.dirname(entry[0]))
+        is_plugin = 'plugins' in entry[0].replace('\\', '/').split('/')
+        if (
+            filename in excluded_files_linux or
+            filename in plugin_only_libs_linux or
+            (is_plugin and (plugin_dir in unused_plugin_dirs_linux or filename in unused_plugins_linux))
+        ):
             a.binaries.remove(entry)
+    # Each Qt library also gets a symlink next to the executable, listed
+    # with the data files. Left behind, they'd point at nothing.
+    for entry in a.datas.copy():
+        if entry[2] == 'SYMLINK' and os.path.basename(entry[0]) in plugin_only_libs_linux:
+            a.datas.remove(entry)
+
+# Qt's own translations only load through a QTranslator, and GogStash never
+# installs one. WebEngine's locales are a different folder and stay.
+for entry in a.datas.copy():
+    parts = entry[0].replace('\\', '/').split('/')
+    if 'translations' in parts and entry[0].endswith('.qm'):
+        a.datas.remove(entry)
 
 exe = EXE(
     pyz,
@@ -39,6 +89,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='gogstash',
+    contents_directory='lib',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
