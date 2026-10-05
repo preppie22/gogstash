@@ -15,6 +15,7 @@ import humanize
 from pathlib import Path
 import shutil
 import errno
+from itertools import chain
 
 import urllib
 import requests
@@ -158,8 +159,8 @@ class DownloadScheduler(QObject):
             int: Estimated bytes still to download for the game. 0 if the
             game was already waiting.
         """
-        for item in self.idle_queue:
-            if item.get('product_id') == product['product_id']:
+        for job in self.idle_queue:
+            if job.get('product_id') == product['product_id']:
                 return 0
         file_queue = generate_download_list((product['product_id'],))
         queue_item = {
@@ -173,6 +174,39 @@ class DownloadScheduler(QObject):
         self.idle_queue.append(queue_item)
         download_size = sum(file['size'] for file in file_queue)
         return download_size
+
+    def dequeue(self, pid: int) -> bool:
+        """Remove a game that is not downloading right now.
+
+        Waiting and paused games can be removed. A game that was paused
+        mid-file has its ``.part`` files deleted and any folders left
+        empty removed, as ``stop_all`` does. Files it finished earlier are
+        kept. A game with a running worker is refused, so downloads are
+        paused first to remove it. Nothing is emitted and nothing is
+        scheduled, so the caller removes the game's row itself.
+
+        Args:
+            pid (int): Product ID of the game.
+
+        Returns:
+            bool: True if the game was removed. False if it is downloading
+            or not queued.
+        """
+        to_remove = None
+        for job in chain(self.idle_queue, self.paused_queue):
+            if job.get('product_id') == pid:
+                part_path: Path = job['resume_link'].get('partpath', None)
+                if part_path:
+                    _discard_partial_downloads(part_path.parent.parent)
+                to_remove = job
+                break
+        else:
+            return False
+        if to_remove in self.idle_queue:
+            self.idle_queue.remove(to_remove)
+        else:
+            self.paused_queue.remove(to_remove)
+        return True
 
     def stop_all(self):
         """Stop all downloads.

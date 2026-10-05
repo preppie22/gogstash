@@ -2052,6 +2052,155 @@ def test_enqueue_while_pausing_does_not_sneak_a_new_download_in():
     assert [j["priority"] for j in scheduler.idle_queue] == [1]
 
 
+# --- removing games from the queue ---
+
+def _half_a_game(tmp_path, slug):
+    part_path = tmp_path / slug / "installer" / "setup.exe.part"
+    part_path.parent.mkdir(parents=True)
+    part_path.write_bytes(b"half a game")
+    return part_path
+
+
+@with_fake_workers
+def test_dequeue_takes_a_waiting_game_out_of_line_and_the_rest_close_ranks():
+    scheduler = make_scheduler(concurrency=1, count=3)
+    scheduler.schedule()
+
+    assert scheduler.dequeue(1) is True
+
+    assert [j["product_id"] for j in scheduler.idle_queue] == [2]
+    scheduler.active_queue[0]["worker"].succeeded.emit()
+    assert [j["product_id"] for j in scheduler.active_queue] == [2]
+
+
+@with_fake_workers
+def test_dequeue_leaves_the_announcements_to_the_window():
+    # The window deletes the row itself. A game_stopped for a row that no
+    # longer exists is a KeyError with extra steps, and a `finished` for
+    # emptying an idle queue would be the scheduler throwing itself a party.
+    scheduler = make_scheduler(concurrency=1, count=1)
+    events = []
+    scheduler.game_stopped.connect(lambda pid: events.append(("game_stopped", pid)))
+    scheduler.finished.connect(lambda: events.append("finished"))
+    scheduler.stopped.connect(lambda: events.append("stopped"))
+
+    assert scheduler.dequeue(0) is True
+
+    assert scheduler.idle_queue == []
+    assert events == []
+
+
+@with_fake_workers
+def test_dequeue_refuses_a_game_that_is_mid_download():
+    # Yanking a game out from under a running worker is a pause-first job.
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+    job = scheduler.active_queue[0]
+
+    assert scheduler.dequeue(0) is False
+
+    assert scheduler.active_queue == [job]
+    assert scheduler.tokens == 0
+    job["worker"].stop_worker.assert_not_called()
+
+
+@with_fake_workers
+def test_dequeue_of_a_game_nobody_queued_says_no_and_touches_nothing():
+    scheduler = make_scheduler(concurrency=1, count=2)
+
+    assert scheduler.dequeue(99) is False
+
+    assert [j["product_id"] for j in scheduler.idle_queue] == [0, 1]
+
+
+@with_fake_workers
+def test_dequeue_of_a_paused_game_bins_its_part_file_and_keeps_what_it_finished(tmp_path):
+    scheduler = make_scheduler(concurrency=1, count=2)
+    scheduler.schedule()
+    job = scheduler.active_queue[0]
+    part_path = _half_a_game(tmp_path, "game-zero")
+    finished = tmp_path / "game-zero" / "extras" / "manual.pdf"
+    finished.parent.mkdir()
+    finished.write_bytes(b"the whole manual")
+    scheduler.pause_all()
+    _pause_active_worker(job, {"partpath": part_path, "downlink": "https://example.com/f"})
+
+    assert scheduler.dequeue(0) is True
+
+    assert scheduler.paused_queue == []
+    assert not part_path.exists()
+    assert not part_path.parent.exists()  # emptied out, so it goes too
+    assert finished.exists()  # paid for in bandwidth already, not ours to bin
+    assert [j["product_id"] for j in scheduler.idle_queue] == [1]  # the bystander
+
+
+@with_fake_workers
+def test_dequeue_of_a_game_paused_between_files_has_nothing_to_bin():
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+    scheduler.pause_all()
+    _pause_active_worker(scheduler.active_queue[0])  # empty resume link, no .part anywhere
+
+    assert scheduler.dequeue(0) is True
+
+    assert scheduler.paused_queue == []
+
+
+@with_fake_workers
+def test_dequeue_of_a_resumed_game_still_waiting_for_a_slot_bins_its_part_file_too(tmp_path):
+    # Resume put both games back in line, but there's only one slot now.
+    # The one left waiting is still holding a .part file, it's just
+    # sitting in the idle queue instead of the paused one.
+    scheduler = make_scheduler(concurrency=2, count=2)
+    scheduler.schedule()
+    first, second = list(scheduler.active_queue)
+    first_part = _half_a_game(tmp_path, "game-zero")
+    second_part = _half_a_game(tmp_path, "game-one")
+    scheduler.pause_all()
+    _pause_active_worker(first, {"partpath": first_part, "downlink": "https://example.com/0"})
+    _pause_active_worker(second, {"partpath": second_part, "downlink": "https://example.com/1"})
+    scheduler.set_concurrency(1)
+    scheduler.resume_all()
+    assert [j["product_id"] for j in scheduler.idle_queue] == [1]
+
+    assert scheduler.dequeue(1) is True
+
+    assert scheduler.idle_queue == []
+    assert not second_part.exists()
+    assert not (tmp_path / "game-one").exists()  # the whole game folder, not just the installer subfolder
+    assert first_part.exists()  # still downloading into this one, hands off
+
+
+@with_fake_workers
+def test_dequeue_shrinks_what_the_free_space_check_asks_for():
+    # Too big for the disk, so the user drops a game. The next schedule()
+    # should see the smaller bill and get on with it.
+    scheduler = make_scheduler(concurrency=2, count=2)
+    events = _low_space_events(scheduler)
+    with _disk_with(free=1.5):
+        scheduler.schedule()
+    assert events == [(2, 1.5)]
+
+    scheduler.dequeue(1)
+    with _disk_with(free=1.5):
+        scheduler.schedule()
+
+    assert events == [(2, 1.5)]
+    assert [j["product_id"] for j in scheduler.active_queue] == [0]
+
+
+@with_fake_workers
+def test_a_dequeued_game_can_be_queued_again_and_counts_in_full():
+    # Changed your mind about changing your mind. The duplicate check
+    # shouldn't remember a game that already left.
+    scheduler = make_scheduler(concurrency=1, count=2)
+    scheduler.dequeue(1)
+
+    assert scheduler.enqueue({"priority": 5, "product_id": 1}) == 1
+
+    assert [j["product_id"] for j in scheduler.idle_queue] == [0, 1]
+
+
 def test_set_concurrency_refuses_zero():
     scheduler = download_queue.DownloadScheduler()
 

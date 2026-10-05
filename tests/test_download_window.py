@@ -1,9 +1,10 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QItemSelectionModel, QObject, Qt, Signal
 from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QTreeWidget
 
 from gogstash import library_db
 from gogstash.download_queue import DownloadScheduler
@@ -124,7 +125,7 @@ def test_color_scheme_refresh_reloads_each_button_from_its_own_icon_file(mock_ge
     window._color_scheme_refresh()
 
     called_files = {call.args[0] for call in mock_get_icon.call_args_list}
-    assert called_files == {"trash.svg", "start_download.svg", "stop.svg"}
+    assert called_files == {"trash.svg", "start_download.svg", "stop.svg", "dequeue.svg"}
 
 
 @patch("gogstash.download_window.get_icon")
@@ -1232,3 +1233,272 @@ def test_a_cleared_game_can_be_queued_again(mock_estimate):
     assert window.add_to_queue(_row(product_id=1)) == 0
     assert window.game_queue_table.rowCount() == 1
     assert [j["product_id"] for j in window.scheduler.idle_queue] == [1]
+
+
+# --- removing games from the queue ---
+
+def _queue(window, count):
+    for i in range(count):
+        window.add_to_queue(_row(title=f"G{i}", product_id=100 + i))
+
+
+def _select_rows(window, *rows):
+    table = window.game_queue_table
+    table.clearSelection()
+    for row in rows:
+        table.selectionModel().select(
+            table.model().index(row, Column.TITLE),
+            QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+        )
+
+
+def _remove_rows(window, *rows):
+    _select_rows(window, *rows)
+    window.remove_button.click()
+
+
+@sized_downloads()
+def test_removing_a_waiting_game_takes_its_row_and_its_place_in_line(mock_estimate):
+    window = DownloadWindow()
+    _queue(window, 3)
+
+    _remove_rows(window, 1)
+
+    assert _titles(window) == ["G0", "G2"]
+    assert [j["product_id"] for j in window.scheduler.idle_queue] == [100, 102]
+
+
+@sized_downloads()
+def test_removing_several_games_at_once_gets_every_one_of_them(mock_estimate):
+    window = DownloadWindow()
+    _queue(window, 3)
+
+    _remove_rows(window, 0, 2)
+
+    assert _titles(window) == ["G1"]
+    assert [j["product_id"] for j in window.scheduler.idle_queue] == [101]
+
+
+@sized_downloads()
+def test_a_removed_game_can_be_queued_again(mock_estimate):
+    window = DownloadWindow()
+    _queue(window, 2)
+    _remove_rows(window, 0)
+
+    assert window.add_to_queue(_row(title="G0 again", product_id=100)) == 1
+
+    assert _titles(window) == ["G1", "G0 again"]
+    assert sorted(j["product_id"] for j in window.scheduler.idle_queue) == [100, 101]
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_a_game_added_after_a_removal_gets_its_own_row_and_the_back_of_the_line(mock_estimate):
+    # Regression x2. The new row's items went to row "priority counter",
+    # which is past the end of the table once anything's been removed, so
+    # Qt binned them and the window choked on an empty row. And with
+    # rowCount() as the priority, three removals let the newcomer start
+    # ahead of the two games that were already waiting. Rude.
+    update_setting("download_concurrency", 1)
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    _queue(window, 5)
+    _remove_rows(window, 0, 1, 2)
+
+    window.add_to_queue(_row(title="Latecomer", product_id=105))
+    assert _titles(window) == ["G3", "G4", "Latecomer"]
+
+    with _roomy_disk():
+        window.start_downloads()
+        assert [j["product_id"] for j in window.scheduler.active_queue] == [103]
+        window.scheduler.active_queue[0]["worker"].succeeded.emit()
+
+    assert [j["product_id"] for j in window.scheduler.active_queue] == [104]
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_the_remove_button_sits_out_the_downloading_and_comes_back_for_the_pause(mock_estimate):
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    _queue(window, 1)
+    assert window.remove_button.isEnabled() is True
+
+    with _roomy_disk():
+        window.start_downloads()
+    assert window.remove_button.isEnabled() is False
+    assert window.remove_button.toolTip() == "Pause or Cancel Downloads before removing"
+
+    window.pause_downloads()
+    assert window.remove_button.isEnabled() is True
+    assert window.remove_button.toolTip() == "Remove selected items from queue (Del)"
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_removing_mid_download_does_nothing_even_if_someone_gets_past_the_button(mock_estimate):
+    # The button is greyed out, but a keyboard shortcut or context menu
+    # someday won't be. The handler has to say no on its own, even to the
+    # games still waiting, which the scheduler alone would happily let go.
+    update_setting("download_concurrency", 1)
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    _queue(window, 3)
+    with _roomy_disk():
+        window.start_downloads()
+    _select_rows(window, 0, 1, 2)
+
+    window._onclick_remove_button()
+
+    assert _titles(window) == ["G0", "G1", "G2"]
+    assert [j["product_id"] for j in window.scheduler.active_queue] == [100]
+    assert [j["product_id"] for j in window.scheduler.idle_queue] == [101, 102]
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_a_paused_game_can_be_removed_and_the_rest_resume_without_it(mock_estimate):
+    update_setting("download_concurrency", 1)
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    _queue(window, 2)
+    with _roomy_disk():
+        window.start_downloads()
+    window.pause_downloads()
+    assert _status_of(window, 0) == "yellow"
+
+    _remove_rows(window, 0)
+
+    assert _titles(window) == ["G1"]
+    assert window.scheduler.paused_queue == []
+    with _roomy_disk():
+        window.start_downloads()
+    assert [j["product_id"] for j in window.scheduler.active_queue] == [101]
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_finished_and_failed_games_can_be_removed_while_paused(mock_estimate):
+    # Mid-run, these two already said their goodbyes to the scheduler, so
+    # dequeue() has never heard of them. Their rows still have to go.
+    update_setting("download_concurrency", 3)
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    _queue(window, 3)
+    with _roomy_disk():
+        window.start_downloads()
+    done, broken, _ = [j["worker"] for j in window.scheduler.active_queue]
+    done.succeeded.emit()
+    broken.failed.emit("the CDN ate it")
+    window.pause_downloads()
+    assert [_status_of(window, r) for r in range(3)] == ["green", "red", "yellow"]
+
+    _remove_rows(window, 0, 1)
+
+    assert _titles(window) == ["G2"]
+    assert window.current_state == DownloadState.PAUSED
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_removing_the_last_game_while_paused_lands_back_on_idle_instead_of_a_dead_resume_button(mock_estimate):
+    # Regression: an empty table while PAUSED left Resume clicking into
+    # start_downloads(), which bails on an empty table. Forever paused,
+    # pausing nothing.
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    _queue(window, 1)
+    with _roomy_disk():
+        window.start_downloads()
+    window.pause_downloads()
+
+    _remove_rows(window, 0)
+
+    assert window.game_queue_table.rowCount() == 0
+    assert window.current_state == DownloadState.IDLE
+    assert window.start_button.text() == "Start Downloads"
+    assert window.downloads_status.text() == "Ready!"  # not still "Downloads paused"
+
+
+@sized_downloads()
+def test_removing_a_game_takes_its_bytes_off_the_overall_bar(mock_estimate):
+    mock_estimate.return_value = 100
+    window = DownloadWindow()
+    _queue(window, 2)
+    window._on_progress(100, 50, 100)
+    assert window.progress_bar.value() == 25
+
+    _remove_rows(window, 1)
+
+    assert window.progress_bar.value() == 50
+
+
+# --- the Del key ---
+
+@pytest.fixture
+def docked():
+    # Shortcuts only fire in a shown, active window with focus where the
+    # shortcut's context says it should be. So: a tiny main window with a
+    # QTreeWidget standing in for the library list, like the real thing.
+    # Not a QLineEdit: that hogs Del for itself, so the queue's shortcut
+    # would never fire there no matter how badly it was scoped.
+    main = QMainWindow()
+    window = DownloadWindow(main)
+    main.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, window)
+    elsewhere = QTreeWidget()
+    main.setCentralWidget(elsewhere)
+    main.show()
+    main.activateWindow()
+    QApplication.processEvents()
+    yield window, elsewhere
+    main.close()
+
+
+def _press_del(widget):
+    widget.setFocus()
+    QApplication.processEvents()
+    QTest.keyClick(widget, Qt.Key.Key_Delete)
+
+
+@sized_downloads()
+def test_del_on_the_queue_removes_the_selected_games(mock_estimate, docked):
+    window, _ = docked
+    _queue(window, 3)
+    _select_rows(window, 0, 2)
+
+    _press_del(window.game_queue_table)
+
+    assert _titles(window) == ["G1"]
+    assert [j["product_id"] for j in window.scheduler.idle_queue] == [101]
+
+
+@sized_downloads()
+def test_del_somewhere_else_in_the_window_leaves_the_queue_alone(mock_estimate, docked):
+    # Del while browsing the library shouldn't quietly bin whatever
+    # happens to be selected over in the queue.
+    window, elsewhere = docked
+    _queue(window, 2)
+    _select_rows(window, 0)
+
+    _press_del(elsewhere)
+
+    assert _titles(window) == ["G0", "G1"]
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_del_mid_download_does_nothing_even_though_the_button_cant_stop_it(mock_estimate, docked):
+    # Disabling the button does nothing for the keyboard. The handler's own
+    # RUNNING check is the only thing standing between Del and the queue.
+    update_setting("download_concurrency", 1)
+    mock_estimate.return_value = 1000
+    window, _ = docked
+    _queue(window, 2)
+    with _roomy_disk():
+        window.start_downloads()
+    _select_rows(window, 0, 1)
+
+    _press_del(window.game_queue_table)
+
+    assert _titles(window) == ["G0", "G1"]
+    assert [j["product_id"] for j in window.scheduler.idle_queue] == [101]

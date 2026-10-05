@@ -36,6 +36,8 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QPainter,
     QColor,
+    QShortcut,
+    QKeySequence
 )
 from gogstash.icon_utils import get_icon, status_indicator
 from gogstash.download_queue import DownloadScheduler
@@ -165,6 +167,7 @@ class DownloadWindow(QDockWidget):
         super().__init__(parent)
 
         self.__current_state = DownloadState.IDLE
+        self.__priority_counter = 0
         self.scheduler = None
         self.clear_queue = False
         self._disk_space_error = False
@@ -196,18 +199,34 @@ class DownloadWindow(QDockWidget):
         self.game_queue_table.setItemDelegateForColumn(Column.STATUS, StatusDelegate(self.game_queue_table))
         self.window_layout.addWidget(self.game_queue_table)
 
+        # Clear Queue Button
         self.clear_queue_button = QPushButton("Clear Queue")
         self.clear_queue_button.clicked.connect(self.clear_all)
         self.clear_queue_button.setIcon(get_icon('trash.svg'))
         self.clear_queue_button.setProperty('iconFile', 'trash.svg')
+
+        # Start Downloads Button
         self.start_button = QPushButton("Start Downloads")
         self.start_button.clicked.connect(self._onclick_start_button)
         self.start_button.setIcon(get_icon('start_download.svg'))
         self.start_button.setProperty('iconFile', 'start_download.svg')
+
+        # Cancel Downloads Button
         self.stop_button = QPushButton("Cancel Downloads")
         self.stop_button.clicked.connect(self.stop_downloads)
         self.stop_button.setIcon(get_icon('stop.svg'))
         self.stop_button.setProperty('iconFile', 'stop.svg')
+
+        # Remove Selected Button
+        self.remove_button = QPushButton("Remove Selection")
+        self.remove_button.clicked.connect(self._onclick_remove_button)
+        self.remove_button.setIcon(get_icon('dequeue.svg'))
+        self.remove_button.setProperty('iconFile', 'dequeue.svg')
+        self.remove_button.setToolTip("Remove selected items from queue (Del)")
+        self.remove_shortcut = QShortcut(self.game_queue_table)
+        self.remove_shortcut.setKey(QKeySequence(QKeySequence.StandardKey.Delete))
+        self.remove_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+        self.remove_shortcut.activated.connect(self._onclick_remove_button)
 
         self.downloads_status = QLabel()
         self._reset_status()
@@ -221,6 +240,7 @@ class DownloadWindow(QDockWidget):
         self.dialog_buttons.addButton(self.start_button, QDialogButtonBox.ButtonRole.ActionRole)
         self.dialog_buttons.addButton(self.stop_button, QDialogButtonBox.ButtonRole.ActionRole)
         self.dialog_buttons.addButton(self.clear_queue_button, QDialogButtonBox.ButtonRole.ResetRole)
+        self.dialog_buttons.addButton(self.remove_button, QDialogButtonBox.ButtonRole.ResetRole)
         self.window_layout.addWidget(self.dialog_buttons)
 
         self.setWidget(self.main_widget)
@@ -304,9 +324,10 @@ class DownloadWindow(QDockWidget):
         self.set_row_status(row_data['product_id'], 'base')
         self.game_queue_table.selectRow(row_idx)
         estimated_size = self.scheduler.enqueue({
-            'priority': row_idx,
+            'priority': self.__priority_counter,
             'product_id': row_data['product_id']
         })
+        self.__priority_counter += 1
         self._on_progress(row_data['product_id'], 0, estimated_size)
         if self.current_state == DownloadState.RUNNING:
             self.scheduler.schedule()
@@ -332,6 +353,36 @@ class DownloadWindow(QDockWidget):
             self.pause_downloads()
         elif self.current_state == DownloadState.PAUSED:
             self.start_downloads()
+
+    def _onclick_remove_button(self):
+        """Remove the selected games from the queue.
+
+        Does nothing while downloads are running, so they have to be paused
+        or cancelled first. Each selected game is removed from the
+        scheduler, which deletes the partial files of a paused game. A
+        game that finished or failed earlier in a paused run is no longer
+        in the scheduler, so only its row is removed. If the table ends up
+        empty, the window returns to the idle state.
+        """
+        if self.current_state == DownloadState.RUNNING:
+            return
+        removed_pids = []
+        for pid, row_item in self.__queue_map.items():
+            if row_item[Column.TITLE].isSelected():
+                removed = self.scheduler.dequeue(pid)
+                if (
+                    removed or 
+                    row_item[Column.STATUS].data(UserRole.STATUS_ROLE) == 'green' or
+                    row_item[Column.STATUS].data(UserRole.STATUS_ROLE) == 'red'
+                ):
+                    self.game_queue_table.removeRow(row_item[Column.TITLE].row())
+                    removed_pids.append(pid)
+        self._update_progress_bar()
+        for pid in removed_pids:
+            self.__queue_map.pop(pid)
+        if len(self.__queue_map) == 0:
+            self._reset_all()
+            self._reset_status()
 
     def start_downloads(self):
         """Start or resume downloads.
@@ -377,6 +428,8 @@ class DownloadWindow(QDockWidget):
         else:
             self.scheduler.schedule()
         self.downloads_status.setText("Downloading...")
+        self.remove_button.setDisabled(True)
+        self.remove_button.setToolTip("Pause or Cancel Downloads before removing")
         self.current_state = DownloadState.RUNNING
         self.start_button.setText('Pause Downloads')
         self.start_button.setIcon(get_icon('pause.svg'))
@@ -502,10 +555,13 @@ class DownloadWindow(QDockWidget):
         """Return to the idle state with a new scheduler.
 
         Re-enables the buttons and queues every row still in the table on
-        the new scheduler, with its current row as its priority.
+        the new scheduler, with its current row as its priority. Games
+        added later get priorities that continue after the last row.
         """
         self.start_button.setDisabled(False)
         self.clear_queue_button.setDisabled(False)
+        self.remove_button.setDisabled(False)
+        self.remove_button.setToolTip("Remove selected items from queue (Del)")
         self.current_state = DownloadState.IDLE
         self.start_button.setText("Start Downloads")
         self.start_button.setIcon(get_icon('start_download.svg'))
@@ -520,6 +576,7 @@ class DownloadWindow(QDockWidget):
                 self._on_progress(pid, 0, estimated_size)
         self._update_progress_bar()
         self._disk_space_error = False
+        self.__priority_counter = self.game_queue_table.rowCount()
 
     def clear_all(self):
         """Remove all games from the queue.
@@ -560,6 +617,8 @@ class DownloadWindow(QDockWidget):
     def _on_paused(self):
         """Switch to the paused state once all active downloads have paused."""
         self.downloads_status.setText("Downloads paused")
+        self.remove_button.setDisabled(False)
+        self.remove_button.setToolTip("Remove selected items from queue (Del)")
         self.current_state = DownloadState.PAUSED
         self.start_button.setText('Resume Downloads')
         self.start_button.setIcon(get_icon('resume.svg'))

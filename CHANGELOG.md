@@ -17,6 +17,7 @@ suffix until the first stable release), not SemVer.
 - If the disk fills up in the middle of a download, GogStash pauses all downloads and tells you, instead of failing them, so you can free up some space and resume where it left off ([#4](https://github.com/preppie22/gogstash/issues/4))
 - Sort the library by any column by clicking its header ([#7](https://github.com/preppie22/gogstash/issues/7))
 - GogStash notices game updates by the installer and patch version GOG lists, not just by file size, so small patches that keep the same size are no longer missed. Games downloaded with an earlier version lose their check mark until you queue them once: files you already have are checked against GOG and skipped, not downloaded again ([#24](https://github.com/preppie22/gogstash/issues/24))
+- Remove games from the download queue without clearing the rest: select one or more and click Remove Selection, or press Del. Pause downloads first to remove a game that's downloading. ([#11](https://github.com/preppie22/gogstash/issues/11))
 
 ### Changed
 - The theme picker moved from Settings to a Theme button on the toolbar, so you can switch between Dark, Light and System while downloads are running
