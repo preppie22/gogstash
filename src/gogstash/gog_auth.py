@@ -8,6 +8,7 @@ import json
 import requests
 import time
 from enum import StrEnum
+from urllib.parse import urlsplit, parse_qs
 
 from gogstash import paths
 
@@ -36,6 +37,25 @@ def build_auth_uri() -> str:
         'response_type': 'code',
         'layout': 'client2'
     }).prepare().url
+
+def extract_code(url) -> str | None:
+    """Get the authorization code from the login success address.
+
+    Args:
+        url (str): The address GOG redirects to after login, e.g.
+            ``https://embed.gog.com/on_login_success?origin=client&code=...``.
+
+    Returns:
+        str | None: The authorization code, or None if ``url`` is empty,
+        isn't the login success page or has no code.
+    """
+    if not url:
+        return None
+    parts = urlsplit(url)
+    if parts.hostname == "embed.gog.com" and parts.path == "/on_login_success":
+        codes = parse_qs(parts.query).get("code")
+        return codes[0] if codes else None
+    return None
 
 def fetch_token(code: str = None, type: GrantType = GrantType.AUTHORIZE, refresh_token: str = None) -> dict:
     """Request an access token from GOG.

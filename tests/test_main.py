@@ -145,6 +145,59 @@ def test_open_login_window_leaves_status_untouched_when_rejected(mock_login_wind
     assert window.status_text.text() == "stale"
 
 
+def test_login_button_opens_a_menu_with_both_ways_in():
+    # The whole point of the menu: people whose built-in login window breaks
+    # need to reach the browser option without going through that window.
+    window = MainWindow()
+    button = window.main_toolbar.widgetForAction(window.login_button)
+
+    assert window.login_button.menu() is window.login_menu
+    assert button.popupMode() == button.ToolButtonPopupMode.InstantPopup
+    assert [action.text() for action in window.login_menu.actions()] == [
+        "Log in through GogStash",
+        "Log in with your browser",
+    ]
+
+
+@patch("gogstash.main.ExternalLoginDialog")
+@patch("gogstash.main.LoginWindow")
+def test_login_menu_items_open_their_own_dialogs(mock_login_window_cls, mock_external_cls):
+    mock_login_window_cls.return_value.exec.return_value = QDialog.DialogCode.Rejected
+    mock_external_cls.return_value.exec.return_value = QDialog.DialogCode.Rejected
+    window = MainWindow()
+
+    window.login_external_action.trigger()
+    mock_external_cls.assert_called_once_with(window)
+    mock_login_window_cls.assert_not_called()
+
+    window.login_internal_action.trigger()
+    mock_login_window_cls.assert_called_once_with(window)
+
+
+@patch("gogstash.main.ExternalLoginDialog")
+def test_open_external_login_refreshes_status_when_accepted(mock_external_cls):
+    mock_external_cls.return_value.exec.return_value = QDialog.DialogCode.Accepted
+    gog_auth.save_token({"access_token": "abc", "expiry": time.time() + 3600})
+    window = MainWindow()
+    window.status_text.setText("stale")
+
+    window.open_external_login()
+
+    mock_external_cls.assert_called_once_with(window)
+    assert window.status_text.text() == "Logged in"
+
+
+@patch("gogstash.main.ExternalLoginDialog")
+def test_open_external_login_leaves_status_untouched_when_rejected(mock_external_cls):
+    mock_external_cls.return_value.exec.return_value = QDialog.DialogCode.Rejected
+    window = MainWindow()
+    window.status_text.setText("stale")
+
+    window.open_external_login()
+
+    assert window.status_text.text() == "stale"
+
+
 @patch("gogstash.main.SettingsDialog")
 def test_open_settings_constructs_and_executes_dialog(mock_settings_dialog_cls):
     window = MainWindow()

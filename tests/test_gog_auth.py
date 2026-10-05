@@ -107,3 +107,39 @@ def test_get_valid_token_refreshes_and_persists_when_expired(mock_get):
     assert gog_auth._load_token()["access_token"] == "refreshed"
     _, kwargs = mock_get.call_args
     assert kwargs["params"]["refresh_token"] == "myrefresh"
+
+
+SUCCESS_URL = "https://embed.gog.com/on_login_success?origin=client&code=thecode"
+
+
+def test_extract_code_returns_code_from_success_url():
+    assert gog_auth.extract_code(SUCCESS_URL) == "thecode"
+
+
+def test_extract_code_does_not_care_about_parameter_order():
+    assert gog_auth.extract_code("https://embed.gog.com/on_login_success?code=thecode&origin=client") == "thecode"
+
+
+def test_extract_code_returns_none_for_empty_input():
+    assert gog_auth.extract_code("") is None
+    assert gog_auth.extract_code(None) is None
+
+
+def test_extract_code_returns_none_without_a_code():
+    # The right page with nothing on it. Sending GOG an empty code just to
+    # hear "no" is a round trip nobody needs.
+    assert gog_auth.extract_code("https://embed.gog.com/on_login_success?origin=client") is None
+
+
+def test_extract_code_rejects_other_pages_and_hosts():
+    # People will paste the login page, the GOG homepage, and whatever else
+    # was on the clipboard. Only the success page carries a real code.
+    assert gog_auth.extract_code(gog_auth.build_auth_uri()) is None
+    assert gog_auth.extract_code("https://embed.gog.com/somewhere_else?code=thecode") is None
+    assert gog_auth.extract_code("https://www.gog.com/on_login_success?code=thecode") is None
+    assert gog_auth.extract_code("hello") is None
+
+
+def test_extract_code_rejects_lookalike_hosts():
+    # Starts with the right name, ends somewhere else entirely.
+    assert gog_auth.extract_code("https://embed.gog.com.example.net/on_login_success?code=thecode") is None

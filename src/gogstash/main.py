@@ -38,6 +38,7 @@ from PySide6.QtCore import Qt, QSize, QUrl
 
 from gogstash import gog_auth
 from gogstash.login_window import LoginWindow
+from gogstash.external_login import ExternalLoginDialog
 from gogstash import library_db
 from gogstash.settings_dialog import SettingsDialog
 from gogstash.settings import read_setting, update_setting
@@ -140,10 +141,22 @@ class MainWindow(QMainWindow):
         self.error_message = QErrorMessage()
 
         # Login
+        self.login_menu = QMenu(self)
+        self.login_internal_action = QAction("Log in through GogStash", self.login_menu)
+        self.login_internal_action.triggered.connect(self.open_login_window)
+        self.login_menu.addAction(self.login_internal_action)
+
+        self.login_external_action = QAction("Log in with your browser", self.login_menu)
+        self.login_external_action.triggered.connect(self.open_external_login)
+        self.login_menu.addAction(self.login_external_action)
+
         self.login_button = QAction("Login", self, icon=get_icon('login.svg'))
         self.login_button.setProperty('iconFile', 'login.svg')
-        self.login_button.triggered.connect(self.open_login_window)
+        self.login_button.setMenu(self.login_menu)
+
         self.main_toolbar.addAction(self.login_button)
+        self.main_toolbar.widgetForAction(self.login_button).setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+
 
         # Logout
         self.logout_button = QAction("Logout", self, icon=get_icon('logout.svg'))
@@ -300,6 +313,12 @@ class MainWindow(QMainWindow):
         """Show the GOG login dialog and update the login indicator on success."""
         login_window = LoginWindow(self)
         if login_window.exec() == QDialog.DialogCode.Accepted:
+            self._update_login_status()
+
+    def open_external_login(self):
+        """Show the browser login dialog and update the login indicator on success."""
+        external_login = ExternalLoginDialog(self)
+        if external_login.exec() == QDialog.DialogCode.Accepted:
             self._update_login_status()
 
     def open_settings(self):

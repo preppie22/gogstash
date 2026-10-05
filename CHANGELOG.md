@@ -8,6 +8,13 @@ suffix until the first stable release), not SemVer.
 
 ## [Unreleased]
 
+## [2026.10.5.1-beta] - 2026-10-05
+
+A small release that adds a second way to log in, for when the built-in login window breaks.
+
+### Added
+- Log in with your browser: the Login button now opens a menu with two choices. "Log in through GogStash" is the login window from before. "Log in with your browser" opens GOG's login page in your own web browser; after logging in, you paste the address of the page it lands on back into GogStash. Use it if the login window does not work correctly
+
 ## [2026.10.5-beta] - 2026-10-05
 
 ### Added

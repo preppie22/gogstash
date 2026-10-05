@@ -5,6 +5,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import QApplication
 
 
@@ -35,3 +36,12 @@ def qapp():
     QT_QPA_PLATFORM=offscreen lets this run without a real display (CI, sandboxes)."""
     app = QApplication.instance() or QApplication([])
     yield app
+    # Tests build windows and walk away. Left to Python's last garbage
+    # collection, they get torn down in whatever order the collector likes,
+    # and once the Login menu joined the toolbar that order had PySide delete
+    # a toolbar button out from under its toolbar: a segfault after every
+    # test had already passed. Hand the leftovers to Qt instead, which knows
+    # to take a window apart from the top down.
+    for widget in QApplication.topLevelWidgets():
+        widget.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
