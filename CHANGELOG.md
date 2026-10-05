@@ -8,6 +8,8 @@ suffix until the first stable release), not SemVer.
 
 ## [Unreleased]
 
+## [2026.10.5-beta] - 2026-10-05
+
 ### Added
 - Pick which languages to download in Settings. Games that don't come in any of your languages fall back to English ([#10](https://github.com/preppie22/gogstash/issues/10))
 - GogStash warns you before downloading more than fits on the disk, and lets you pause (keeping what has already downloaded) or download anyway ([#4](https://github.com/preppie22/gogstash/issues/4))
