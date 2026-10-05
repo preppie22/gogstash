@@ -1502,3 +1502,48 @@ def test_del_mid_download_does_nothing_even_though_the_button_cant_stop_it(mock_
 
     assert _titles(window) == ["G0", "G1"]
     assert [j["product_id"] for j in window.scheduler.idle_queue] == [101]
+
+
+# --- a run that's over before it starts ---
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+def test_starting_a_queue_with_nothing_left_to_download_lands_on_complete_not_downloading():
+    # Regression: schedule() finished every game on the spot and _on_finished
+    # reset the window, then start_downloads() carried on and slapped
+    # "Downloading..." back on top. Downloading nothing, forever.
+    window = DownloadWindow()
+    with patch("gogstash.download_queue.generate_download_list", lambda ids: []):
+        window.add_to_queue(_row(product_id=1))
+
+    with _roomy_disk():
+        window.start_downloads()
+
+    assert window.current_state == DownloadState.IDLE
+    assert window.downloads_status.text() == "Downloads complete"
+    assert window.start_button.text() == "Start Downloads"
+    assert window.remove_button.isEnabled() is True
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_resuming_after_removing_the_only_paused_game_finishes_instead_of_hanging(mock_estimate):
+    # Same bug, found the hard way: one game done, the other paused and
+    # removed, then Resume. resume_all() had nothing to resume, said
+    # "finished", and got talked over by the window it had just reset.
+    update_setting("download_concurrency", 2)
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    _queue(window, 2)
+    with _roomy_disk():
+        window.start_downloads()
+    window.scheduler.active_queue[0]["worker"].succeeded.emit()
+    window.pause_downloads()
+    _remove_rows(window, 1)
+
+    with _roomy_disk():
+        window.start_button.click()
+
+    assert window.current_state == DownloadState.IDLE
+    assert window.downloads_status.text() == "Downloads complete"
+    assert window.start_button.text() == "Start Downloads"
+    assert _titles(window) == ["G0"]

@@ -390,6 +390,11 @@ class DownloadWindow(QDockWidget):
         When starting from idle, failed rows are reset and the user is asked
         whether to remove completed rows. Does nothing if the queue is empty
         or already running.
+
+        The window switches to the running state before the scheduler is
+        asked to start. If there is nothing left to download, the scheduler
+        finishes during that call, and the window ends up idle instead of
+        stuck on "Downloading...".
         """
         completed_downloads = []
         if self.game_queue_table.rowCount() == 0 or self.current_state == DownloadState.RUNNING:
@@ -422,18 +427,19 @@ class DownloadWindow(QDockWidget):
                     self._update_progress_bar()
         concurrency = read_setting('download_concurrency')
         self.scheduler.set_concurrency(concurrency)
-        if self.current_state == DownloadState.PAUSED:
-            self._disk_space_error = False
-            self.scheduler.resume_all()
-        else:
-            self.scheduler.schedule()
         self.downloads_status.setText("Downloading...")
         self.remove_button.setDisabled(True)
         self.remove_button.setToolTip("Pause or Cancel Downloads before removing")
+        was_paused = self.current_state == DownloadState.PAUSED
         self.current_state = DownloadState.RUNNING
         self.start_button.setText('Pause Downloads')
         self.start_button.setIcon(get_icon('pause.svg'))
         self.start_button.setProperty('iconFile', 'pause.svg')
+        if was_paused:
+            self._disk_space_error = False
+            self.scheduler.resume_all()
+        else:
+            self.scheduler.schedule()
 
     def pause_downloads(self):
         """Ask the scheduler to pause all downloads.

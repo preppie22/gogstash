@@ -20,6 +20,8 @@ suffix until the first stable release), not SemVer.
 - Remove games from the download queue without clearing the rest: select one or more and click Remove Selection, or press Del. Pause downloads first to remove a game that's downloading. ([#11](https://github.com/preppie22/gogstash/issues/11))
 
 ### Changed
+- Smaller downloads: the AppImage and the Windows zip no longer include parts of Qt that GogStash never uses. The AppImage is about 40 MB smaller ([#20](https://github.com/preppie22/gogstash/issues/20))
+- Windows: the folder next to `gogstash.exe` is now called `lib` instead of `_internal`. If you extract the new version over an old one, you can delete the old `_internal` folder ([#20](https://github.com/preppie22/gogstash/issues/20))
 - The theme picker moved from Settings to a Theme button on the toolbar, so you can switch between Dark, Light and System while downloads are running
 - The status indicators in the download queue now have a different shape for each state (ring, triangle, check mark, X, pause bars) and colors that are easier to tell apart, including for color blindness ([#22](https://github.com/preppie22/gogstash/issues/22))
 - The download queue shows how much is left to download for each game, leaving out files you already have
@@ -45,6 +47,10 @@ suffix until the first stable release), not SemVer.
 - Switching between light and dark theme while downloading no longer freezes the window for a few seconds ([#23](https://github.com/preppie22/gogstash/issues/23))
 - Settings is locked while downloads are running or paused. Changing the download folder mid-run used to make a paused game start its file over from zero in the new folder, and games already in the queue kept the old language and file choices while new ones got the new ones ([#26](https://github.com/preppie22/gogstash/issues/26))
 - Adding a game you've already fully downloaded while other downloads are running now marks it finished and gives it its check mark in the library, instead of leaving it stuck on "Queued" until the next run
+- Starting downloads when every queued game is already fully downloaded now finishes right away, instead of leaving the queue stuck on "Downloading..." with nothing downloading
+
+### Known Issues
+- The downloads are still large because GogStash ships QtWebEngine, a full copy of Chromium, just for the login window. It will be replaced with something lighter in a future release ([#21](https://github.com/preppie22/gogstash/issues/21))
 
 ## [2026.9.26-beta2] - 2026-09-26
 

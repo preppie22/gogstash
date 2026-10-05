@@ -44,6 +44,26 @@ plugin_only_libs_linux = {
     "libQt6WlShellIntegration.so.6", "libQt6SerialPort.so.6", "libcups.so.2"
 }
 
+# The same idea on Windows, where the files have their own names. The app
+# runs on the qwindows platform with the Fusion style, so the other
+# platforms and the Windows style go too. PySide6 also ships its own
+# OpenSSL for Qt's networking, which GogStash doesn't use: downloads go
+# through Python's OpenSSL (libssl-3.dll, kept) and WebEngine has its own.
+# Names are lowercase because Windows file names aren't case sensitive.
+unused_plugin_dirs_windows = {
+    "position", "generic", "styles"
+}
+unused_plugins_windows = {
+    "qgif.dll", "qicns.dll", "qico.dll", "qjpeg.dll", "qpdf.dll",
+    "qtga.dll", "qtiff.dll", "qwbmp.dll", "qwebp.dll",
+    "qdirect2d.dll", "qminimal.dll", "qoffscreen.dll",
+    "qtvirtualkeyboardplugin.dll", "qopensslbackend.dll"
+}
+plugin_only_libs_windows = {
+    "qt6pdf.dll", "qt6serialport.dll", "qt6virtualkeyboard.dll",
+    "libssl-3-x64.dll", "libcrypto-3-x64.dll"
+}
+
 a = Analysis(
     ['launch_gogstash.py'],
     pathex=[],
@@ -75,6 +95,17 @@ if sys.platform.startswith('linux'):
     for entry in a.datas.copy():
         if entry[2] == 'SYMLINK' and os.path.basename(entry[0]) in plugin_only_libs_linux:
             a.datas.remove(entry)
+
+if sys.platform == 'win32':
+    for entry in a.binaries.copy():
+        filename = os.path.basename(entry[0]).lower()
+        plugin_dir = os.path.basename(os.path.dirname(entry[0])).lower()
+        is_plugin = 'plugins' in entry[0].replace('\\', '/').split('/')
+        if (
+            filename in plugin_only_libs_windows or
+            (is_plugin and (plugin_dir in unused_plugin_dirs_windows or filename in unused_plugins_windows))
+        ):
+            a.binaries.remove(entry)
 
 # Qt's own translations only load through a QTranslator, and GogStash never
 # installs one. WebEngine's locales are a different folder and stay.
