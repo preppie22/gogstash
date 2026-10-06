@@ -10,6 +10,7 @@ class ConfigFile(StrEnum):
     DB_CACHE = 'goglibrary.db'
     TOKEN = 'token.json'
     DOWNLOAD_LOG = 'downloads.log'
+    APP_LOG = 'gogstash.log'
 
 def user_download_path() -> Path:
     """Return the user's downloads directory.

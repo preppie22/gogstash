@@ -5,6 +5,7 @@ import humanize
 from pathlib import Path
 import importlib.metadata
 from enum import IntEnum
+import logging
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -34,10 +35,16 @@ from PySide6.QtGui import (
     QKeySequence,
     QDesktopServices
 )
-from PySide6.QtCore import Qt, QSize, QUrl
+from PySide6.QtCore import (
+    Qt,
+    QSize,
+    QUrl,
+    QProcess,
+    QProcessEnvironment
+)
 
 from gogstash import gog_auth
-from gogstash.login_window import LoginWindow
+from gogstash.login_window import ExitCode
 from gogstash.external_login import ExternalLoginDialog
 from gogstash import library_db
 from gogstash.settings_dialog import SettingsDialog
@@ -45,6 +52,7 @@ from gogstash.settings import read_setting, update_setting
 from gogstash.manifest import read_manifest, check_exist_by_downlink
 from gogstash.download_window import DownloadWindow, UserRole
 from gogstash.icon_utils import get_icon, get_logo, status_indicator
+from gogstash import paths
 
 class Column(IntEnum):
     """Column indices of the library tree."""
@@ -116,6 +124,11 @@ class MainWindow(QMainWindow):
         """Build the window and load the cached library."""
         super().__init__()
         self._games_list_map = {}
+        self.log = logging.getLogger(__name__)
+
+        self.login_process = QProcess(self)
+        self.login_process.finished.connect(self.on_login_finished)
+        self.login_process.errorOccurred.connect(self.on_webview_error)
 
         self.setWindowTitle("GogStash")
         self.setWindowIcon(get_logo())
@@ -311,9 +324,14 @@ class MainWindow(QMainWindow):
 
     def open_login_window(self):
         """Show the GOG login dialog and update the login indicator on success."""
-        login_window = LoginWindow(self)
-        if login_window.exec() == QDialog.DialogCode.Accepted:
-            self._update_login_status()
+        self.login_internal_action.setEnabled(False)
+        if getattr(sys, "frozen", False):
+            env = QProcessEnvironment.systemEnvironment()
+            env.insert("PYINSTALLER_RESET_ENVIRONMENT", "1")
+            self.login_process.setProcessEnvironment(env)
+            self.login_process.start(sys.executable, ["--login-helper"])
+        else:
+            self.login_process.start(sys.executable, ["-m","gogstash.login_window"])
 
     def open_external_login(self):
         """Show the browser login dialog and update the login indicator on success."""
@@ -400,6 +418,32 @@ class MainWindow(QMainWindow):
         self._update_login_status()
         self.status_progress.setVisible(False)
         self.fetch_games_button.setDisabled(False)
+
+    def on_login_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
+        self.login_internal_action.setDisabled(False)
+        if exit_status == QProcess.ExitStatus.CrashExit:
+            self.open_external_login()
+            return
+        match exit_code:
+            case ExitCode.EXIT_OK:
+                self._update_login_status()
+            case ExitCode.EXIT_CANCELLED:
+                pass
+            case ExitCode.EXIT_TOKEN_ERROR:
+                QMessageBox.warning(
+                    self,
+                    "Login Error",
+                    "You signed into GOG, but GogStash could not finish "
+                    "connecting to your account. Check your internet connection "
+                    "and try again."
+                )
+            case _:
+                self.open_external_login()
+
+    def on_webview_error(self, error: QProcess.ProcessError):
+        if error == QProcess.ProcessError.FailedToStart:
+            self.login_internal_action.setDisabled(False)
+            self.open_external_login()
 
     def onclick_queue_download(self):
         """Add the selected games to the download queue.
@@ -620,6 +664,13 @@ class MainWindow(QMainWindow):
 def main():
     """Start the application and show the main window."""
     app = QApplication(sys.argv)
+    log_file = paths.config_file_path(paths.ConfigFile.APP_LOG)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        filename=str(log_file),
+        format='[%(asctime)s | %(module)s] - %(levelname)s - %(message)s',
+        level=logging.INFO
+    )
     app.setStyle('Fusion')
     window = MainWindow()
     window.show()

@@ -1,14 +1,16 @@
+import sys
 import time
 from unittest.mock import MagicMock, patch
 
 import humanize
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QProcess, Qt
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog
 
 from gogstash import gog_auth, library_db, manifest
+from gogstash.login_window import ExitCode
 from gogstash.main import MainWindow
 from gogstash.settings import update_setting
 from tests.fakes import gog_product
@@ -121,28 +123,151 @@ def test_logout_is_safe_when_already_logged_out():
     assert window.status_text.text() == "Not logged in"
 
 
-@patch("gogstash.main.LoginWindow")
-def test_open_login_window_refreshes_status_when_accepted(mock_login_window_cls):
-    mock_login_window_cls.return_value.exec.return_value = QDialog.DialogCode.Accepted
+@pytest.fixture
+def login_window(monkeypatch):
+    # A MainWindow whose login QProcess has had its start() swapped out, so
+    # clicking Log in records what would have run instead of popping a real
+    # GOG window on whoever is running the tests. The signals are still the
+    # real ones, so emitting finished/errorOccurred exercises the actual
+    # wiring in __init__.
+    window = MainWindow()
+    monkeypatch.setattr(window.login_process, "start", MagicMock())
+    return window
+
+
+@pytest.fixture
+def paste_dialog():
+    with patch("gogstash.main.ExternalLoginDialog") as mock_external_cls:
+        mock_external_cls.return_value.exec.return_value = QDialog.DialogCode.Rejected
+        yield mock_external_cls
+
+
+@pytest.fixture
+def warning_box():
+    # QMessageBox.warning is modal, and a modal box in a headless test is a
+    # very patient way to never finish.
+    with patch("gogstash.main.QMessageBox.warning") as mock_warning:
+        yield mock_warning
+
+
+def test_open_login_window_runs_helper_module_from_source(login_window, monkeypatch):
+    monkeypatch.delattr(sys, "frozen", raising=False)
+
+    login_window.open_login_window()
+
+    login_window.login_process.start.assert_called_once_with(sys.executable, ["-m", "gogstash.login_window"])
+    # From source there's no PyInstaller bootloader to reset, so the helper
+    # just inherits our environment untouched.
+    assert login_window.login_process.processEnvironment().isEmpty()
+    assert not login_window.login_internal_action.isEnabled()
+
+
+def test_open_login_window_frozen_reruns_itself_with_flag_and_fresh_bootloader(login_window, monkeypatch):
+    # Regression: the frozen check once defaulted to True with its branches
+    # swapped. From source the two mistakes cancelled out; in the AppImage
+    # they'd have answered "Log in" with a second copy of the whole app.
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("GOGSTASH_TEST_PASSENGER", "still here")
+
+    login_window.open_login_window()
+
+    login_window.login_process.start.assert_called_once_with(sys.executable, ["--login-helper"])
+    env = login_window.login_process.processEnvironment()
+    # Without this the helper's bootloader thinks setup already happened
+    # and never puts the bundled libraries on its path.
+    assert env.value("PYINSTALLER_RESET_ENVIRONMENT") == "1"
+    # ...and the rest of our environment rides along with it.
+    assert env.value("GOGSTASH_TEST_PASSENGER") == "still here"
+    assert not login_window.login_internal_action.isEnabled()
+
+
+def test_helper_success_refreshes_status_and_reenables_login(login_window, paste_dialog):
+    # The helper saves the token itself, so all we do is re-read it.
     gog_auth.save_token({"access_token": "abc", "expiry": time.time() + 3600})
-    window = MainWindow()
-    window.status_text.setText("stale")  # will be overwritten if the refresh runs
+    login_window.status_text.setText("stale")  # will be overwritten if the refresh runs
+    login_window.open_login_window()
 
-    window.open_login_window()
+    login_window.login_process.finished.emit(ExitCode.EXIT_OK, QProcess.ExitStatus.NormalExit)
 
-    mock_login_window_cls.assert_called_once_with(window)
-    assert window.status_text.text() == "Logged in"
+    assert login_window.status_text.text() == "Logged in"
+    assert login_window.login_internal_action.isEnabled()
+    paste_dialog.assert_not_called()
 
 
-@patch("gogstash.main.LoginWindow")
-def test_open_login_window_leaves_status_untouched_when_rejected(mock_login_window_cls):
-    mock_login_window_cls.return_value.exec.return_value = QDialog.DialogCode.Rejected
-    window = MainWindow()
-    window.status_text.setText("stale")
+def test_helper_cancel_changes_nothing_but_reenables_login(login_window, paste_dialog, warning_box):
+    login_window.status_text.setText("stale")
+    login_window.open_login_window()
 
-    window.open_login_window()
+    login_window.login_process.finished.emit(ExitCode.EXIT_CANCELLED, QProcess.ExitStatus.NormalExit)
 
-    assert window.status_text.text() == "stale"
+    assert login_window.status_text.text() == "stale"
+    assert login_window.login_internal_action.isEnabled()
+    paste_dialog.assert_not_called()
+    warning_box.assert_not_called()
+
+
+def test_helper_token_error_warns_instead_of_offering_paste_dialog(login_window, paste_dialog, warning_box):
+    # The webview worked fine, GOG just didn't hand over a token. Sending
+    # people to the paste dialog would have them log in a second time for
+    # the same outcome.
+    login_window.open_login_window()
+
+    login_window.login_process.finished.emit(ExitCode.EXIT_TOKEN_ERROR, QProcess.ExitStatus.NormalExit)
+
+    warning_box.assert_called_once()
+    paste_dialog.assert_not_called()
+    assert login_window.login_internal_action.isEnabled()
+
+
+@pytest.mark.parametrize("exit_code", [
+    ExitCode.EXIT_NO_WEBVIEW,
+    1,  # GTK's own exit(1) when it can't open a display, or a plain traceback
+])
+def test_helper_without_a_working_webview_falls_back_to_paste_dialog(login_window, paste_dialog, warning_box, exit_code):
+    login_window.open_login_window()
+
+    login_window.login_process.finished.emit(exit_code, QProcess.ExitStatus.NormalExit)
+
+    paste_dialog.assert_called_once_with(login_window)
+    warning_box.assert_not_called()
+    assert login_window.login_internal_action.isEnabled()
+
+
+def test_helper_crash_opens_paste_dialog_once_even_when_signal_looks_like_ours(login_window, paste_dialog, warning_box):
+    # On a crash Qt hands over the killing signal's number as the exit code.
+    # SIGILL is 4, which happens to be EXIT_TOKEN_ERROR. Regression too: the
+    # crash branch once fell through into the match and opened the paste
+    # dialog twice.
+    login_window.open_login_window()
+
+    login_window.login_process.finished.emit(4, QProcess.ExitStatus.CrashExit)
+
+    paste_dialog.assert_called_once_with(login_window)
+    warning_box.assert_not_called()
+    assert login_window.login_internal_action.isEnabled()
+
+
+def test_helper_that_never_starts_falls_back_and_reenables_login(login_window, paste_dialog):
+    # FailedToStart is the one failure where finished never fires, so this
+    # handler is the only thing standing between the user and a Log in item
+    # that stays grey until restart.
+    login_window.open_login_window()
+
+    login_window.login_process.errorOccurred.emit(QProcess.ProcessError.FailedToStart)
+
+    paste_dialog.assert_called_once_with(login_window)
+    assert login_window.login_internal_action.isEnabled()
+
+
+def test_other_process_errors_leave_login_disabled_while_helper_runs(login_window, paste_dialog):
+    # A read error doesn't mean the helper is gone. Re-enabling here would
+    # let a second click try to start a process that's already running.
+    login_window.open_login_window()
+
+    login_window.login_process.errorOccurred.emit(QProcess.ProcessError.ReadError)
+
+    paste_dialog.assert_not_called()
+    assert not login_window.login_internal_action.isEnabled()
 
 
 def test_login_button_opens_a_menu_with_both_ways_in():
@@ -159,19 +284,14 @@ def test_login_button_opens_a_menu_with_both_ways_in():
     ]
 
 
-@patch("gogstash.main.ExternalLoginDialog")
-@patch("gogstash.main.LoginWindow")
-def test_login_menu_items_open_their_own_dialogs(mock_login_window_cls, mock_external_cls):
-    mock_login_window_cls.return_value.exec.return_value = QDialog.DialogCode.Rejected
-    mock_external_cls.return_value.exec.return_value = QDialog.DialogCode.Rejected
-    window = MainWindow()
+def test_login_menu_items_start_their_own_logins(login_window, paste_dialog):
+    login_window.login_external_action.trigger()
+    paste_dialog.assert_called_once_with(login_window)
+    login_window.login_process.start.assert_not_called()
 
-    window.login_external_action.trigger()
-    mock_external_cls.assert_called_once_with(window)
-    mock_login_window_cls.assert_not_called()
-
-    window.login_internal_action.trigger()
-    mock_login_window_cls.assert_called_once_with(window)
+    login_window.login_internal_action.trigger()
+    login_window.login_process.start.assert_called_once()
+    paste_dialog.assert_called_once()  # still just the one from before
 
 
 @patch("gogstash.main.ExternalLoginDialog")

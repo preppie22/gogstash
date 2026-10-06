@@ -20,6 +20,8 @@ dependencies = [
     "PySide6",
     "platformdirs",
     "humanize",
+    "pywebview",
+    "pywebview[gtk]; sys_platform == 'linux'"
 ]
 
 [project.urls]
