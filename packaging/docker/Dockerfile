@@ -31,6 +31,16 @@ RUN apt-get install -y \
         binutils \
         curl
 
+# PyGObject (pywebview's GTK backend) builds from source, and PyInstaller's
+# gi hooks need GTK's typelib to analyse it. The spec drops GTK itself from
+# the bundle; users' own GTK and WebKitGTK get used instead.
+RUN apt-get install -y \
+        libgirepository1.0-dev \
+        libcairo2-dev \
+        pkg-config \
+        gcc \
+        gir1.2-gtk-3.0
+
 RUN curl -L -o /usr/local/bin/appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
     && chmod +x /usr/local/bin/appimagetool
 WORKDIR /build
