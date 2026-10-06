@@ -17,7 +17,7 @@ classifiers = [
 ]
 dependencies = [
     "requests",
-    "PySide6",
+    "PySide6-Essentials",
     "platformdirs",
     "humanize",
     "pywebview",
