@@ -33,14 +33,16 @@ from PySide6.QtGui import (
     QAction,
     QActionGroup,
     QKeySequence,
-    QDesktopServices
+    QDesktopServices,
+    QCloseEvent
 )
 from PySide6.QtCore import (
     Qt,
     QSize,
     QUrl,
     QProcess,
-    QProcessEnvironment
+    QProcessEnvironment,
+    QTimer
 )
 
 from gogstash import gog_auth
@@ -50,7 +52,7 @@ from gogstash import library_db
 from gogstash.settings_dialog import SettingsDialog
 from gogstash.settings import read_setting, update_setting
 from gogstash.manifest import read_manifest, check_exist_by_downlink
-from gogstash.download_window import DownloadWindow, UserRole
+from gogstash.download_window import DownloadWindow, UserRole, DownloadState
 from gogstash.icon_utils import get_icon, get_logo, status_indicator
 from gogstash import paths
 
@@ -123,13 +125,18 @@ class MainWindow(QMainWindow):
     def __init__(self):
         """Build the window and load the cached library."""
         super().__init__()
+
+        # Variables
         self._games_list_map = {}
         self.log = logging.getLogger(__name__)
+        self.quit_pending = False
 
+        # Login Helper Process
         self.login_process = QProcess(self)
         self.login_process.finished.connect(self.on_login_finished)
         self.login_process.errorOccurred.connect(self.on_webview_error)
 
+        # Main Window Setup
         self.setWindowTitle("GogStash")
         self.setWindowIcon(get_logo())
         self.resize(1024, 768)
@@ -170,7 +177,6 @@ class MainWindow(QMainWindow):
         self.main_toolbar.addAction(self.login_button)
         self.main_toolbar.widgetForAction(self.login_button).setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
 
-
         # Logout
         self.logout_button = QAction("Logout", self, icon=get_icon('logout.svg'))
         self.logout_button.setProperty('iconFile', 'logout.svg')
@@ -202,7 +208,9 @@ class MainWindow(QMainWindow):
         self.settings_button.setShortcut(QKeySequence("Ctrl+,"))
         self.settings_button.setToolTip(f"Settings ({self.settings_button.shortcut().toString(QKeySequence.SequenceFormat.NativeText)})")
         self.main_toolbar.addAction(self.settings_button)
+
         self.download_window.busy_changed.connect(self._on_busy_changed)
+        self.download_window.busy_changed.connect(self._on_quit_pending)
 
         # Theme
         self.theme_toggle_group = QActionGroup(self)
@@ -292,6 +300,43 @@ class MainWindow(QMainWindow):
         SettingsDialog.set_color_theme()
         self._color_scheme_refresh()
         self.on_games_loaded(library_db.get_product_listing())
+
+    def closeEvent(self, event: QCloseEvent):
+        """Ask before quitting while downloads are running.
+
+        Worker threads must exit before the app does, so a Yes stops the
+        downloads and keeps the window open. ``_on_quit_pending`` closes it
+        again once the queue is idle. Closing again while the stop is still
+        in progress does nothing. If the queue went idle on its own while
+        the question was open, a Yes quits right away. Closing while idle
+        or paused needs no question, since no worker is running then.
+
+        Args:
+            event (QCloseEvent): The close request. Ignoring it keeps the
+                window open.
+        """
+        if self.quit_pending and self.download_window.current_state != DownloadState.IDLE:
+            event.ignore()
+            return
+        if self.download_window.current_state == DownloadState.RUNNING:
+            confirmation = QMessageBox(
+                QMessageBox.Icon.Warning,
+                "Quit GogStash",
+                "Are you sure you want to cancel downloads and quit?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                self,
+                informativeText="Clicking yes will cancel all downloads and quit the program."
+            )
+            confirmation.setDefaultButton(QMessageBox.StandardButton.No)
+            ans = confirmation.exec()
+            if ans == QMessageBox.StandardButton.Yes:
+                if self.download_window.current_state == DownloadState.IDLE:
+                    return super().closeEvent(event)
+                self.quit_pending = True
+                self.download_window.stop_downloads()
+            event.ignore()
+        else:
+            super().closeEvent(event)
 
     def _color_scheme_refresh(self) -> None:
         """Reload toolbar and button icons for the current color scheme."""
@@ -617,6 +662,19 @@ class MainWindow(QMainWindow):
         else:
             row_item.setData(Column.FETCHED, Qt.ItemDataRole.UserRole, False)
             row_item.setToolTip(Column.FETCHED, "Not Fetched")
+
+    def _on_quit_pending(self, is_busy: bool):
+        """Close the window once a stop requested by quitting has finished.
+
+        The close is queued instead of called directly, since the signal
+        arrives in the middle of ``DownloadWindow._reset_all``, which still
+        has to finish setting up the new scheduler.
+
+        Args:
+            is_busy (bool): True while the download queue is not idle.
+        """
+        if not is_busy and self.quit_pending:
+            QTimer.singleShot(0, self.close)
 
     def _on_busy_changed(self, is_busy: bool):
         """Lock Settings while downloads are running or paused.
