@@ -1,13 +1,14 @@
+import gc
 import sys
 import time
 from unittest.mock import MagicMock, patch
 
 import humanize
 import pytest
-from PySide6.QtCore import QProcess, Qt
+from PySide6.QtCore import QProcess, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from gogstash import gog_auth, library_db, manifest
 from gogstash.login_window import ExitCode
@@ -326,6 +327,60 @@ def test_open_settings_constructs_and_executes_dialog(mock_settings_dialog_cls):
 
     mock_settings_dialog_cls.assert_called_once_with(window)
     mock_settings_dialog_cls.return_value.exec.assert_called_once()
+
+
+def _answer_about_page(then=None):
+    # About is a modal exec(), so whoever closes it has to be waiting in the
+    # event loop already. Polls until the box shows up, optionally does
+    # something with it, then presses OK. Gives up after a couple of
+    # seconds, so a box that never opens doesn't leave a timer lurking
+    # around to press OK on some later test's dialog.
+    deadline = time.monotonic() + 2
+
+    def poll():
+        box = QApplication.activeModalWidget()
+        if isinstance(box, QMessageBox) and box.windowTitle() == "About GogStash":
+            if then:
+                then(box)
+            box.accept()
+        elif time.monotonic() < deadline:
+            QTimer.singleShot(20, poll)
+
+    QTimer.singleShot(0, poll)
+
+
+def test_about_page_closes_without_taking_the_app_with_it():
+    # Regression: the About Qt button's slot once captured the About box
+    # itself. On Python 3.14 with PySide6 6.11.2, the garbage collector
+    # untangled that cycle while PySide was still using the connection,
+    # and closing About took the whole app down (on Windows, a crash in
+    # ucrtbase.dll). On 3.14 this fails by aborting the test run, which is
+    # loud, if not polite.
+    window = MainWindow()
+
+    for _ in range(3):
+        _answer_about_page()
+        window.open_about_page()
+        gc.collect()
+
+    # Getting here at all is most of the test. This is the rest.
+    assert QApplication.activeModalWidget() is None
+
+
+def test_about_qt_opens_over_the_main_window_not_the_about_box():
+    # The fix for the crash above, pinned down: the About Qt slot only
+    # knows the main window, so there's no cycle back to the About box for
+    # the collector to trip over.
+    window = MainWindow()
+
+    def press_about_qt(box):
+        next(b for b in box.buttons() if b.text() == "About Qt").click()
+
+    with patch.object(QMessageBox, "aboutQt") as mock_about_qt:
+        _answer_about_page(then=press_about_qt)
+        window.open_about_page()
+
+    mock_about_qt.assert_called_once_with(window)
 
 
 @patch("gogstash.library_db.LibraryFetchThread")

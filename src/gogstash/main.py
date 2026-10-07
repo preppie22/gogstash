@@ -323,7 +323,15 @@ class MainWindow(QMainWindow):
         self._update_login_status()
 
     def open_login_window(self):
-        """Show the GOG login dialog and update the login indicator on success."""
+        """Start the login helper in its own process.
+
+        "Log in through GogStash" stays disabled until the helper exits, and
+        ``on_login_finished`` handles the result. The frozen build runs
+        itself again with ``--login-helper``, with
+        ``PYINSTALLER_RESET_ENVIRONMENT`` set so the helper's bootloader
+        sets up the bundled libraries again. From source it runs
+        ``gogstash.login_window`` as a module.
+        """
         self.login_internal_action.setEnabled(False)
         if getattr(sys, "frozen", False):
             env = QProcessEnvironment.systemEnvironment()
@@ -420,6 +428,17 @@ class MainWindow(QMainWindow):
         self.fetch_games_button.setDisabled(False)
 
     def on_login_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
+        """Act on how the login helper ended and re-enable its menu item.
+
+        Logged in refreshes the login indicator, cancelled does nothing, and
+        a failed token exchange shows a warning. A crash or a missing web
+        view opens the browser login instead.
+
+        Args:
+            exit_code (int): The helper's exit code, an ``ExitCode`` value.
+            exit_status (QProcess.ExitStatus): Whether the helper exited
+                normally or crashed.
+        """
         self.login_internal_action.setDisabled(False)
         if exit_status == QProcess.ExitStatus.CrashExit:
             self.open_external_login()
@@ -441,6 +460,15 @@ class MainWindow(QMainWindow):
                 self.open_external_login()
 
     def on_webview_error(self, error: QProcess.ProcessError):
+        """Open the browser login if the login helper couldn't start.
+
+        Other errors, like a crash, also end with ``finished``, so
+        ``on_login_finished`` handles those and the browser login opens
+        only once.
+
+        Args:
+            error (QProcess.ProcessError): What went wrong with the helper.
+        """
         if error == QProcess.ProcessError.FailedToStart:
             self.login_internal_action.setDisabled(False)
             self.open_external_login()

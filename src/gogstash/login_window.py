@@ -1,3 +1,12 @@
+"""GOG login helper that runs in its own process.
+
+Shows GOG's login page in pywebview, using the system's own web view
+(Edge WebView2 on Windows, WebKitGTK on Linux). Qt and the web view both
+want the main thread, so the main window starts this as a separate
+process and only reads its exit code. The helper exchanges the code for a
+token and saves it itself.
+"""
+
 import sys
 import threading
 from pathlib import Path
@@ -11,6 +20,11 @@ from gogstash import gog_auth
 from gogstash.paths import ConfigFile, config_file_path
 
 class ExitCode(IntEnum):
+    """How the login helper ended, reported through its exit code.
+
+    The values stay clear of 1, which GTK exits with on its own when it
+    can't open a display.
+    """
     EXIT_OK = 0
     EXIT_CANCELLED = 75
     EXIT_NO_WEBVIEW = 2
@@ -65,7 +79,13 @@ BASE_PAGE = """
 """
 
 class LoginWindow():
+    """The login window and everything the helper process does around it."""
     def __init__(self):
+        """Set up logging to the app log file.
+
+        The helper is its own process, so it doesn't share the main
+        window's logging setup.
+        """
         self.__code = None
         self.__load_failed = False
         log_file = config_file_path(ConfigFile.APP_LOG)
@@ -79,9 +99,29 @@ class LoginWindow():
 
     @property
     def code(self):
+        """str | None: The authorization code caught from GOG's redirect, if any."""
         return self.__code
 
     def start_helper(self) -> int:
+        """Show the login window until the user logs in or closes it.
+
+        The window opens on a local loading page, then loads GOG's login
+        page once that is up. A background thread checks the address four
+        times a second and closes the window as soon as it lands on the
+        login success page. The thread is a daemon, so closing the window
+        early doesn't leave the process waiting on it.
+
+        In the frozen Linux build, ``GI_TYPELIB_PATH`` lists every typelib
+        folder the distro has, since the bundled libgirepository only
+        looks in Debian's.
+
+        Returns:
+            int: An ``ExitCode``. ``EXIT_OK`` once the token is saved,
+            ``EXIT_TOKEN_ERROR`` if the login worked but the token exchange
+            didn't, ``EXIT_CANCELLED`` if the window was closed without
+            logging in, and ``EXIT_NO_WEBVIEW`` if there is no working web
+            view or GOG's page couldn't be loaded.
+        """
         gui = "edgechromium" if sys.platform == "win32" else "gtk"
         if getattr(sys, "frozen", False) and sys.platform.startswith("linux"):
             found = [d for d in TYPELIB_DIRS if Path(d).is_dir()]
@@ -139,6 +179,12 @@ class LoginWindow():
         return ExitCode.EXIT_CANCELLED
 
     def _create_token(self) -> bool:
+        """Exchange the caught code for a token and save it.
+
+        Returns:
+            bool: True if the token was saved. False if GOG couldn't be
+            reached or rejected the code as expired or invalid.
+        """
         try:
             token = gog_auth.fetch_token(self.code)
             gog_auth.save_token(token)

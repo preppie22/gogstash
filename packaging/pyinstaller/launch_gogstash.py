@@ -1,3 +1,13 @@
+"""Entry point of the frozen build.
+
+On Linux it first undoes what PyInstaller's bootloader and gi hooks did to
+the environment (the library path, Qt's plugin paths, the GTK and GIO
+variables, the bundled share folder in XDG_DATA_DIRS), so anything
+GogStash starts, like the file manager or WebKit's own processes, uses the
+system's libraries. Then it runs the login helper when started with
+``--login-helper``, or the main window otherwise.
+"""
+
 import sys
 import os
 
