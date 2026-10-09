@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
 from gogstash import gog_auth
+from gogstash.constants import HTTP_TIMEOUT
 
 
 def make_response(json_data):
@@ -39,6 +40,8 @@ def test_fetch_token_authorize_sends_code_and_redirect_uri(mock_get):
     assert params["code"] == "somecode"
     assert params["redirect_uri"] == gog_auth.REDIRECT_URI
     assert "refresh_token" not in params
+    # A token request that hangs would freeze login or a refresh (#29)
+    assert kwargs["timeout"] == HTTP_TIMEOUT
 
     assert token["access_token"] == "abc"
     assert before + 3600 <= token["expiry"] <= after + 3600

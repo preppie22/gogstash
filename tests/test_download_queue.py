@@ -11,6 +11,7 @@ import pytest
 from PySide6.QtCore import QObject, Signal
 
 from gogstash import download_queue, library_db, manifest, paths, settings
+from gogstash.constants import HTTP_TIMEOUT
 from tests.fakes import gog_product
 
 FAKE_PRODUCT = gog_product(111, "Fake Game", "fake-game", downloads={
@@ -408,6 +409,9 @@ def test_download_worker_succeeds_and_writes_file(mock_resolve, mock_get, tmp_pa
     assert written.read_bytes() == chunk_a + chunk_b
     # a plain download must not ask the CDN for a byte range
     assert mock_get.call_args_list[1].kwargs["headers"] == {}
+    # Both the checksum and the download give up on a silent server instead
+    # of leaving Pause and Cancel shouting into the void (#29)
+    assert [c.kwargs["timeout"] for c in mock_get.call_args_list] == [HTTP_TIMEOUT, HTTP_TIMEOUT]
 
 
 def ten_chunk_download(mock_resolve, mock_get, tmp_path):

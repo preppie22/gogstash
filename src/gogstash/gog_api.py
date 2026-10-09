@@ -4,6 +4,7 @@ import requests
 from typing import Callable
 
 from gogstash import gog_auth
+from gogstash.constants import HTTP_TIMEOUT
 
 PRODUCT_URL = "https://api.gog.com/products"
 USER_GAMES = "https://embed.gog.com/user/data/games"
@@ -34,7 +35,8 @@ def fetch_owned_ids() -> set:
     response = requests.get(
         USER_GAMES,
         headers={"Authorization": f"Bearer {token['access_token']}"},
-        allow_redirects=False
+        allow_redirects=False,
+        timeout=HTTP_TIMEOUT
     )
     if response.is_redirect:
         gog_auth.clear_token()
@@ -83,7 +85,8 @@ def fetch_downloadables(product_ids: list, progress_callback: Callable[[int], No
                 'ids': ','.join(str(pid) for pid in chunk),
                 'expand': 'downloads'
             },
-            allow_redirects=False
+            allow_redirects=False,
+            timeout=HTTP_TIMEOUT
         )
         product_info.extend(response.json())
         if progress_callback:
@@ -109,7 +112,8 @@ def resolve_downlink(downlink: str) -> dict:
         raise PermissionError("Authentication failed. Login again.")
     response = requests.get(
         downlink,
-        headers={"Authorization": f"Bearer {token['access_token']}"}
+        headers={"Authorization": f"Bearer {token['access_token']}"},
+        timeout=HTTP_TIMEOUT
     )
     response.raise_for_status()
     return response.json()

@@ -11,10 +11,11 @@ from enum import StrEnum
 from urllib.parse import urlsplit, parse_qs
 
 from gogstash import paths
-
-# These are public and obtained from https://gogapidocs.readthedocs.io/en/latest/auth.html
-CLIENT_ID = "46899977096215655"
-CLIENT_SECRET = "9d85c43b1482497dbbce61f6e4aa173a433796eeae2ca8c5f6129f2dc4de46d9"
+from gogstash.constants import (
+    HTTP_TIMEOUT,
+    CLIENT_ID,
+    CLIENT_SECRET
+)
 
 REDIRECT_URI = "https://embed.gog.com/on_login_success?origin=client"
 AUTH_URL = "https://auth.gog.com/auth"
@@ -82,7 +83,7 @@ def fetch_token(code: str = None, type: GrantType = GrantType.AUTHORIZE, refresh
         parameters['refresh_token'] = refresh_token
 
     start_time = time.time()
-    response = requests.get(TOKEN_URL, params=parameters)
+    response = requests.get(TOKEN_URL, params=parameters, timeout=HTTP_TIMEOUT)
     token_json = response.json()
     token_json["expiry"] = start_time+token_json["expires_in"]
     return token_json

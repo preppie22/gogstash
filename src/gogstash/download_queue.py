@@ -10,6 +10,7 @@ from gogstash import settings
 from gogstash import gog_api
 from gogstash import manifest
 from gogstash import paths
+from gogstash.constants import HTTP_TIMEOUT
 
 import humanize
 from pathlib import Path
@@ -644,7 +645,7 @@ class DownloadWorkerThread(QThread):
                 checksum = ""
                 if file['directory'] != 'bonus_content':
                     checksum_link = resolved['checksum']
-                    checksum_response = requests.get(checksum_link)
+                    checksum_response = requests.get(checksum_link, timeout=HTTP_TIMEOUT)
                     checksum_response.raise_for_status()
                     checksum_xml = ET.fromstring(checksum_response.text)
                     checksum = checksum_xml.attrib['md5']
@@ -703,8 +704,7 @@ class DownloadWorkerThread(QThread):
                     except FileNotFoundError:
                         pass
                     self.resume_link = ""
-                # download_response = requests.get(cdn_link, headers=header_params, stream=True)
-                with requests.get(cdn_link, headers=header_params, stream=True) as download_response:
+                with requests.get(cdn_link, headers=header_params, stream=True, timeout=HTTP_TIMEOUT) as download_response:
                     download_response.raise_for_status()
                     if download_response.status_code == 206:
                         content_range = download_response.headers.get('Content-Range')

@@ -4,6 +4,7 @@ import pytest
 import requests
 
 from gogstash import gog_api
+from gogstash.constants import HTTP_TIMEOUT
 
 
 FAKE_TOKEN = {"access_token": "mytoken"}
@@ -30,6 +31,10 @@ def test_fetch_owned_ids_returns_owned_list_as_a_set(mock_get_valid_token, mock_
     assert args[0] == gog_api.USER_GAMES
     assert kwargs["headers"] == {"Authorization": "Bearer mytoken"}
     assert kwargs["allow_redirects"] is False
+    # Without a timeout, a CDN that goes quiet holds the thread hostage
+    # forever (#29). requests has no default; it will wait until the heat
+    # death of the universe if asked politely enough.
+    assert kwargs["timeout"] == HTTP_TIMEOUT
     assert result == {1207658695, 1456702644, 1293681291}
 
 
@@ -107,6 +112,7 @@ def test_get_downloadable_single_batch_under_50(mock_get_valid_token, mock_get):
     assert kwargs["params"]["ids"] == "1,2,3"
     assert kwargs["params"]["expand"] == "downloads"
     assert kwargs["headers"] == {"Authorization": "Bearer mytoken"}
+    assert kwargs["timeout"] == HTTP_TIMEOUT
     assert result == [{"id": 1}, {"id": 2}, {"id": 3}]
 
 
@@ -199,6 +205,7 @@ def test_resolve_downlink_returns_cdn_url_and_checksum(mock_get_valid_token, moc
     args, kwargs = mock_get.call_args
     assert args[0] == "https://api.gog.com/products/111/downlink/installer/file1"
     assert kwargs["headers"] == {"Authorization": "Bearer mytoken"}
+    assert kwargs["timeout"] == HTTP_TIMEOUT
     assert result == {
         "downlink": "https://gog-cdn.example.com/secure/offline/111/setup_fake_game.exe",
         "checksum": "https://gog-cdn.example.com/secure/offline/111/setup_fake_game.exe.xml",
