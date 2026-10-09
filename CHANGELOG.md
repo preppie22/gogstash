@@ -14,6 +14,8 @@ suffix until the first stable release), not SemVer.
 
 ### Fixed
 - Closing the About window no longer crashes GogStash when it runs on Python 3.14
+- Quitting while downloads are running or the library is refreshing no longer crashes GogStash. If downloads are running, it asks first, then stops them and closes once they have ([#30](https://github.com/preppie22/gogstash/issues/30))
+- Downloads no longer hang forever when the internet connection drops or goes silent, which also left Pause and Cancel stuck on "Please wait...". After 15 seconds without data, all downloads pause and GogStash tells you the connection was lost. Resume Downloads picks each file up where it stopped. A library refresh or login that loses its connection now shows an error instead of hanging ([#29](https://github.com/preppie22/gogstash/issues/29))
 
 ## [2026.10.5.1-beta] - 2026-10-05
 

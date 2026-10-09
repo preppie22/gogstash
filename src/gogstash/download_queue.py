@@ -77,6 +77,9 @@ class DownloadScheduler(QObject):
         disk_full (Signal): A download ran out of disk space and all
             downloads are being paused. Emitted once per pause, before
             ``paused``.
+        connection_lost (Signal): A download lost its connection to GOG
+            and all downloads are being paused. Emitted once per pause,
+            before ``paused``.
     """
     game_succeeded = Signal('qlonglong')
     game_started = Signal('qlonglong')
@@ -89,6 +92,7 @@ class DownloadScheduler(QObject):
     paused = Signal()
     low_disk_space = Signal(float, float)
     disk_full = Signal()
+    connection_lost = Signal()
 
     _stopped_flag = False
     _paused_flag = False
@@ -355,6 +359,7 @@ class DownloadScheduler(QObject):
         job['worker'].paused.connect(lambda resume_link, t=job: self._handle_paused(t, resume_link))
         job['worker'].fetched.connect(self._handle_fetched)
         job['worker'].disk_full.connect(lambda resume_link, t=job: self._handle_disk_full(t, resume_link))
+        job['worker'].network_error.connect(lambda resume_link, t=job: self._handle_network_error(t, resume_link))
         self.active_queue.append(job)
         self.tokens = self.tokens - 1
         job['worker'].start()
@@ -528,6 +533,42 @@ class DownloadScheduler(QObject):
         self._reap(job)
         self.schedule()
 
+    def _handle_network_error(self, job: dict, resume_link: dict) -> None:
+        """Pause all downloads after a worker lost its connection.
+
+        Works like ``_handle_disk_full``: the job goes to the paused queue
+        with its resume information, every other active job is asked to
+        pause, and ``connection_lost`` is emitted if this starts the pause.
+        A worker that loses its connection while a pause is already
+        underway just joins it, and during a stop the job is reported as
+        stopped and its partial downloads are discarded.
+
+        Args:
+            job (dict): The job whose worker lost its connection.
+            resume_link (dict): Resume information from the worker, with
+                ``downlink`` and, once the file had started, ``partpath``.
+        """
+        if self._stopped_flag:
+            _write_log_msg("Connection error while stopping")
+            if job in self.active_queue:
+                self.game_stopped.emit(job['product_id'])
+                part_path : Path = resume_link.get('partpath', None)
+                if part_path: 
+                    _discard_partial_downloads(part_path.parent.parent)
+        else:
+            _write_log_msg("Connection error: downloads paused")
+            if not self._paused_flag:
+                self.pause_all()
+                self.connection_lost.emit()
+            self.game_paused.emit(job['product_id'])
+            if job in self.active_queue:
+                paused_job = job.copy()
+                paused_job['resume_link'] = resume_link
+                paused_job['remaining_size'] = job['worker'].total_size - job['worker'].fetched_size
+                self.paused_queue.append(paused_job)
+        self._reap(job)
+        self.schedule()
+
     def _handle_failure(self, job: dict, msg: str) -> None:
         """Report a failed game and schedule the next job.
 
@@ -556,8 +597,9 @@ class DownloadWorkerThread(QThread):
     verified against its md5 checksum (or its size, for bonus content)
     and then renamed into place. Files already recorded in the manifest
     are skipped. A paused file is resumed from its ``.part`` file with an
-    HTTP range request. Running out of disk space mid-file keeps the
-    ``.part`` file so the download can be resumed the same way.
+    HTTP range request. Running out of disk space or losing the
+    connection mid-file keeps the ``.part`` file so the download can be
+    resumed the same way.
 
     Attributes:
         succeeded (Signal): All files were downloaded or skipped.
@@ -568,7 +610,13 @@ class DownloadWorkerThread(QThread):
         fetched (Signal(dict)): A file was downloaded, skipped or failed.
         disk_full (Signal(dict)): The disk filled up while writing a file.
             Carries the same resume information as ``paused``.
-        resume_link (str): Downlink of the file to resume, if any.
+        network_error (Signal(dict)): The connection to GOG dropped or
+            timed out. Carries the same resume information as ``paused``.
+        resume_info (dict): The resume information the worker was created
+            with, empty if none. Passed on unchanged if the connection
+            drops before the worker reaches the file it describes.
+        resume_link (str): Downlink of the file to resume, if any. Cleared
+            once the worker reaches that file.
         product_id (int): GOG product ID of the game.
         file_queue (list[dict]): Files to download, from
             ``generate_download_list``.
@@ -584,6 +632,7 @@ class DownloadWorkerThread(QThread):
     paused = Signal(dict)
     fetched = Signal(dict)
     disk_full = Signal(dict)
+    network_error = Signal(dict)
 
     _stop_flag = False
     _pause_flag = False
@@ -601,6 +650,7 @@ class DownloadWorkerThread(QThread):
             parent (QObject): Optional parent object.
         """
         super().__init__(parent)
+        self.resume_info = resume_link or {}
         self.resume_link = resume_link.get('downlink', "") if resume_link else ""
         self.product_id = product_id
         self.file_queue = file_queue or []
@@ -626,7 +676,9 @@ class DownloadWorkerThread(QThread):
         to the next file. Errors that affect the whole game, such as a login
         failure or an unwritable directory, end the run with ``failed``.
         Running out of disk space ends the run with ``disk_full`` instead,
-        keeping the ``.part`` file.
+        keeping the ``.part`` file. So does a dropped or timed out
+        connection, with ``network_error``. A server that answers with an
+        error, such as a 404, still only fails that file.
         """
         try:
             if not self.file_queue:
@@ -653,6 +705,9 @@ class DownloadWorkerThread(QThread):
                 filename = urllib.parse.unquote(filename)
             except PermissionError as e:
                 self.failed.emit(str(e))
+                return
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                self.network_error.emit(self.resume_info if self.resume_link else {'downlink': file['downlink']})
                 return
             except Exception as e:
                 self.fetched.emit({
@@ -819,6 +874,12 @@ class DownloadWorkerThread(QThread):
                 if self._pause_flag:
                     self.paused.emit({})
                     return
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                self.network_error.emit(self.resume_info if self.resume_link else {
+                    'partpath': part_path,
+                    'downlink': file['downlink']
+                })
+                return
             except requests.exceptions.RequestException as e:
                 self.fetched.emit({
                     'game_dir': download_path,

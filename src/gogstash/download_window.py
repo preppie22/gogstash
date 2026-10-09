@@ -286,6 +286,7 @@ class DownloadWindow(QDockWidget):
         self.scheduler.game_started.connect(self._on_game_started)
         self.scheduler.low_disk_space.connect(self._on_low_disk_space, Qt.ConnectionType.QueuedConnection)
         self.scheduler.disk_full.connect(self._on_disk_full, Qt.ConnectionType.QueuedConnection)
+        self.scheduler.connection_lost.connect(self._on_connection_error, Qt.ConnectionType.QueuedConnection)
 
     def add_to_queue(self, row_data: dict) -> int:
         """Add a game to the queue.
@@ -706,6 +707,28 @@ class DownloadWindow(QDockWidget):
         confirmation.setStandardButtons(QMessageBox.StandardButton.Ok)
         confirmation.setIcon(QMessageBox.Icon.Warning)
         confirmation.exec()
+
+    def _on_connection_error(self):
+        """Tell the user that downloads paused because the connection dropped.
+
+        Connected as a queued connection, so it runs after the scheduler
+        has finished handling the dropped connection. The window switches
+        to the pausing state if other downloads are still pausing.
+        """
+        self.pause_downloads()
+        if self.current_state != DownloadState.PAUSED:
+            self.downloads_status.setText("Connection lost. Pausing...")
+        QMessageBox(
+            QMessageBox.Icon.Warning,
+            "Network Connection Lost",
+            "Connection to GOG lost.",
+            QMessageBox.StandardButton.Ok,
+            self,
+            informativeText="Downloads have been paused and downloaded "
+                "content has not been removed. Check your internet connection "
+                "and ensure you can log in to GOG.com from your web browser "
+                "before resuming."
+        ).exec()
 
     def _reset_status(self):
         """Show the ready message if the queue is idle."""

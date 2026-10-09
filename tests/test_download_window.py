@@ -835,6 +835,7 @@ class _IdleWorker(QObject):
     paused = Signal(dict)
     fetched = Signal(dict)
     disk_full = Signal(dict)
+    network_error = Signal(dict)
 
     def __init__(self, product_id, file_queue=None, resume_link=None):
         super().__init__()
@@ -1076,6 +1077,73 @@ def test_a_full_disk_mid_download_pauses_and_says_why(mock_estimate):
     assert window.start_button.text() == "Resume Downloads"
     assert window.start_button.isEnabled() is True
     assert _status_of(window, 0) == "yellow"
+
+
+def _lose_the_connection(window, pid=1):
+    job = next(j for j in window.scheduler.active_queue if j["product_id"] == pid)
+    job["worker"].network_error.emit({"downlink": "x"})
+
+
+def _record_dialogs():
+    # Like _answer_dialog, but remembers which box it was. "A dialog showed"
+    # isn't much comfort if it's the one telling you to buy a bigger disk.
+    titles = []
+    def answer(box):
+        titles.append(box.windowTitle())
+        return OK
+    return titles, patch("gogstash.download_window.QMessageBox.exec", answer)
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_a_lost_connection_mid_download_pauses_and_says_why(mock_estimate):
+    # Regression (#29): a dead connection either hung forever or, with a
+    # timeout, failed every file in turn. Now: pause, explain, wait.
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+    with _roomy_disk():
+        window.start_downloads()
+    titles, dialogs = _record_dialogs()
+
+    with dialogs:
+        _lose_the_connection(window)
+        _deliver_queued_signals()
+
+    assert titles == ["Network Connection Lost"]
+    assert window.current_state == DownloadState.PAUSED
+    assert window.downloads_status.text() == "Downloads paused"
+    assert window.start_button.text() == "Resume Downloads"
+    assert window.start_button.isEnabled() is True
+    assert _status_of(window, 0) == "yellow"
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+def test_a_lost_connection_waits_for_the_other_downloads_before_saying_paused(mock_estimate):
+    update_setting("download_concurrency", 2)
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+    window.add_to_queue(_row(title="Other Game", product_id=2))
+    with _roomy_disk():
+        window.start_downloads()
+    slow_job = next(j for j in window.scheduler.active_queue if j["product_id"] == 2)
+    slow_job["worker"].pause_worker = lambda: None  # still stuck in its own read
+    titles, dialogs = _record_dialogs()
+
+    with dialogs:
+        _lose_the_connection(window, pid=1)
+        _deliver_queued_signals()
+
+    assert window.downloads_status.text() == "Connection lost. Pausing..."
+    assert window.start_button.isEnabled() is False
+
+    slow_job["worker"].paused.emit({})
+
+    assert window.current_state == DownloadState.PAUSED
+    assert window.downloads_status.text() == "Downloads paused"
+    assert titles == ["Network Connection Lost"]
 
 
 @patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)

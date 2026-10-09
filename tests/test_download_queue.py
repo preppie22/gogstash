@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 from PySide6.QtCore import QObject, Signal
 
 from gogstash import download_queue, library_db, manifest, paths, settings
@@ -348,7 +349,9 @@ class Watcher:
         self.fetched = []
         self.progress = []
         self.disk_full = []
+        self.network_error = []
         thread.disk_full.connect(lambda resume_link: self.disk_full.append(resume_link))
+        thread.network_error.connect(lambda resume_link: self.network_error.append(resume_link))
         thread.succeeded.connect(lambda: setattr(self, "succeeded", self.succeeded + 1))
         thread.stopped.connect(lambda: setattr(self, "stopped", self.stopped + 1))
         thread.failed.connect(lambda msg: self.failed.append(msg))
@@ -1039,6 +1042,131 @@ def test_a_full_disk_that_only_shows_up_when_the_file_closes_is_still_disk_full(
     assert not (game_dir / "setup_fake_game.exe").exists()  # never renamed into place
 
 
+def _connection_dies_after(chunks):
+    # iter_content as requests really does it: a read timeout mid-stream
+    # comes out as ConnectionError, not Timeout. Yes, really. models.py, look.
+    def stream(*args, **kwargs):
+        yield from chunks
+        raise requests.exceptions.ConnectionError("Read timed out.")
+    return stream
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_a_connection_dropping_mid_file_reports_network_error_and_keeps_the_part_file(mock_resolve, mock_get, tmp_path):
+    # Regression (#29): a drop went down the per-file failure path, so the
+    # file was written off and its 400 perfectly good bytes started over.
+    game_dir = single_installer_setup(mock_resolve, tmp_path)
+    response = make_streamed_response([], headers={"Content-Length": "1000"})
+    response.iter_content.side_effect = _connection_dies_after([b"a" * 400])
+    mock_get.side_effect = [make_checksum_response("irrelevant"), response]
+    thread = make_worker()
+    events = Watcher(thread)
+
+    thread.run()
+
+    part_path = game_dir / "setup_fake_game.exe.part"
+    assert events.network_error == [{"partpath": part_path, "downlink": "https://example.com/file1"}]
+    assert events.failed == []
+    assert events.fetched == []  # not a failure, just a pause with extra steps
+    assert events.succeeded == 0
+    assert part_path.read_bytes() == b"a" * 400
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_a_server_that_never_answers_the_download_request_is_a_network_error(mock_resolve, mock_get, tmp_path):
+    # Silence before the headers is a real ReadTimeout, the other half of
+    # the tuple the worker has to catch
+    game_dir = single_installer_setup(mock_resolve, tmp_path)
+    mock_get.side_effect = [make_checksum_response("irrelevant"), requests.exceptions.ReadTimeout()]
+    thread = make_worker()
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert events.network_error == [
+        {"partpath": game_dir / "setup_fake_game.exe.part", "downlink": "https://example.com/file1"}
+    ]
+    assert events.fetched == []
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_a_connection_dropping_while_resolving_the_link_is_a_network_error(mock_resolve, mock_get, tmp_path):
+    single_installer_setup(mock_resolve, tmp_path)
+    mock_resolve.side_effect = requests.exceptions.ConnectionError("Name or service not known")
+    thread = make_worker()
+    events = Watcher(thread)
+
+    thread.run()
+
+    # No .part path yet, the filename comes from the link we never got.
+    # The downlink alone is enough for the next worker to pick it back up.
+    assert events.network_error == [{"downlink": "https://example.com/file1"}]
+    assert events.fetched == []
+    assert events.failed == []
+    mock_get.assert_not_called()
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_a_checksum_fetch_that_times_out_is_a_network_error(mock_resolve, mock_get, tmp_path):
+    single_installer_setup(mock_resolve, tmp_path)
+    mock_get.side_effect = [requests.exceptions.ConnectTimeout()]
+    thread = make_worker()
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert events.network_error == [{"downlink": "https://example.com/file1"}]
+    assert events.fetched == []
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_a_server_error_still_fails_just_that_file(mock_resolve, mock_get, tmp_path):
+    # A 404 is the server answering, just not with what we wanted. The
+    # connection is fine, so this stays a plain per-file failure.
+    single_installer_setup(mock_resolve, tmp_path)
+    broken = make_streamed_response([b"a" * 1000])
+    broken.raise_for_status.side_effect = requests.exceptions.HTTPError("404 Client Error")
+    mock_get.side_effect = [make_checksum_response("irrelevant"), broken]
+    thread = make_worker()
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert events.network_error == []
+    [entry] = events.fetched
+    assert "404" in entry["error"]
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_a_drop_before_reaching_the_resumed_file_keeps_its_resume_link(mock_resolve, mock_get, tmp_path):
+    # Resume re-checks every file in order, finished ones included, and each
+    # check is a network call. Hit Resume while the network is still down
+    # and the first finished file fails its check. If that file's downlink
+    # becomes the resume link, the real half-done file loses its place and
+    # starts from zero next time.
+    single_installer_setup(mock_resolve, tmp_path)
+    settings.update_setting("bonus_content", True)
+    file_queue = download_queue.generate_download_list((111,))
+    assert len(file_queue) == 2
+    # The half-done file is the second one, so the worker trips over the first
+    resumed = file_queue[1]["downlink"]
+    resume = {"partpath": tmp_path / "fake-game" / "somewhere.part", "downlink": resumed}
+    mock_resolve.side_effect = requests.exceptions.ConnectionError("still offline")
+    thread = make_worker(resume, file_queue)
+    events = Watcher(thread)
+
+    thread.run()
+
+    [payload] = events.network_error
+    assert payload["downlink"] == resumed
+
+
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
 def test_other_write_errors_still_fail_the_game(mock_resolve, mock_get, tmp_path):
@@ -1339,6 +1467,7 @@ class FakeWorker(QObject):
     paused = Signal(dict)
     fetched = Signal(dict)
     disk_full = Signal(dict)
+    network_error = Signal(dict)
 
     def __init__(self, product_id, file_queue=None, resume_link=None):
         super().__init__()
@@ -2836,6 +2965,114 @@ def test_a_full_disk_during_a_stop_stays_quiet(tmp_path):
     _run_out_of_space(job, _part_file(tmp_path))
 
     assert "disk_full" not in events
+
+
+# --- the connection drops mid-run (#29) ---
+
+def _lose_connection(job, part_path):
+    payload = {"partpath": part_path, "downlink": "https://example.com/f"}
+    job["worker"].network_error.emit(payload)
+    return payload
+
+
+def _connection_events(scheduler):
+    events = []
+    scheduler.connection_lost.connect(lambda: events.append("connection_lost"))
+    scheduler.disk_full.connect(lambda: events.append("disk_full"))
+    scheduler.paused.connect(lambda: events.append("paused"))
+    return events
+
+
+@with_fake_workers
+def test_a_lost_connection_pauses_the_queue_and_keeps_the_game_resumable(tmp_path):
+    # Regression (#29): the file was written off as failed, the next file
+    # walked straight into the same dead connection, and so on down the list.
+    scheduler = make_scheduler(concurrency=1, count=2)
+    scheduler.schedule()
+    job = scheduler.active_queue[0]
+    part_path = _part_file(tmp_path)
+    failed_rows = []
+    scheduler.game_failed.connect(lambda row, msg: failed_rows.append(row))
+    events = _connection_events(scheduler)
+
+    payload = _lose_connection(job, part_path)
+
+    # Says why before saying paused, and the why is not "your disk is full"
+    assert events == ["connection_lost", "paused"]
+    assert failed_rows == []
+    assert [(j["priority"], j["resume_link"]) for j in scheduler.paused_queue] == [(0, payload)]
+    assert [j["priority"] for j in scheduler.idle_queue] == [1]
+    assert scheduler.active_queue == []
+    assert part_path.exists()
+    assert "Connection error: downloads paused" in [line.split(" : ", 1)[1] for line in _log_lines()]
+
+
+@with_fake_workers
+def test_a_lost_connection_pauses_the_other_downloads_too(tmp_path):
+    # If one download lost the internet, the others are about to find out
+    scheduler = make_scheduler(concurrency=2, count=2)
+    scheduler.schedule()
+    first, second = scheduler.active_queue
+    events = _connection_events(scheduler)
+
+    _lose_connection(first, _part_file(tmp_path))
+    second["worker"].pause_worker.assert_called_once()
+    second["worker"].network_error.emit({"downlink": "y"})  # it found out
+
+    assert events == ["connection_lost", "paused"]  # one dialog, not two
+    assert sorted(j["priority"] for j in scheduler.paused_queue) == [0, 1]
+
+
+@with_fake_workers
+def test_resuming_after_a_lost_connection_picks_the_part_file_back_up(tmp_path):
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+    payload = _lose_connection(scheduler.active_queue[0], _part_file(tmp_path))
+
+    with _disk_with(free=10**9):
+        scheduler.resume_all()
+
+    [resumed] = scheduler.active_queue
+    assert resumed["worker"].resume_link == payload
+
+
+@with_fake_workers
+def test_a_lost_connection_during_a_pause_the_user_asked_for_stays_quiet(tmp_path):
+    # The usual way here: a stall, the user loses patience and clicks Pause,
+    # then the timeout fires. They already know something's up.
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+    job = scheduler.active_queue[0]
+    events = _connection_events(scheduler)
+    scheduler.pause_all()
+
+    _lose_connection(job, _part_file(tmp_path))
+
+    assert events == ["paused"]
+    assert [j["priority"] for j in scheduler.paused_queue] == [0]
+
+
+@with_fake_workers
+def test_a_lost_connection_during_a_stop_still_stops_and_cleans_up(tmp_path):
+    # Cancel during a stall: the worker only notices when the timeout fires.
+    # It's still a cancel, so the half file goes, not a surprise pause.
+    scheduler = make_scheduler(concurrency=1, count=1)
+    scheduler.schedule()
+    job = scheduler.active_queue[0]
+    part_path = _part_file(tmp_path)
+    stopped_rows = []
+    scheduler.game_stopped.connect(stopped_rows.append)
+    events = _connection_events(scheduler)
+    scheduler.stopped.connect(lambda: events.append("stopped"))
+    scheduler.stop_all()
+
+    _lose_connection(job, part_path)
+
+    assert stopped_rows == [0]
+    assert events == ["stopped"]
+    assert scheduler.paused_queue == []
+    assert not (tmp_path / "game").exists()
+    assert "Connection error while stopping" in [line.split(" : ", 1)[1] for line in _log_lines()]
 
 
 # --- resuming counts what's left, not the whole game again ---
