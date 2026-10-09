@@ -130,6 +130,7 @@ class MainWindow(QMainWindow):
         self._games_list_map = {}
         self.log = logging.getLogger(__name__)
         self.quit_pending = False
+        self.fetch_thread = None
 
         # Login Helper Process
         self.login_process = QProcess(self)
@@ -299,25 +300,40 @@ class MainWindow(QMainWindow):
         QApplication.instance().styleHints().colorSchemeChanged.connect(self._color_scheme_refresh)
         SettingsDialog.set_color_theme()
         self._color_scheme_refresh()
-        self.on_games_loaded(library_db.get_product_listing())
+        self._on_games_loaded(library_db.get_product_listing())
+
+    def _threads_busy(self) -> bool:
+        """Check whether a background thread would stop the app quitting.
+
+        Returns:
+            bool: True while the download queue is not idle or a library
+            refresh is running.
+        """
+        return not (self.download_window.current_state == DownloadState.IDLE and
+            (self.fetch_thread is None or not self.fetch_thread.isRunning()))
 
     def closeEvent(self, event: QCloseEvent):
         """Ask before quitting while downloads are running.
 
         Worker threads must exit before the app does, so a Yes stops the
-        downloads and keeps the window open. ``_on_quit_pending`` closes it
-        again once the queue is idle. Closing again while the stop is still
-        in progress does nothing. If the queue went idle on its own while
-        the question was open, a Yes quits right away. Closing while idle
-        or paused needs no question, since no worker is running then.
+        downloads, interrupts a library refresh and keeps the window open.
+        ``_on_quit_pending`` and ``_on_fetch_finished`` close it again, and
+        the close goes through once neither is busy. Closing again while
+        they are still stopping does nothing. If everything went idle on its
+        own while the question was open, a Yes quits right away.
+
+        A library refresh on its own is interrupted without asking, since
+        the cache is only replaced once a refresh completes. Closing while
+        idle or paused needs no question, since no worker is running then.
 
         Args:
             event (QCloseEvent): The close request. Ignoring it keeps the
                 window open.
         """
-        if self.quit_pending and self.download_window.current_state != DownloadState.IDLE:
+        if self.quit_pending and self._threads_busy():
             event.ignore()
             return
+        exit_confirmed = False
         if self.download_window.current_state == DownloadState.RUNNING:
             confirmation = QMessageBox(
                 QMessageBox.Icon.Warning,
@@ -328,12 +344,21 @@ class MainWindow(QMainWindow):
                 informativeText="Clicking yes will cancel all downloads and quit the program."
             )
             confirmation.setDefaultButton(QMessageBox.StandardButton.No)
-            ans = confirmation.exec()
-            if ans == QMessageBox.StandardButton.Yes:
-                if self.download_window.current_state == DownloadState.IDLE:
-                    return super().closeEvent(event)
-                self.quit_pending = True
-                self.download_window.stop_downloads()
+            if confirmation.exec() == QMessageBox.StandardButton.Yes:
+                exit_confirmed = True
+            else:
+                event.ignore()
+                return
+        elif self.fetch_thread is not None and self.fetch_thread.isRunning():
+            exit_confirmed = True
+
+        if exit_confirmed:
+            self.quit_pending = True
+            self.download_window.stop_downloads()
+            if self.fetch_thread is not None and self.fetch_thread.isRunning():
+                self.fetch_thread.requestInterruption()
+            if not self._threads_busy():
+                return super().closeEvent(event)
             event.ignore()
         else:
             super().closeEvent(event)
@@ -396,7 +421,7 @@ class MainWindow(QMainWindow):
         """Show the settings dialog, then reload the library list."""
         settings_dialog = SettingsDialog(self)
         settings_dialog.exec()
-        self.on_games_loaded(library_db.get_product_listing())
+        self._on_games_loaded(library_db.get_product_listing())
         settings_dialog.deleteLater()
 
     def open_downloads_folder(self):
@@ -457,9 +482,10 @@ class MainWindow(QMainWindow):
         """Refresh the library from GOG in a background thread."""
         self.fetch_thread = library_db.LibraryFetchThread(force=True)
         self.fetch_thread.auth_failure.connect(self.on_auth_failure)
-        self.fetch_thread.succeeded.connect(self.on_games_loaded)
+        self.fetch_thread.succeeded.connect(self._on_games_loaded)
         self.fetch_thread.failed.connect(self.fetch_failed_handler)
         self.fetch_thread.progress.connect(self.update_fetch_progress)
+        self.fetch_thread.finished.connect(self._on_fetch_finished)
         self.fetch_games_button.setDisabled(True)
         self.status_text.setText("Fetching games list...")
         self.fetch_thread.start()
@@ -576,7 +602,18 @@ class MainWindow(QMainWindow):
         self.status_progress.setVisible(False)
         self.fetch_games_button.setDisabled(False)
 
-    def on_games_loaded(self, result):
+    def _on_fetch_finished(self):
+        """Close the window if a quit was waiting for the library refresh.
+
+        ``finished`` is emitted just before the thread exits, so ``wait()``
+        makes sure it has, otherwise ``_threads_busy`` could still see it
+        running and refuse the close.
+        """
+        if self.quit_pending:
+            self.fetch_thread.wait()
+            QTimer.singleShot(0, self.close)
+
+    def _on_games_loaded(self, result):
         """Fill the library list, keeping the column sort the user picked.
 
         Games are top-level rows and each DLC is a child of its base game.

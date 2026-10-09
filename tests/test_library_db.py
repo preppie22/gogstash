@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gogstash import library_db, paths, settings
+from gogstash import gog_api, library_db, paths, settings
 from tests.fakes import gog_product
 
 FAKE_DOWNLOADS = {
@@ -608,7 +608,7 @@ def test_library_fetch_thread_bootstraps_when_db_empty(mock_fetch_owned_ids, moc
     mock_fetch_owned_ids.assert_called_once_with()
     # A list, not the set: fetch_downloadables slices its input into batches,
     # and sets have never once agreed to be sliced.
-    mock_fetch_downloadables.assert_called_once_with([111], thread.update_progress)
+    mock_fetch_downloadables.assert_called_once_with([111], thread.update_progress, thread.isInterruptionRequested)
     assert len(received) == 1
     # 2000, not 2500: bonus content is off by default, so the manual
     # doesn't count toward the size.
@@ -682,6 +682,28 @@ def test_library_fetch_thread_emits_auth_failure_instead_of_failed_on_permission
 
     assert auth_failures == [True]
     assert failed == []
+
+
+@patch("gogstash.library_db.update_cache")
+@patch("gogstash.library_db.fetch_downloadables")
+@patch("gogstash.library_db.fetch_owned_ids")
+def test_library_fetch_thread_interrupted_emits_nothing_and_leaves_the_cache_alone(
+    mock_fetch_owned_ids, mock_fetch_downloadables, mock_update_cache
+):
+    # The window is closing. No "failed" box, no half a library in the cache,
+    # just a quiet exit so the app can leave.
+    mock_fetch_owned_ids.return_value = {111}
+    mock_fetch_downloadables.side_effect = gog_api.FetchInterrupted
+    thread = library_db.LibraryFetchThread(force=True)
+    emitted = []
+    thread.succeeded.connect(lambda result: emitted.append("succeeded"))
+    thread.failed.connect(lambda msg: emitted.append(f"failed: {msg}"))
+    thread.auth_failure.connect(lambda: emitted.append("auth_failure"))
+
+    thread.run()
+
+    mock_update_cache.assert_not_called()
+    assert emitted == []
 
 
 def test_get_downloadables_hands_back_each_files_installer_version():

@@ -148,6 +148,33 @@ def test_get_downloadable_empty_input_makes_no_requests(mock_get_valid_token, mo
 
 @patch("gogstash.gog_api.requests.get")
 @patch("gogstash.gog_api.gog_auth.get_valid_token")
+def test_fetch_downloadables_stops_between_batches_when_asked(mock_get_valid_token, mock_get):
+    mock_get_valid_token.return_value = FAKE_TOKEN
+    mock_get.return_value = make_response([{"id": "batch"}])
+    should_stop = MagicMock(side_effect=[False, True])
+
+    # Raises rather than returning the one batch it got, so nobody caches
+    # a library that's 50 games long by accident.
+    with pytest.raises(gog_api.FetchInterrupted):
+        gog_api.fetch_downloadables(list(range(1, 121)), should_stop=should_stop)
+
+    assert mock_get.call_count == 1
+
+
+@patch("gogstash.gog_api.requests.get")
+@patch("gogstash.gog_api.gog_auth.get_valid_token")
+def test_fetch_downloadables_runs_to_the_end_when_never_asked_to_stop(mock_get_valid_token, mock_get):
+    mock_get_valid_token.return_value = FAKE_TOKEN
+    mock_get.return_value = make_response([{"id": "batch"}])
+
+    result = gog_api.fetch_downloadables(list(range(1, 121)), should_stop=lambda: False)
+
+    assert mock_get.call_count == 3
+    assert len(result) == 3
+
+
+@patch("gogstash.gog_api.requests.get")
+@patch("gogstash.gog_api.gog_auth.get_valid_token")
 def test_fetch_downloadables_raises_permission_error_when_not_logged_in(mock_get_valid_token, mock_get):
     mock_get_valid_token.return_value = None
 

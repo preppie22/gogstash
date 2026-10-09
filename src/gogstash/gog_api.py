@@ -8,6 +8,9 @@ from gogstash import gog_auth
 PRODUCT_URL = "https://api.gog.com/products"
 USER_GAMES = "https://embed.gog.com/user/data/games"
 
+class FetchInterrupted(Exception):
+    """Raised by ``fetch_downloadables`` when its caller asks it to stop."""
+
 def fetch_owned_ids() -> set:
     """Fetch the IDs of every product the user owns on GOG.
 
@@ -41,7 +44,7 @@ def fetch_owned_ids() -> set:
     owned_list = response_dict['owned']
     return set(owned_list)
 
-def fetch_downloadables(product_ids: list, progress_callback: Callable[[int], None] = None) -> list[dict]:
+def fetch_downloadables(product_ids: list, progress_callback: Callable[[int], None] = None, should_stop: Callable[[], bool] = None) -> list[dict]:
     """Fetch download metadata for a list of products.
 
     Products are requested in batches of 50. The token is required even
@@ -52,12 +55,17 @@ def fetch_downloadables(product_ids: list, progress_callback: Callable[[int], No
         product_ids (list): GOG product IDs.
         progress_callback (Callable[[int], None]): Optional callable that
             receives the percentage of products fetched after each batch.
+        should_stop (Callable[[], bool]): Optional callable checked before
+            each batch. Fetching stops once it returns True.
 
     Returns:
         list[dict]: Product details with the ``downloads`` field expanded.
 
     Raises:
         PermissionError: If the user is not logged in.
+        FetchInterrupted: If ``should_stop`` returned True. Raised instead
+            of returning the batches fetched so far, so a caller can't
+            mistake part of the library for all of it.
     """
     token = gog_auth.get_valid_token()
     if not token:
@@ -65,6 +73,8 @@ def fetch_downloadables(product_ids: list, progress_callback: Callable[[int], No
     product_info = []
     total = len(product_ids)
     while product_ids:
+        if should_stop and should_stop():
+            raise FetchInterrupted
         chunk, product_ids = product_ids[:50], product_ids[50:]
         response = requests.get(
             PRODUCT_URL,

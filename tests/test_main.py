@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from gogstash import gog_auth, library_db, manifest
 from gogstash.login_window import ExitCode
+from gogstash.download_window import DownloadState
 from gogstash.main import MainWindow
 from gogstash.settings import update_setting
 from tests.fakes import gog_product
@@ -394,10 +395,14 @@ def test_fetch_games_wires_up_thread_signals_and_starts_it(mock_thread_cls):
 
     mock_thread_cls.assert_called_once_with(force=True)
     mock_thread_instance = mock_thread_cls.return_value
-    mock_thread_instance.succeeded.connect.assert_called_once_with(window.on_games_loaded)
+    mock_thread_instance.succeeded.connect.assert_called_once_with(window._on_games_loaded)
     mock_thread_instance.failed.connect.assert_called_once_with(window.fetch_failed_handler)
     mock_thread_instance.auth_failure.connect.assert_called_once_with(window.on_auth_failure)
     mock_thread_instance.progress.connect.assert_called_once_with(window.update_fetch_progress)
+    # Regression: this was once written as finished(...) without .connect.
+    # A mock happily accepts being called like that; the real signal raised
+    # and took the Refresh button down with it.
+    mock_thread_instance.finished.connect.assert_called_once_with(window._on_fetch_finished)
     mock_thread_instance.start.assert_called_once()
 
 
@@ -421,7 +426,7 @@ def test_on_games_loaded_populates_the_list_with_games(tmp_path):
     update_setting("download_path", str(tmp_path))  # no manifest under here for "fake-game"
     window = MainWindow()
 
-    window.on_games_loaded([FAKE_GAME])
+    window._on_games_loaded([FAKE_GAME])
 
     assert _row_count(window) == 1
     assert _row(window, 0).text(0) == "Fake Game"
@@ -435,7 +440,7 @@ def test_on_games_loaded_marks_fetched_when_every_selected_file_is_in_the_manife
     _record_installer(tmp_path, FAKE_GAME)
     window = MainWindow()
 
-    window.on_games_loaded([FAKE_GAME])
+    window._on_games_loaded([FAKE_GAME])
 
     assert _is_fetched(window, 0) is True
     assert _row(window, 0).toolTip(2) == "Fetched"
@@ -450,7 +455,7 @@ def test_on_games_loaded_does_not_mark_fetched_for_bonus_content_alone(tmp_path)
     _record(tmp_path, FAKE_GAME, "bonus_content")
     window = MainWindow()
 
-    window.on_games_loaded([FAKE_GAME])
+    window._on_games_loaded([FAKE_GAME])
 
     assert _is_fetched(window, 0) is False
 
@@ -465,7 +470,7 @@ def test_on_games_loaded_marks_an_extras_only_game_fetched_without_its_installer
     _record(tmp_path, FAKE_GAME, "bonus_content")
     window = MainWindow()
 
-    window.on_games_loaded([FAKE_GAME])
+    window._on_games_loaded([FAKE_GAME])
 
     assert _is_fetched(window, 0) is True
 
@@ -479,7 +484,7 @@ def test_on_games_loaded_does_not_mark_a_half_finished_game_fetched(tmp_path):
     _record_installer(tmp_path, FAKE_GAME)
     window = MainWindow()
 
-    window.on_games_loaded([FAKE_GAME])
+    window._on_games_loaded([FAKE_GAME])
 
     assert _is_fetched(window, 0) is False
 
@@ -494,16 +499,16 @@ def test_on_games_loaded_does_not_call_a_game_with_nothing_to_download_fetched(t
     _record_installer(tmp_path, FAKE_GAME)
     window = MainWindow()
 
-    window.on_games_loaded([FAKE_GAME])
+    window._on_games_loaded([FAKE_GAME])
 
     assert _is_fetched(window, 0) is False
 
 
 def test_on_games_loaded_replaces_previous_rows_not_appends():
     window = MainWindow()
-    window.on_games_loaded([FAKE_GAME])
+    window._on_games_loaded([FAKE_GAME])
 
-    window.on_games_loaded([FAKE_GAME_2])
+    window._on_games_loaded([FAKE_GAME_2])
 
     assert _row_count(window) == 1
     assert _row(window, 0).text(0) == "Second Fake Game"
@@ -514,7 +519,7 @@ def test_on_games_loaded_with_an_empty_library_selects_nothing_and_survives():
     # to take that in stride. A fresh install's first launch depends on it.
     window = MainWindow()
 
-    window.on_games_loaded([])
+    window._on_games_loaded([])
 
     assert _row_count(window) == 0
     assert window.games_list.currentItem() is None
@@ -539,7 +544,7 @@ def test_library_starts_out_sorted_by_title_a_to_z():
     # header's sort column had wandered off to section 3, which doesn't exist.
     window = MainWindow()
 
-    window.on_games_loaded(SIZED_GAMES)
+    window._on_games_loaded(SIZED_GAMES)
 
     assert [title for title, _ in _rows(window)] == ["Alpha", "Beta", "Gamma"]
     header = window.games_list.header()
@@ -555,7 +560,7 @@ def test_sorting_by_size_counts_bytes_instead_of_reading_the_label(order, expect
     # would sink to the bottom of the "biggest first" list, which is a bold
     # take on "biggest".
     window = MainWindow()
-    window.on_games_loaded(SIZED_GAMES)
+    window._on_games_loaded(SIZED_GAMES)
 
     window.games_list.sortByColumn(1, order)
 
@@ -569,10 +574,10 @@ def test_reloading_keeps_the_size_sort_and_every_game_keeps_its_own_size():
     # or none at all. A tree row carries all its columns in one object, so it
     # can't lose them in transit anymore, but trust is earned.
     window = MainWindow()
-    window.on_games_loaded(SIZED_GAMES)
+    window._on_games_loaded(SIZED_GAMES)
     window.games_list.sortByColumn(1, Qt.SortOrder.DescendingOrder)
 
-    window.on_games_loaded(SIZED_GAMES)
+    window._on_games_loaded(SIZED_GAMES)
 
     assert _rows(window) == [(title, SIZE_TEXT[title]) for title in ["Beta", "Gamma", "Alpha"]]
     assert all(_is_fetched(window, row) is not None for row in range(3))
@@ -580,7 +585,7 @@ def test_reloading_keeps_the_size_sort_and_every_game_keeps_its_own_size():
 
 def test_doubleclick_after_sorting_queues_the_game_on_that_row_now():
     window = MainWindow()
-    window.on_games_loaded(SIZED_GAMES)
+    window._on_games_loaded(SIZED_GAMES)
     window.games_list.sortByColumn(1, Qt.SortOrder.DescendingOrder)
     window.download_window.add_to_queue = MagicMock(return_value=0)
 
@@ -597,7 +602,7 @@ def test_onclick_queue_download_adds_selected_game_title_once():
     # queued the same game 3 times. The tree hands back one per row, and this
     # makes sure nobody brings the cell-counting habit back.
     window = MainWindow()
-    window.on_games_loaded([FAKE_GAME])  # selects row 0
+    window._on_games_loaded([FAKE_GAME])  # selects row 0
     captured_calls = []
     # onclick_queue_download reuses the same dict across games, so if we just
     # hang onto the reference we'll catch it after the next game moved in.
@@ -617,7 +622,7 @@ def test_onclick_queue_download_adds_selected_game_title_once():
 
 def test_onclick_queue_download_does_nothing_without_a_selection():
     window = MainWindow()
-    window.on_games_loaded([FAKE_GAME])
+    window._on_games_loaded([FAKE_GAME])
     window.games_list.clearSelection()
     window.download_window.add_to_queue = MagicMock()
 
@@ -666,7 +671,7 @@ def test_theme_change_mid_construction_doesnt_trip_over_half_built_widgets(monke
 
 def test_doubleclick_while_queue_is_busy_tells_the_user_to_hold_their_horses():
     window = MainWindow()
-    window.on_games_loaded([FAKE_GAME])
+    window._on_games_loaded([FAKE_GAME])
     window.error_message.showMessage = MagicMock()
     window.download_window.add_to_queue = MagicMock(return_value=-1)
 
@@ -680,7 +685,7 @@ def test_doubleclick_while_queue_is_busy_tells_the_user_to_hold_their_horses():
 
 def test_doubleclick_that_queues_fine_keeps_its_damn_mouth_shut():
     window = MainWindow()
-    window.on_games_loaded([FAKE_GAME])
+    window._on_games_loaded([FAKE_GAME])
     window.error_message.showMessage = MagicMock()
     window.download_window.add_to_queue = MagicMock(return_value=0)
 
@@ -693,7 +698,7 @@ def test_toolbar_queue_while_busy_bitches_once_and_quits_trying():
     # Two games selected, queue's in the middle of a pause. One error popup,
     # not one per game, and no pointless retry on the second one.
     window = MainWindow()
-    window.on_games_loaded([FAKE_GAME, FAKE_GAME_2])
+    window._on_games_loaded([FAKE_GAME, FAKE_GAME_2])
     window.games_list.selectAll()
     # Without this, a single-selection list turns selectAll() into a no-op,
     # one game gets tried, and the test passes for entirely the wrong reason.
@@ -787,7 +792,7 @@ def test_finished_download_flips_fetched_to_yes_without_a_reload(tmp_path):
     update_setting("download_path", str(tmp_path))
     _stock_the_library([FAKE_GAME])
     window = MainWindow()
-    window.on_games_loaded([FAKE_GAME])
+    window._on_games_loaded([FAKE_GAME])
     _record_installer(tmp_path, FAKE_GAME)
 
     _finish_download(window, FAKE_GAME)
@@ -803,7 +808,7 @@ def test_finished_download_still_asks_the_manifest_before_saying_yes(tmp_path):
     update_setting("download_path", str(tmp_path))
     _stock_the_library([FAKE_GAME])
     window = MainWindow()
-    window.on_games_loaded([FAKE_GAME])
+    window._on_games_loaded([FAKE_GAME])
 
     _finish_download(window, FAKE_GAME)
 
@@ -818,7 +823,7 @@ def test_finished_download_finds_its_game_wherever_the_sort_put_it(tmp_path):
     update_setting("download_path", str(tmp_path))
     _stock_the_library(SIZED_GAMES)
     window = MainWindow()
-    window.on_games_loaded(SIZED_GAMES)
+    window._on_games_loaded(SIZED_GAMES)
     window.games_list.sortByColumn(1, Qt.SortOrder.DescendingOrder)
     gamma = SIZED_GAMES[0]
     _record_installer(tmp_path, gamma)
@@ -832,7 +837,7 @@ def test_finished_download_for_a_game_the_library_never_heard_of_changes_nothing
     update_setting("download_path", str(tmp_path))
     _stock_the_library([FAKE_GAME])
     window = MainWindow()
-    window.on_games_loaded([FAKE_GAME])
+    window._on_games_loaded([FAKE_GAME])
 
     window._on_game_succeeded(999)  # should shrug, not raise
 
@@ -846,7 +851,7 @@ def test_fetched_still_updates_after_the_queue_swaps_in_a_fresh_scheduler(tmp_pa
     update_setting("download_path", str(tmp_path))
     _stock_the_library([FAKE_GAME])
     window = MainWindow()
-    window.on_games_loaded([FAKE_GAME])
+    window._on_games_loaded([FAKE_GAME])
     window.download_window._reset_scheduler()
     _record_installer(tmp_path, FAKE_GAME)
 
@@ -862,7 +867,7 @@ def test_sorting_by_fetched_groups_the_downloaded_games_together(tmp_path):
     _stock_the_library(SIZED_GAMES)
     _record_installer(tmp_path, SIZED_GAMES[0])
     window = MainWindow()
-    window.on_games_loaded(SIZED_GAMES)
+    window._on_games_loaded(SIZED_GAMES)
 
     window.games_list.sortByColumn(2, Qt.SortOrder.DescendingOrder)
 
@@ -891,7 +896,7 @@ def test_fetched_tick_sits_in_the_middle_of_its_cell_and_nowhere_else(tmp_path):
     _stock_the_library([FAKE_GAME, FAKE_GAME_2])
     _record_installer(tmp_path, FAKE_GAME)
     window = MainWindow()
-    window.on_games_loaded([FAKE_GAME, FAKE_GAME_2])
+    window._on_games_loaded([FAKE_GAME, FAKE_GAME_2])
     window.games_list.clearSelection()
     fetched_row = 0 if _is_fetched(window, 0) else 1
 
@@ -919,7 +924,7 @@ def _children(item):
 def test_dlcs_sit_under_their_base_game_not_next_to_it():
     window = MainWindow()
 
-    window.on_games_loaded([CULTIST, DANCER, PRIEST, FAKE_GAME])
+    window._on_games_loaded([CULTIST, DANCER, PRIEST, FAKE_GAME])
 
     assert [_row(window, row).text(0) for row in range(_row_count(window))] == ["Cultist Simulator", "Fake Game"]
     assert _children(_row(window, 0)) == ["Cultist Simulator: The Dancer", "Cultist Simulator: The Priest"]
@@ -931,7 +936,7 @@ def test_a_dlc_listed_before_its_base_game_still_finds_its_way_home():
     # first can't be attached to a parent row that doesn't exist yet.
     window = MainWindow()
 
-    window.on_games_loaded([PRIEST, DANCER, CULTIST])
+    window._on_games_loaded([PRIEST, DANCER, CULTIST])
 
     assert _row_count(window) == 1
     assert _children(_row(window, 0)) == ["Cultist Simulator: The Dancer", "Cultist Simulator: The Priest"]
@@ -942,14 +947,14 @@ def test_a_dlc_whose_base_game_is_missing_gets_its_own_row_instead_of_vanishing(
     # it into the tree, so the DLC was adopted by a ghost and never seen again.
     window = MainWindow()
 
-    window.on_games_loaded([DANCER, FAKE_GAME])
+    window._on_games_loaded([DANCER, FAKE_GAME])
 
     assert sorted(_row(window, row).text(0) for row in range(_row_count(window))) == ["Cultist Simulator: The Dancer", "Fake Game"]
 
 
 def test_sorting_by_size_shuffles_dlcs_within_their_game_and_leaves_them_there():
     window = MainWindow()
-    window.on_games_loaded([CULTIST, DANCER, PRIEST, FAKE_GAME])
+    window._on_games_loaded([CULTIST, DANCER, PRIEST, FAKE_GAME])
 
     window.games_list.sortByColumn(1, Qt.SortOrder.AscendingOrder)
 
@@ -959,7 +964,7 @@ def test_sorting_by_size_shuffles_dlcs_within_their_game_and_leaves_them_there()
 
 def test_doubleclick_on_a_dlc_queues_the_dlc_not_its_base_game():
     window = MainWindow()
-    window.on_games_loaded([CULTIST, DANCER])
+    window._on_games_loaded([CULTIST, DANCER])
     window.download_window.add_to_queue = MagicMock(return_value=0)
 
     window.doubleclick_game_list(_row(window, 0).child(0), 0)
@@ -973,7 +978,7 @@ def test_doubleclick_on_a_game_with_dlcs_queues_instead_of_folding_it_up():
     # Double-click means "download this" here. Qt's habit of also toggling
     # the row would turn every queued game into a surprise accordion.
     window = MainWindow()
-    window.on_games_loaded([CULTIST, DANCER])
+    window._on_games_loaded([CULTIST, DANCER])
     window.show()
     QApplication.processEvents()
     tree = window.games_list
@@ -995,7 +1000,7 @@ def test_finished_dlc_download_ticks_the_dlc_row_tucked_under_its_game(tmp_path)
     update_setting("download_path", str(tmp_path))
     _stock_the_library([CULTIST, DANCER])
     window = MainWindow()
-    window.on_games_loaded(library_db.get_product_listing())
+    window._on_games_loaded(library_db.get_product_listing())
     _record_installer(tmp_path, DANCER, folder=CULTIST["slug"])
 
     _finish_download(window, DANCER)
@@ -1011,8 +1016,8 @@ def test_finished_download_for_a_game_dropped_by_the_last_refresh_changes_nothin
     # pointing at them. A refunded game finishing its download then poked a
     # dead row and PySide raised "Internal C++ object already deleted".
     window = MainWindow()
-    window.on_games_loaded([FAKE_GAME, FAKE_GAME_2])
-    window.on_games_loaded([FAKE_GAME_2])
+    window._on_games_loaded([FAKE_GAME, FAKE_GAME_2])
+    window._on_games_loaded([FAKE_GAME_2])
 
     window._on_game_succeeded(FAKE_GAME["product_id"])  # should shrug, not raise
 
@@ -1030,7 +1035,7 @@ def test_ctrl_a_then_queue_selection_queues_the_whole_library_dlcs_included():
     # of the app, quietly left the building. Ctrl+A also only grabs rows you
     # can see, so the DLCs have to start out unfolded to come along.
     window = MainWindow()
-    window.on_games_loaded([CULTIST, DANCER, PRIEST, FAKE_GAME])
+    window._on_games_loaded([CULTIST, DANCER, PRIEST, FAKE_GAME])
     window.download_window.add_to_queue = MagicMock(return_value=0)
     window.show()
     QApplication.processEvents()
@@ -1046,7 +1051,7 @@ def test_ctrl_a_then_queue_selection_queues_the_whole_library_dlcs_included():
 
 def test_ctrl_click_adds_a_second_game_instead_of_swapping_the_first_one_out():
     window = MainWindow()
-    window.on_games_loaded(SIZED_GAMES)  # Alpha, Beta, Gamma, with Alpha selected
+    window._on_games_loaded(SIZED_GAMES)  # Alpha, Beta, Gamma, with Alpha selected
     window.download_window.add_to_queue = MagicMock(return_value=0)
     window.show()
     QApplication.processEvents()
@@ -1068,7 +1073,7 @@ def test_a_new_installer_version_takes_the_check_mark_away_even_at_the_same_size
     _stock_the_library([FAKE_GAME], version="1.1")
     window = MainWindow()
 
-    window.on_games_loaded([FAKE_GAME])
+    window._on_games_loaded([FAKE_GAME])
 
     assert _is_fetched(window, 0) is False
 
@@ -1194,3 +1199,174 @@ def test_open_downloads_folder_speaks_up_when_nothing_can_open_folders(mock_open
     _parent, title, text = mock_critical.call_args.args
     assert title == "No Folder Handler"
     assert "open folders" in text
+
+
+# --- Quitting while threads run (#30) ---
+
+@pytest.fixture
+def busy_window(monkeypatch):
+    # A MainWindow whose download queue claims to be RUNNING, with
+    # stop_downloads swapped for a mock so nothing has to actually stop.
+    window = MainWindow()
+    monkeypatch.setattr(window.download_window, "stop_downloads", MagicMock())
+    window.download_window.current_state = DownloadState.RUNNING
+    yield window
+    # Back to IDLE, or the fixture's own teardown close would ask us to quit
+    window.download_window.current_state = DownloadState.IDLE
+    window.quit_pending = False
+
+
+def _refreshing_thread():
+    thread = MagicMock()
+    thread.isRunning.return_value = True
+    return thread
+
+
+def test_close_while_idle_just_closes():
+    window = MainWindow()
+
+    with patch("gogstash.main.QMessageBox.exec") as mock_exec:
+        assert window.close() is True
+
+    mock_exec.assert_not_called()
+    assert window.quit_pending is False
+
+
+def test_close_mid_download_answering_no_keeps_everything_running(busy_window):
+    with patch("gogstash.main.QMessageBox.exec", return_value=QMessageBox.StandardButton.No):
+        assert busy_window.close() is False
+
+    busy_window.download_window.stop_downloads.assert_not_called()
+    assert busy_window.quit_pending is False
+
+
+def test_close_mid_download_answering_yes_stops_and_keeps_the_window_open(busy_window):
+    # Accepting here would destroy the workers mid-chunk, which is how #30
+    # started. The window waits for the queue to go idle instead.
+    with patch("gogstash.main.QMessageBox.exec", return_value=QMessageBox.StandardButton.Yes):
+        assert busy_window.close() is False
+
+    busy_window.download_window.stop_downloads.assert_called_once()
+    assert busy_window.quit_pending is True
+
+
+def test_close_mid_download_yes_also_interrupts_a_running_refresh(busy_window):
+    busy_window.fetch_thread = _refreshing_thread()
+
+    with patch("gogstash.main.QMessageBox.exec", return_value=QMessageBox.StandardButton.Yes):
+        assert busy_window.close() is False
+
+    busy_window.fetch_thread.requestInterruption.assert_called_once()
+
+
+def test_close_mid_download_no_leaves_a_running_refresh_alone(busy_window):
+    # Regression: the refresh was once interrupted before the question was
+    # even asked, so "No, keep going" still cost you your refresh.
+    busy_window.fetch_thread = _refreshing_thread()
+
+    with patch("gogstash.main.QMessageBox.exec", return_value=QMessageBox.StandardButton.No):
+        busy_window.close()
+
+    busy_window.fetch_thread.requestInterruption.assert_not_called()
+
+
+def test_close_mid_download_without_ever_refreshing_does_not_trip_over_no_fetch_thread(busy_window):
+    # Regression: fetch_thread is None until the first Refresh, and calling
+    # requestInterruption on None made closeEvent raise. Qt then went ahead
+    # and closed anyway, workers and all.
+    assert busy_window.fetch_thread is None
+
+    with patch("gogstash.main.QMessageBox.exec", return_value=QMessageBox.StandardButton.Yes):
+        assert busy_window.close() is False
+
+    busy_window.download_window.stop_downloads.assert_called_once()
+
+
+def test_yes_after_the_queue_went_idle_during_the_question_quits_right_away(busy_window):
+    # The downloads finished while the user was still reading the box. No
+    # busy_changed(False) is coming after this, so waiting would mean
+    # waiting forever.
+    def finish_while_asking():
+        busy_window.download_window.current_state = DownloadState.IDLE
+        return QMessageBox.StandardButton.Yes
+
+    with patch("gogstash.main.QMessageBox.exec", side_effect=finish_while_asking):
+        assert busy_window.close() is True
+
+
+def test_close_again_while_still_stopping_does_not_ask_twice(busy_window):
+    busy_window.quit_pending = True
+
+    with patch("gogstash.main.QMessageBox.exec") as mock_exec:
+        assert busy_window.close() is False
+
+    mock_exec.assert_not_called()
+    busy_window.download_window.stop_downloads.assert_not_called()
+
+
+def test_close_during_a_refresh_alone_interrupts_it_without_asking():
+    # A half-done refresh never touches the cache, so there's nothing to
+    # lose and nothing worth a dialog.
+    window = MainWindow()
+    window.fetch_thread = _refreshing_thread()
+
+    with patch("gogstash.main.QMessageBox.exec") as mock_exec:
+        assert window.close() is False
+
+    mock_exec.assert_not_called()
+    window.fetch_thread.requestInterruption.assert_called_once()
+    assert window.quit_pending is True
+    window.fetch_thread.isRunning.return_value = False
+    window.quit_pending = False
+
+
+def test_threads_busy_covers_both_the_queue_and_the_refresh():
+    # Regression: this once returned the "everything is idle" condition,
+    # which made every quit a coin toss with the wrong coin.
+    window = MainWindow()
+    assert window._threads_busy() is False
+
+    window.fetch_thread = _refreshing_thread()
+    assert window._threads_busy() is True
+
+    window.fetch_thread.isRunning.return_value = False
+    window.download_window.current_state = DownloadState.PAUSED
+    assert window._threads_busy() is True
+
+    window.download_window.current_state = DownloadState.IDLE
+    assert window._threads_busy() is False
+
+
+@patch("gogstash.main.QTimer")
+def test_queue_going_idle_closes_the_window_only_if_a_quit_is_pending(mock_timer):
+    window = MainWindow()
+
+    # Downloads finishing on their own is not a request to quit
+    window._on_quit_pending(False)
+    mock_timer.singleShot.assert_not_called()
+
+    window.quit_pending = True
+    window._on_quit_pending(True)
+    mock_timer.singleShot.assert_not_called()
+
+    window._on_quit_pending(False)
+    mock_timer.singleShot.assert_called_once_with(0, window.close)
+    window.quit_pending = False
+
+
+@patch("gogstash.main.QTimer")
+def test_refresh_finishing_waits_for_the_thread_then_closes_if_a_quit_is_pending(mock_timer):
+    window = MainWindow()
+    window.fetch_thread = MagicMock()
+
+    window._on_fetch_finished()
+    mock_timer.singleShot.assert_not_called()
+    window.fetch_thread.wait.assert_not_called()
+
+    window.quit_pending = True
+    window._on_fetch_finished()
+    # finished fires just before the thread really exits; without the wait,
+    # _threads_busy could still see it running and refuse the close
+    window.fetch_thread.wait.assert_called_once()
+    mock_timer.singleShot.assert_called_once_with(0, window.close)
+    window.quit_pending = False

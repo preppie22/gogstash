@@ -10,7 +10,7 @@ import sqlite3
 from typing import NamedTuple
 
 from gogstash import paths
-from gogstash.gog_api import fetch_owned_ids, fetch_downloadables
+from gogstash.gog_api import fetch_owned_ids, fetch_downloadables, FetchInterrupted
 from gogstash import settings
 
 from PySide6.QtCore import QThread, Signal
@@ -111,6 +111,9 @@ class LibraryFetchThread(QThread):
     def run(self, product_id: tuple[int] = ()):
         """Load the product listing and emit the result.
 
+        ``requestInterruption()`` stops a fetch from GOG after the current
+        batch. Nothing is emitted then and the cache is left as it was.
+
         Args:
             product_id (tuple[int]): Product IDs to limit the cached listing
                 to. Empty loads all products.
@@ -119,11 +122,13 @@ class LibraryFetchThread(QThread):
             product_listing = get_product_listing(product_id)
             if not (product_listing or product_id) or self.force:
                 owned_products = fetch_owned_ids()
-                update_cache(fetch_downloadables(list(owned_products), self.update_progress))
+                update_cache(fetch_downloadables(list(owned_products), self.update_progress, self.isInterruptionRequested))
                 product_listing = get_product_listing()
             self.succeeded.emit(product_listing)
         except PermissionError:
             self.auth_failure.emit()
+        except FetchInterrupted:
+            return
         except Exception as e:
             self.failed.emit(str(e))
 
