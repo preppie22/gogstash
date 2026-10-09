@@ -1075,6 +1075,30 @@ def test_a_connection_dropping_mid_file_reports_network_error_and_keeps_the_part
 
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
+def test_a_connection_reset_mid_file_is_a_network_error_too(mock_resolve, mock_get, tmp_path):
+    # Found live against GOG: a reset mid-body is ChunkedEncodingError, a
+    # different branch of the family tree than ConnectionError. Both games
+    # went red instead of pausing, .part files and all.
+    game_dir = single_installer_setup(mock_resolve, tmp_path)
+    def reset_after_a_bit(*args, **kwargs):
+        yield b"a" * 400
+        raise requests.exceptions.ChunkedEncodingError("Connection broken: ConnectionResetError(104, 'Connection reset by peer')")
+    response = make_streamed_response([], headers={"Content-Length": "1000"})
+    response.iter_content.side_effect = reset_after_a_bit
+    mock_get.side_effect = [make_checksum_response("irrelevant"), response]
+    thread = make_worker()
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert events.network_error == [
+        {"partpath": game_dir / "setup_fake_game.exe.part", "downlink": "https://example.com/file1"}
+    ]
+    assert events.fetched == []
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
 def test_a_server_that_never_answers_the_download_request_is_a_network_error(mock_resolve, mock_get, tmp_path):
     # Silence before the headers is a real ReadTimeout, the other half of
     # the tuple the worker has to catch

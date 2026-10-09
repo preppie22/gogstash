@@ -8,6 +8,8 @@ suffix until the first stable release), not SemVer.
 
 ## [Unreleased]
 
+## [2026.10.9-beta] - 2026-10-09
+
 ### Changed
 - "Log in through GogStash" now opens GOG's login page in your system's own web view (Edge WebView2 on Windows, WebKitGTK on Linux) instead of a copy of Chromium built into GogStash, and shows a loading spinner until the page is ready. On Linux this needs WebKitGTK 4.1, which Ubuntu and Xubuntu install by default; on other distros you may have to install it yourself. If it's missing or doesn't start, GogStash opens "Log in with your browser" instead ([#21](https://github.com/preppie22/gogstash/issues/21))
 - Much smaller downloads now that GogStash no longer carries its own copy of Chromium: the AppImage drops from about 180 MB to about 45 MB, and the Windows zip from about 180 MB to under 30 MB (about 70 MB once extracted, down from over 450 MB) ([#21](https://github.com/preppie22/gogstash/issues/21))

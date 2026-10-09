@@ -874,7 +874,7 @@ class DownloadWorkerThread(QThread):
                 if self._pause_flag:
                     self.paused.emit({})
                     return
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.ChunkedEncodingError):
                 self.network_error.emit(self.resume_info if self.resume_link else {
                     'partpath': part_path,
                     'downlink': file['downlink']
