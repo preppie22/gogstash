@@ -714,11 +714,16 @@ class DownloadWorkerThread(QThread):
         Running out of disk space ends the run with ``disk_full`` instead,
         keeping the ``.part`` file. So does a dropped or timed out
         connection, with ``network_error``. A server that answers with an
-        error, such as a 404, still only fails that file.
+        error, such as a 404, still only fails that file. A resumed worker
+        whose files were all finished before the pause succeeds right
+        away, while one given no files at all fails.
         """
         try:
-            if not self.file_queue:
+            if not self.file_queue and not self.fetched_files:
                 self.failed.emit("No files to download")
+                return
+            if not self.file_queue and self.fetched_files:
+                self.succeeded.emit()
                 return
             slug = library_db.get_product_listing((self.product_id,))[0]['slug']
             download_path: Path = Path(settings.read_setting('download_path')) / slug

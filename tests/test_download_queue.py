@@ -1240,6 +1240,39 @@ def test_a_fresh_worker_keeps_its_whole_queue_and_starts_from_zero():
     assert thread.total_size == 300
 
 
+def test_resuming_a_game_that_finished_before_the_pause_succeeds_once():
+    # Regression: a pause landing on the last chunk of the last file left
+    # every file in fetched_files, so the resumed worker had nothing left
+    # to do and reported "No files to download" as a failure. A fully
+    # downloaded game, painted red for being too quick.
+    file_queue = [
+        {"downlink": "https://example.com/a", "size": 100},
+        {"downlink": "https://example.com/b", "size": 200},
+    ]
+    resume_info = {"fetched_files": [("https://example.com/a", 100), ("https://example.com/b", 200)]}
+    thread = download_queue.DownloadWorkerThread(111, file_queue, resume_info)
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert events.failed == []
+    assert events.succeeded == 1  # once is a success, twice is a scheduler double-booking the slot
+    assert events.fetched == []  # nobody bothers GOG about files already on disk
+    assert (thread.fetched_size, thread.total_size) == (300, 300)
+
+
+def test_a_worker_handed_nothing_at_all_still_fails():
+    # The other half of the fix: an empty queue with nothing fetched is
+    # still a bug upstream, not a win.
+    thread = download_queue.DownloadWorkerThread(111, [], None)
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert events.failed == ["No files to download"]
+    assert events.succeeded == 0
+
+
 @patch("gogstash.download_queue.requests.get")
 @patch("gogstash.gog_api.resolve_downlink")
 def test_resuming_never_asks_gog_about_the_files_it_already_finished(mock_resolve, mock_get, tmp_path):

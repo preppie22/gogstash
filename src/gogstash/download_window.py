@@ -275,13 +275,14 @@ class DownloadWindow(QDockWidget):
     @current_state.setter
     def current_state(self, value: DownloadState):
         self.__current_state = value
-        if value != DownloadState.IDLE:
+        if value == DownloadState.RUNNING:
             self.__dl_speed_timer.start(1000)
         else:
             self.__dl_speed_timer.stop()
             self.__speed_buffer.clear()
             self.__time_now = 0
             self.__bytes_dled = 0
+            self.download_speed.setText(f"{humanize.naturalsize(0)}/s")
         self.busy_changed.emit(value != DownloadState.IDLE)
 
     def _color_scheme_refresh(self) -> None:
@@ -756,15 +757,15 @@ class DownloadWindow(QDockWidget):
         ).exec()
 
     def _measure_speed(self):
-        """Update the speed and ETA label, once a second while not idle.
+        """Update the speed and ETA label, once a second while running.
 
         Each tick stores the bytes the scheduler received since the last
         tick and the time that took, keeping the last 30. The speed shown
         is the total bytes over the total time of the last 10 ticks. The
         ETA divides what is left by the same average over all 30, so the
-        gaps between files don't make it jump. The first tick after going
-        idle only sets the starting point. With no bytes in the last 10
-        ticks, the speed shows 0 and the ETA is hidden.
+        gaps between files don't make it jump. The first tick after
+        starting or resuming only sets the starting point. With no bytes
+        in the last 10 ticks, the speed shows 0 and the ETA is hidden.
         """
         if self.__time_now == 0:
             self.__time_now = time.monotonic()

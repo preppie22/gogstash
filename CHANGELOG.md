@@ -8,6 +8,8 @@ suffix until the first stable release), not SemVer.
 
 ## [Unreleased]
 
+## [2026.10.11-beta] - 2026-10-11
+
 ### Added
 - The download queue shows the download speed and the time left for the whole queue ([#17](https://github.com/preppie22/gogstash/issues/17))
 

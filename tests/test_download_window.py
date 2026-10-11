@@ -1692,3 +1692,55 @@ def test_going_idle_forgets_the_last_runs_speed():
 
     # Leftover 50 MB/s ticks would pull this way up
     assert window.download_speed.text() == "10.0 MB/s (ETA: a minute)"
+
+
+def _running_at_50_mb(window):
+    window.eta_size = 600_000_000
+    window.current_state = DownloadState.RUNNING
+    ticker = _Ticker(window)
+    ticker.tick()
+    for _ in range(10):
+        ticker.tick(mb=50)
+    return ticker
+
+
+def test_finishing_clears_the_speed_right_away_instead_of_five_seconds_later():
+    # Regression: "Downloads complete" sat next to "50.0 MB/s (ETA: a
+    # moment)" until _reset_status's 5 s timer got round to it. Done, and
+    # yet still going. Schrödinger's download.
+    window = DownloadWindow()
+    _running_at_50_mb(window)
+
+    window.current_state = DownloadState.IDLE
+
+    assert window.download_speed.text() == "0 Bytes/s"
+
+
+@pytest.mark.parametrize("state", [DownloadState.PAUSED, DownloadState.IDLE])
+def test_only_a_running_queue_keeps_the_speed_timer_ticking(state):
+    window = DownloadWindow()
+    window.current_state = DownloadState.RUNNING
+    assert window._DownloadWindow__dl_speed_timer.isActive()
+
+    window.current_state = state
+
+    assert not window._DownloadWindow__dl_speed_timer.isActive()
+
+
+def test_pausing_shows_zero_at_once_and_resuming_starts_a_fresh_average():
+    # Regression: pausing left the timer running, so the speed coasted
+    # down over 10 s while the ETA climbed for a download that wasn't
+    # happening. On resume the 30 s average still held the paused
+    # seconds as zeros and the ETA dragged its feet.
+    window = DownloadWindow()
+    ticker = _running_at_50_mb(window)
+
+    window.current_state = DownloadState.PAUSED
+    assert window.download_speed.text() == "0 Bytes/s"
+
+    window.current_state = DownloadState.RUNNING
+    for _ in range(3):  # one tick to set the baseline, two to measure
+        ticker.tick(mb=10)
+
+    # Leftover 50 MB/s ticks would pull this way up
+    assert window.download_speed.text() == "10.0 MB/s (ETA: a minute)"
