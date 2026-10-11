@@ -5,6 +5,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -3584,3 +3585,104 @@ def test_scheduler_records_the_version_a_worker_reports(tmp_path):
     worker.fetched.emit(_fetched_entry(game_dir, "setup.exe", version="1.7.7.4"))
 
     assert manifest.stat_file(game_dir, game_dir / "setup.exe")["version"] == "1.7.7.4"
+
+
+# --- what the scheduler tells gogstash.log ---
+
+WITCHER_3 = 1207658695  # an id that can't turn up in a message by accident, unlike 0
+
+
+def _running_witcher():
+    scheduler = download_queue.DownloadScheduler(1)
+    scheduler.enqueue({"priority": 0, "product_id": WITCHER_3})
+    scheduler.schedule()
+    return scheduler, scheduler.active_queue[0]
+
+
+def _app_log(caplog, level=None):
+    return [
+        (r.levelname, r.getMessage()) for r in caplog.records
+        if r.name == "gogstash.download_queue" and (level is None or r.levelname == level)
+    ]
+
+
+@with_fake_workers
+def test_a_game_that_downloads_fine_leaves_a_trail_by_product_id(caplog):
+    # downloads.log knows file names, gogstash.log knows which game. Between
+    # the two, "the third game hung" becomes something you can look up.
+    with caplog.at_level("INFO", logger="gogstash.download_queue"):
+        scheduler, job = _running_witcher()
+        job["worker"].succeeded.emit()
+
+    messages = [m for _, m in _app_log(caplog)]
+    assert len(messages) == 3  # queued, dispatched, succeeded
+    assert all(str(WITCHER_3) in m for m in messages)
+    assert _app_log(caplog, "WARNING") == []
+
+
+@with_fake_workers
+def test_a_failed_game_logs_its_id_and_why(caplog):
+    scheduler, job = _running_witcher()
+
+    with caplog.at_level("INFO", logger="gogstash.download_queue"):
+        job["worker"].failed.emit("Downloads completed with failures")
+
+    [(level, message)] = _app_log(caplog, "WARNING")
+    assert str(WITCHER_3) in message
+    assert "Downloads completed with failures" in message
+
+
+@with_fake_workers
+def test_a_queue_that_wont_fit_logs_how_much_it_wanted_and_had(caplog):
+    scheduler = make_scheduler(concurrency=2, count=2)
+
+    with caplog.at_level("INFO", logger="gogstash.download_queue"), _disk_with(free=1):
+        scheduler.schedule()
+
+    [(_, message)] = _app_log(caplog, "WARNING")
+    assert re.findall(r"\d+", message) == ["2", "1"]  # two 1-byte games, one byte of disk
+
+
+@with_fake_workers
+def test_a_download_folder_that_cant_be_made_says_why_in_the_log(tmp_path, caplog):
+    # The dialog can only say "0 bytes free", which is technically true and
+    # completely unhelpful. The log gets the actual reason.
+    locked = tmp_path / "locked"
+    settings.update_setting("download_path", str(locked))
+    scheduler = make_scheduler(concurrency=1, count=1)
+
+    with caplog.at_level("INFO", logger="gogstash.download_queue"):
+        with patch("pathlib.Path.mkdir", side_effect=PermissionError(13, "Permission denied")):
+            scheduler.schedule()
+
+    reasons = [m for _, m in _app_log(caplog, "WARNING") if str(locked) in m]
+    assert len(reasons) == 1
+    assert "Permission denied" in reasons[0]
+
+
+@with_fake_workers
+@pytest.mark.parametrize("run_into_trouble", [_run_out_of_space, _lose_connection])
+def test_a_full_disk_or_a_dead_connection_names_the_game_that_hit_it(tmp_path, caplog, run_into_trouble):
+    scheduler, job = _running_witcher()
+
+    with caplog.at_level("INFO", logger="gogstash.download_queue"):
+        run_into_trouble(job, _part_file(tmp_path))
+
+    [(_, message)] = _app_log(caplog, "WARNING")
+    assert str(WITCHER_3) in message
+    assert "False" in message  # not mid-stop, so this one pauses the queue
+
+
+@with_fake_workers
+def test_a_manifest_that_wont_take_a_file_keeps_its_traceback(tmp_path, caplog):
+    # downloads.log gets the one-liner for the user. gogstash.log gets the
+    # whole autopsy for whoever has to fix it.
+    scheduler, worker, game_dir = _scheduler_with_game_files(tmp_path, "a.exe")
+
+    with caplog.at_level("INFO", logger="gogstash.download_queue"), _manifest_write_fails(errno.EACCES):
+        worker.fetched.emit(_fetched_entry(game_dir, "a.exe", size=1))
+
+    [record] = [r for r in caplog.records if r.name == "gogstash.download_queue" and r.levelname == "ERROR"]
+    assert "a.exe" in record.getMessage()
+    assert record.exc_info[0] is PermissionError  # EACCES, as Python spells it
+    assert sum("Error recording file" in line for line in _log_lines()) == 1  # the user's line is still there

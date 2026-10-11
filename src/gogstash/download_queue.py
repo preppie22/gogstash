@@ -191,6 +191,7 @@ class DownloadScheduler(QObject):
         }
         self.idle_queue.append(queue_item)
         download_size = sum(file['size'] for file in file_queue)
+        log.info(f"queued {queue_item['product_id']} ({len(file_queue)} file(s), {humanize.naturalsize(download_size)})")
         return download_size
 
     def dequeue(self, pid: int) -> bool:
@@ -313,7 +314,8 @@ class DownloadScheduler(QObject):
         dl_path = Path(settings.read_setting('download_path'))
         try:
             dl_path.mkdir(parents=True, exist_ok=True)
-        except OSError:
+        except OSError as e:
+            log.warning(f"{dl_path} | {e!r}")
             return FreeCheckReturn(False, dl_size, 0)
         free_space = shutil.disk_usage(dl_path).free
         if dl_size < free_space * 0.98:
@@ -341,6 +343,7 @@ class DownloadScheduler(QObject):
         if self.free_space_check and not self._stopped_flag:
             space_check = self._free_check()
             if not space_check.is_available:
+                log.warning(f"{space_check.required} is needed but only {space_check.free} is available")
                 self.low_disk_space.emit(space_check.required, space_check.free)
                 return        
         while self.tokens > 0 and self.idle_queue:
@@ -378,6 +381,7 @@ class DownloadScheduler(QObject):
         self.tokens = self.tokens - 1
         job['worker'].start()
         self.game_started.emit(job['product_id'])
+        log.info(f"dispatched {job['product_id']} | is_resuming: {bool(job.get('resume_info'))}")
 
     def _reap(self, job: dict):
         """Remove a job from the active queue and free its concurrency slot.
@@ -423,6 +427,7 @@ class DownloadScheduler(QObject):
         except Exception as e:
             if isinstance(e, OSError) and (e.errno == errno.ENOSPC or e.errno == errno.EDQUOT):
                 return False
+            log.exception(f"{fetched_file.get('filepath')}")
             _write_log_msg(f"Error recording file {fetched_file.get('filepath')}: {e}")
             return
         return True
@@ -479,6 +484,7 @@ class DownloadScheduler(QObject):
             job (dict): The finished job.
         """
         self.game_succeeded.emit(job['product_id'])
+        log.info(f"{job['product_id']} succeeded")
         self._reap(job)
         self.schedule()
 
@@ -489,6 +495,7 @@ class DownloadScheduler(QObject):
             job (dict): The stopped job.
         """
         self.game_stopped.emit(job['product_id'])
+        log.info(f"{job['product_id']} stopped")
         self._reap(job)
         self.schedule()
 
@@ -502,6 +509,7 @@ class DownloadScheduler(QObject):
                 and ``downlink`` of the partial file.
         """
         self.game_paused.emit(job['product_id'])
+        log.info(f"{job['product_id']} paused")
         if job in self.active_queue:
             paused_job = job.copy()
             paused_job['resume_info'] = resume_info
@@ -527,6 +535,7 @@ class DownloadScheduler(QObject):
                 ``fetched_files``, and ``partpath`` and ``downlink`` of the
                 partial file.
         """
+        log.warning(f"{job['product_id']} disk full | stop_requested: {self._stopped_flag}")
         if self._stopped_flag:
             _write_log_msg("Download folder ran out of space while stopping")
             if job in self.active_queue:
@@ -564,6 +573,7 @@ class DownloadScheduler(QObject):
                 ``fetched_files``, ``downlink`` and, once the file had
                 started, ``partpath``.
         """
+        log.warning(f"{job['product_id']} network error | stop_requested: {self._stopped_flag}")
         if self._stopped_flag:
             _write_log_msg("Connection error while stopping")
             if job in self.active_queue:
@@ -601,6 +611,7 @@ class DownloadScheduler(QObject):
             msg (str): The error message.
         """
         self.game_failed.emit(job['product_id'], msg)
+        log.warning(f"{job['product_id']} failed: {msg}")
         self._reap(job)
         self.schedule()
 
