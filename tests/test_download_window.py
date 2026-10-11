@@ -1744,3 +1744,48 @@ def test_pausing_shows_zero_at_once_and_resuming_starts_a_fresh_average():
 
     # Leftover 50 MB/s ticks would pull this way up
     assert window.download_speed.text() == "10.0 MB/s (ETA: a minute)"
+
+
+# --- what the user decided, in gogstash.log ---
+
+def _window_log(caplog):
+    return [r.getMessage().lower() for r in caplog.records if r.name == "gogstash.download_window"]
+
+
+@patch.object(DownloadScheduler, "resume_all")
+@patch.object(DownloadScheduler, "pause_all")
+@patch.object(DownloadScheduler, "schedule")
+@sized_downloads()
+def test_start_pause_and_resume_each_leave_a_line_in_order(mock_estimate, mock_schedule, mock_pause, mock_resume, caplog):
+    # The scheduler says what happened. These lines say who asked for it,
+    # so "it paused by itself" and "I clicked Pause" stop looking the same.
+    mock_estimate.return_value = 0
+    window = DownloadWindow()
+    window.add_to_queue(_row())
+
+    with caplog.at_level("INFO", logger="gogstash.download_window"):
+        window.start_button.click()
+        window.start_button.click()
+        window._on_paused()
+        window.start_button.click()
+
+    lines = _window_log(caplog)
+    assert len(lines) == 3
+    assert "start" in lines[0] and "1" in lines[0]
+    assert "paus" in lines[1]
+    assert "resum" in lines[2]
+
+
+@patch("gogstash.download_queue.DownloadWorkerThread", _IdleWorker)
+@sized_downloads()
+@pytest.mark.parametrize("answer, word", [(YES, "anyway"), (NO, "paused")])
+def test_the_low_disk_space_answer_is_logged(mock_estimate, caplog, answer, word):
+    mock_estimate.return_value = 1000
+    window = DownloadWindow()
+    window.add_to_queue(_row(product_id=1))
+
+    with caplog.at_level("INFO", logger="gogstash.download_window"), _full_disk(), _answer_dialog(answer):
+        window.start_downloads()
+        _deliver_queued_signals()
+
+    assert [line for line in _window_log(caplog) if "low disk" in line and word in line]

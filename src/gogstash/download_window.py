@@ -403,6 +403,8 @@ class DownloadWindow(QDockWidget):
                 ):
                     self.game_queue_table.removeRow(row_item[Column.TITLE].row())
                     removed_pids.append(pid)
+        if removed_pids:
+            log.info(f"remove pids: {removed_pids}")
         self._update_progress_bar()
         for pid in removed_pids:
             self.__queue_map.pop(pid)
@@ -445,11 +447,13 @@ class DownloadWindow(QDockWidget):
                         row_items = self.__queue_map.pop(pid)
                         self.game_queue_table.removeRow(row_items[Column.TITLE].row())
                     self._reset_all()
+                    log.info(f"removed {len(completed_downloads)} completed downloads")
                     if self.game_queue_table.rowCount() == 0:
                         return
                 else:
                     for pid in completed_downloads:
                         self._on_game_stopped(pid)
+                    log.info(f"kept {len(completed_downloads)} completed downloads")
                     self._update_progress_bar()
         concurrency = read_setting('download_concurrency')
         self.scheduler.set_concurrency(concurrency)
@@ -462,9 +466,11 @@ class DownloadWindow(QDockWidget):
         self.start_button.setIcon(get_icon('pause.svg'))
         self.start_button.setProperty('iconFile', 'pause.svg')
         if was_paused:
+            log.info(f"resuming with {self.game_queue_table.rowCount()} games")
             self._disk_space_error = False
             self.scheduler.resume_all()
         else:
+            log.info(f"starting with {self.game_queue_table.rowCount()} games")
             self.scheduler.schedule()
 
     def pause_downloads(self):
@@ -475,6 +481,7 @@ class DownloadWindow(QDockWidget):
         """
         if self.current_state == DownloadState.PAUSED:
             return
+        log.info("pausing downloads")
         self.start_button.setDisabled(True)
         self.clear_queue_button.setDisabled(True)
         self.downloads_status.setText("Pausing. Please wait...")
@@ -484,6 +491,7 @@ class DownloadWindow(QDockWidget):
         """Ask the scheduler to cancel all downloads. Does nothing while idle."""
         if self.current_state == DownloadState.IDLE:
             return
+        log.info("stopping downloads")
         self.downloads_status.setText("Stopping. Please wait...")
         self.start_button.setDisabled(True)
         self.scheduler.stop_all()
@@ -632,9 +640,11 @@ class DownloadWindow(QDockWidget):
             if ans == QMessageBox.StandardButton.No:
                 self.clear_queue_button.setDisabled(False)
                 return
+            log.info("stopping and clearing the download queue")
             self.clear_queue = True
             self.stop_downloads()
         else:
+            log.info("clearing the download queue")
             self.game_queue_table.setRowCount(0)
             self.__queue_map.clear()
             self._reset_all()
@@ -709,7 +719,9 @@ class DownloadWindow(QDockWidget):
         ans = disk_space_error.exec()
         if ans == QMessageBox.StandardButton.No:
             self.pause_downloads()
+            log.info("low disk space: downloads paused")
         else:
+            log.info("low disk space: warning ignored (download anyway)")
             self.scheduler.free_space_check = False
             self.scheduler.schedule()
 

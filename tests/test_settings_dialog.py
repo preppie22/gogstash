@@ -354,3 +354,30 @@ def test_save_refuses_when_no_platform_is_ticked(mock_warning):
     mock_warning.assert_called_once()
     assert settings._read_settings()["platform_filter"] == ["Linux"]
     assert dialog.result() != dialog.DialogCode.Accepted
+
+
+def test_saved_settings_go_into_the_log(caplog):
+    # Half of "downloads go to the wrong place" reports answer themselves
+    # once you can see where the user told them to go.
+    dialog = SettingsDialog()
+    dialog.download_edit_path.setText("/new/path")
+    dialog.download_concurrency_edit.setValue(7)
+
+    with caplog.at_level("INFO", logger="gogstash.settings_dialog"):
+        click(dialog, QDialogButtonBox.StandardButton.Save)
+
+    [message] = [r.getMessage() for r in caplog.records if r.name == "gogstash.settings_dialog"]
+    assert "/new/path" in message
+    assert "7" in message
+
+
+@patch("gogstash.settings_dialog.QMessageBox.warning")
+def test_settings_that_were_refused_arent_logged_as_saved(mock_warning, caplog):
+    dialog = SettingsDialog()
+    for checkbox in dialog.download_categories_check.values():
+        checkbox.setChecked(False)
+
+    with caplog.at_level("INFO", logger="gogstash.settings_dialog"):
+        click(dialog, QDialogButtonBox.StandardButton.Save)
+
+    assert [r for r in caplog.records if r.name == "gogstash.settings_dialog"] == []

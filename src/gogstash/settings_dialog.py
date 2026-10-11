@@ -232,6 +232,7 @@ class SettingsDialog(QDialog):
                 )
                 return
             settings.update_settings(form_settings)
+            log.info(f"settings applied: {form_settings}")
             self.accept()
         if role == QDialogButtonBox.ButtonRole.DestructiveRole:
             self.load_settings()
