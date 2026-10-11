@@ -667,11 +667,11 @@ def test_library_fetch_thread_emits_failed_on_exception(mock_fetch_owned_ids):
 
 
 @patch("gogstash.library_db.fetch_owned_ids")
-def test_library_fetch_thread_emits_auth_failure_instead_of_failed_on_permission_error(mock_fetch_owned_ids):
-    # PermissionError means "not logged in", a distinct case from a generic
-    # network/data failure. The UI needs to tell them apart to show the
-    # right message and reset itself correctly.
-    mock_fetch_owned_ids.side_effect = PermissionError("Authentication failed. Login again.")
+def test_library_fetch_thread_emits_auth_failure_instead_of_failed_when_not_logged_in(mock_fetch_owned_ids):
+    # Not logged in is a distinct case from a generic network/data failure.
+    # The UI needs to tell them apart to show the right message and reset
+    # itself correctly.
+    mock_fetch_owned_ids.side_effect = gog_api.AuthenticationFailure("Authentication failed. Login again.")
     thread = library_db.LibraryFetchThread()
     auth_failures = []
     failed = []
@@ -715,3 +715,65 @@ def test_get_downloadables_hands_back_each_files_installer_version():
 
     assert versions["installers"] == "2025.8.f.4"
     assert versions["bonus_content"] is None  # GOG doesn't version manuals
+
+
+@patch("gogstash.library_db.fetch_owned_ids")
+def test_a_file_permission_error_is_a_failure_not_a_logout(mock_fetch_owned_ids):
+    # Python's own PermissionError is about files, not GOG. Telling someone
+    # with a read-only config folder to log in again would send them in
+    # circles for a very long afternoon.
+    mock_fetch_owned_ids.side_effect = PermissionError(13, "Permission denied", "/config/goglibrary.db")
+    thread = library_db.LibraryFetchThread(force=True)
+    auth_failures, failed = [], []
+    thread.auth_failure.connect(lambda: auth_failures.append(True))
+    thread.failed.connect(lambda msg: failed.append(msg))
+
+    thread.run()
+
+    assert auth_failures == []
+    assert failed == ["[Errno 13] Permission denied: '/config/goglibrary.db'"]
+
+
+@patch("gogstash.library_db.fetch_owned_ids")
+def test_a_refresh_that_blows_up_leaves_its_traceback_in_the_log(mock_fetch_owned_ids, caplog):
+    # The user's error box gets one line. Whoever reads gogstash.log gets the
+    # whole story, including the chapter where it went wrong.
+    mock_fetch_owned_ids.side_effect = KeyError("owned")
+    thread = library_db.LibraryFetchThread(force=True)
+
+    with caplog.at_level("INFO", logger="gogstash.library_db"):
+        thread.run()
+
+    [record] = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert record.exc_info[0] is KeyError
+
+
+@patch("gogstash.library_db.fetch_owned_ids")
+def test_a_refresh_while_logged_out_is_a_warning_not_an_error(mock_fetch_owned_ids, caplog):
+    mock_fetch_owned_ids.side_effect = gog_api.AuthenticationFailure("Authentication failed. Login again.")
+    thread = library_db.LibraryFetchThread(force=True)
+
+    with caplog.at_level("INFO", logger="gogstash.library_db"):
+        thread.run()
+
+    assert [r.levelname for r in caplog.records] == ["WARNING"]  # expected, so no traceback
+
+
+def test_update_cache_logs_what_it_wrote_and_what_it_skipped(caplog):
+    with caplog.at_level("INFO", logger="gogstash.library_db"):
+        library_db.update_cache([FAKE_PRODUCT, FAKE_PACK])
+
+    [message] = [r.getMessage() for r in caplog.records]
+    assert "1 products" in message
+    assert "skipped 1" in message  # the pack, turned away at the door
+
+
+def test_a_rebuilt_cache_logs_both_versions(caplog):
+    _write_cache_with_version(0)
+
+    with caplog.at_level("INFO", logger="gogstash.library_db"):
+        library_db.verify_schema_version()
+
+    [warning] = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert f"v{library_db.SCHEMA_VERSION}" in warning
+    assert "v0" in warning

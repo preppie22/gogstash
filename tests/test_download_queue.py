@@ -13,7 +13,7 @@ import pytest
 import requests
 from PySide6.QtCore import QObject, Signal
 
-from gogstash import download_queue, library_db, log_setup, manifest, paths, settings
+from gogstash import download_queue, gog_api, library_db, log_setup, manifest, paths, settings
 from gogstash.constants import HTTP_TIMEOUT
 from tests.fakes import gog_product
 
@@ -871,12 +871,12 @@ def test_download_worker_reports_failed_not_succeeded_when_a_file_fails_but_the_
 def test_download_worker_fails_immediately_when_no_valid_token(mock_resolve, tmp_path):
     # Regression: no token, no refresh_token, no soup for you. Auth checking
     # now lives inside gog_api.resolve_downlink(), which raises
-    # PermissionError instead of letting `None['access_token']` blow up with
+    # AuthenticationFailure instead of letting `None['access_token']` blow up with
     # something cryptic. Should just report the auth failure and bail.
     library_db.update_cache([FAKE_PRODUCT])
     settings.update_setting("download_path", str(tmp_path))
     settings.update_setting("patches", False)
-    mock_resolve.side_effect = PermissionError("Authentication failed. Login again.")
+    mock_resolve.side_effect = gog_api.AuthenticationFailure("Authentication failed. Login again.")
 
     thread = make_worker()
     events = Watcher(thread)

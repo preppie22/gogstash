@@ -48,7 +48,7 @@ def test_fetch_owned_ids_treats_login_redirect_as_auth_failure(mock_get_valid_to
     response.is_redirect = True
     mock_get.return_value = response
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(gog_api.AuthenticationFailure):
         gog_api.fetch_owned_ids()
 
     mock_clear_token.assert_called_once_with()
@@ -90,10 +90,10 @@ def test_fetch_owned_ids_raises_when_owned_key_is_missing(mock_get_valid_token, 
 
 @patch("gogstash.gog_api.requests.get")
 @patch("gogstash.gog_api.gog_auth.get_valid_token")
-def test_fetch_owned_ids_raises_permission_error_when_not_logged_in(mock_get_valid_token, mock_get):
+def test_fetch_owned_ids_raises_auth_failure_when_not_logged_in(mock_get_valid_token, mock_get):
     mock_get_valid_token.return_value = None
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(gog_api.AuthenticationFailure):
         gog_api.fetch_owned_ids()
 
     mock_get.assert_not_called()
@@ -181,10 +181,10 @@ def test_fetch_downloadables_runs_to_the_end_when_never_asked_to_stop(mock_get_v
 
 @patch("gogstash.gog_api.requests.get")
 @patch("gogstash.gog_api.gog_auth.get_valid_token")
-def test_fetch_downloadables_raises_permission_error_when_not_logged_in(mock_get_valid_token, mock_get):
+def test_fetch_downloadables_raises_auth_failure_when_not_logged_in(mock_get_valid_token, mock_get):
     mock_get_valid_token.return_value = None
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(gog_api.AuthenticationFailure):
         gog_api.fetch_downloadables([1, 2, 3])
 
     mock_get.assert_not_called()
@@ -214,10 +214,10 @@ def test_resolve_downlink_returns_cdn_url_and_checksum(mock_get_valid_token, moc
 
 @patch("gogstash.gog_api.requests.get")
 @patch("gogstash.gog_api.gog_auth.get_valid_token")
-def test_resolve_downlink_raises_permission_error_when_not_logged_in(mock_get_valid_token, mock_get):
+def test_resolve_downlink_raises_auth_failure_when_not_logged_in(mock_get_valid_token, mock_get):
     mock_get_valid_token.return_value = None
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(gog_api.AuthenticationFailure):
         gog_api.resolve_downlink("https://api.gog.com/products/111/downlink/installer/file1")
 
     mock_get.assert_not_called()

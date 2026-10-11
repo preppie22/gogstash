@@ -15,6 +15,9 @@ USER_GAMES = "https://embed.gog.com/user/data/games"
 class FetchInterrupted(Exception):
     """Raised by ``fetch_downloadables`` when its caller asks it to stop."""
 
+class AuthenticationFailure(Exception):
+    """Raised when the user isn't logged in or GOG rejects the token."""
+
 def fetch_owned_ids() -> set:
     """Fetch the IDs of every product the user owns on GOG.
 
@@ -27,14 +30,14 @@ def fetch_owned_ids() -> set:
         set: Owned GOG product IDs as ints.
 
     Raises:
-        PermissionError: If the user is not logged in or GOG rejects the
+        AuthenticationFailure: If the user is not logged in or GOG rejects the
             token.
         requests.HTTPError: If GOG answers with an error status.
         KeyError: If the response has no ``owned`` list.
     """
     token = gog_auth.get_valid_token()
     if not token:
-        raise PermissionError("Authentication failed. Login again.")
+        raise AuthenticationFailure("Authentication failed. Login again.")
     response = requests.get(
         USER_GAMES,
         headers={"Authorization": f"Bearer {token['access_token']}"},
@@ -43,7 +46,7 @@ def fetch_owned_ids() -> set:
     )
     if response.is_redirect:
         gog_auth.clear_token()
-        raise PermissionError("Authentication failed. Login again.")
+        raise AuthenticationFailure("Authentication failed. Login again.")
     response.raise_for_status()
     response_dict = response.json()
     owned_list = response_dict['owned']
@@ -67,14 +70,14 @@ def fetch_downloadables(product_ids: list, progress_callback: Callable[[int], No
         list[dict]: Product details with the ``downloads`` field expanded.
 
     Raises:
-        PermissionError: If the user is not logged in.
+        AuthenticationFailure: If the user is not logged in.
         FetchInterrupted: If ``should_stop`` returned True. Raised instead
             of returning the batches fetched so far, so a caller can't
             mistake part of the library for all of it.
     """
     token = gog_auth.get_valid_token()
     if not token:
-        raise PermissionError("Authentication failed. Login again.")
+        raise AuthenticationFailure("Authentication failed. Login again.")
     product_info = []
     total = len(product_ids)
     while product_ids:
@@ -107,12 +110,12 @@ def resolve_downlink(downlink: str) -> dict:
         patches, a ``checksum`` URL.
 
     Raises:
-        PermissionError: If the user is not logged in.
+        AuthenticationFailure: If the user is not logged in.
         requests.HTTPError: If GOG returns an error status.
     """
     token = gog_auth.get_valid_token()
     if not token:
-        raise PermissionError("Authentication failed. Login again.")
+        raise AuthenticationFailure("Authentication failed. Login again.")
     response = requests.get(
         downlink,
         headers={"Authorization": f"Bearer {token['access_token']}"},

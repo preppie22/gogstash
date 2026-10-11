@@ -10,7 +10,7 @@ import sqlite3
 from typing import NamedTuple
 
 from gogstash import paths
-from gogstash.gog_api import fetch_owned_ids, fetch_downloadables, FetchInterrupted
+from gogstash.gog_api import fetch_owned_ids, fetch_downloadables, FetchInterrupted, AuthenticationFailure
 from gogstash import settings
 
 from PySide6.QtCore import QThread, Signal
@@ -125,14 +125,18 @@ class LibraryFetchThread(QThread):
             product_listing = get_product_listing(product_id)
             if not (product_listing or product_id) or self.force:
                 owned_products = fetch_owned_ids()
+                log.info(f"fetched {len(owned_products)} ids")
                 update_cache(fetch_downloadables(list(owned_products), self.update_progress, self.isInterruptionRequested))
                 product_listing = get_product_listing()
             self.succeeded.emit(product_listing)
-        except PermissionError:
+        except AuthenticationFailure as e:
+            log.warning(f"{e!r}")
             self.auth_failure.emit()
         except FetchInterrupted:
+            log.info("library refresh interrupted")
             return
         except Exception as e:
+            log.exception(f"library refresh failed")
             self.failed.emit(str(e))
 
     def update_progress(self, percentage: int):
@@ -163,7 +167,9 @@ def verify_schema_version() -> bool:
         db_version = query_result.fetchone()[0]
     conn.close()
     if db_version != SCHEMA_VERSION:
+        log.warning(f"expected db v{SCHEMA_VERSION}, but found db v{db_version}")
         _create_db(force=True)
+        log.info("db cache rebuilt")
         return False
     return True
 
@@ -236,7 +242,8 @@ def update_cache(products: list[dict]) -> None:
                 ON CONFLICT(product_id, group_id, file_id) DO UPDATE SET
                     size=excluded.size,
                     downlink=excluded.downlink
-        """, download_file_rows)        
+        """, download_file_rows)
+    log.info(f"updated {len(products_rows)} products (skipped {len(products) - len(products_rows)}), {len(download_group_rows)} download groups, {len(download_file_rows)} download files")        
 
 def _product_values(product: dict, parent_id: int | None = None) -> tuple:
     """Build a ``product`` table row from a products API entry.
@@ -478,6 +485,7 @@ def clear_cache() -> None:
     backup_file = paths.config_file_backup(paths.ConfigFile.DB_CACHE)
     backup_file.unlink(missing_ok=True)
     db_file.rename(paths.config_file_backup(paths.ConfigFile.DB_CACHE))
+    log.info(f"{str(db_file)} was moved to {str(backup_file)}")
 
 
 if __name__ == "__main__":

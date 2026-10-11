@@ -749,7 +749,7 @@ class DownloadWorkerThread(QThread):
                     checksum = checksum_xml.attrib['md5']
                 filename = urllib.parse.urlparse(cdn_link).path.rsplit('/',-1)[-1]
                 filename = urllib.parse.unquote(filename)
-            except PermissionError as e:
+            except gog_api.AuthenticationFailure as e:
                 self.failed.emit(str(e))
                 return
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
