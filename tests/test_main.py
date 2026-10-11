@@ -551,6 +551,21 @@ def test_library_starts_out_sorted_by_title_a_to_z():
     assert (header.sortIndicatorSection(), header.sortIndicatorOrder()) == (0, Qt.SortOrder.AscendingOrder)
 
 
+def test_lowercase_titles_sort_with_everyone_else_not_after_z():
+    # Regression, reported on Reddit: a plain string compare puts every
+    # uppercase letter before every lowercase one, so "eXceed" and "flower"
+    # got exiled below "Zork" like they'd shown up underdressed.
+    window = MainWindow()
+    games = [
+        {"product_id": i, "parent_id": None, "title": title, "slug": title.lower(), "download_size": 1}
+        for i, title in enumerate(["Zork", "flower", "Alpha", "eXceed", "Beta"], start=1)
+    ]
+
+    window._on_games_loaded(games)
+
+    assert [title for title, _ in _rows(window)] == ["Alpha", "Beta", "eXceed", "flower", "Zork"]
+
+
 @pytest.mark.parametrize("order, expected", [
     (Qt.SortOrder.AscendingOrder, ["Alpha", "Gamma", "Beta"]),
     (Qt.SortOrder.DescendingOrder, ["Beta", "Gamma", "Alpha"]),

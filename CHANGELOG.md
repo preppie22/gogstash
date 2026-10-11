@@ -13,6 +13,7 @@ suffix until the first stable release), not SemVer.
 
 ### Fixed
 - Resuming a paused game no longer sends its progress bar back to the start, and no longer checks every file it had already finished with GOG again before carrying on
+- Sorting the library by title no longer puts games whose names start with a lowercase letter after Z
 
 ## [2026.10.9-beta] - 2026-10-09
 

@@ -87,7 +87,7 @@ class GameListItem(QTreeWidgetItem):
     """Library row that sorts the Size and Fetched columns by stored values.
 
     One item holds all three columns of a game. The Title column sorts by
-    its text. The Size column shows a readable size such as "900.0 MB",
+    its text, ignoring case. The Size column shows a readable size such as "900.0 MB",
     which would sort before "1.2 GB" as text, so it stores the byte count.
     The Fetched column has no text at all, so it stores whether the game
     is fetched. Both values are stored under ``Qt.ItemDataRole.UserRole``
@@ -109,7 +109,7 @@ class GameListItem(QTreeWidgetItem):
         col_idx = self.treeWidget().sortColumn()
         match col_idx:
             case Column.TITLE:
-                return self.text(Column.TITLE) < other.text(Column.TITLE)
+                return self.text(Column.TITLE).casefold() < other.text(Column.TITLE).casefold()
             case Column.SIZE:
                 return self.data(Column.SIZE, Qt.ItemDataRole.UserRole) < other.data(Column.SIZE, Qt.ItemDataRole.UserRole)
             case Column.FETCHED:
