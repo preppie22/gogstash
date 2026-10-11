@@ -279,6 +279,6 @@ def test_main_logs_to_its_own_file_then_exits_with_the_helpers_code(mock_login_c
 
     # Its own file: sharing gogstash.log meant the main window rotating it
     # while the helper still held it open, which Windows takes personally.
-    mock_setup.assert_called_once_with(login_window.LogFile.AUTH_LOG)
+    mock_setup.assert_called_once_with(login_window.log_file_path(login_window.LogFile.AUTH_LOG))
     assert order == ["logging", "helper"]  # set up before the first line worth keeping
     assert exited.value.code == ExitCode.EXIT_CANCELLED

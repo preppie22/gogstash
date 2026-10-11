@@ -17,7 +17,8 @@ import logging
 from enum import IntEnum
 
 from gogstash import gog_auth
-from gogstash.paths import LogFile, setup_logging
+from gogstash.paths import LogFile, log_file_path
+from gogstash.log_setup import setup_logging
 
 class ExitCode(IntEnum):
     """How the login helper ended, reported through its exit code.
@@ -195,7 +196,7 @@ def main():
     window's ``gogstash.log``.
     """
     login_window = LoginWindow()
-    setup_logging(LogFile.AUTH_LOG)
+    setup_logging(log_file_path(LogFile.AUTH_LOG))
     sys.exit(login_window.start_helper())
 
 if __name__ == "__main__":

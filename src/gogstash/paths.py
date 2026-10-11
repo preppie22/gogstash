@@ -3,8 +3,6 @@
 import platformdirs
 from pathlib import Path
 from enum import StrEnum
-import logging
-import logging.handlers
 
 class ConfigFile(StrEnum):
     """Names of the files kept in the GogStash config directory."""
@@ -76,33 +74,3 @@ def config_file_backup(config_file: ConfigFile) -> Path:
     """
     filename = config_file.value + ".bak"
     return config_path() / filename
-
-def setup_logging(log_file: LogFile):
-    """Send every log record of this process to a log file.
-
-    Sets up the root logger with ``logging.basicConfig``, so the logger of
-    every module writes to the file. The ``logs`` folder is created if
-    needed, and the file rolls over at 2 MB and keeps three old files.
-    Each process gets its own file, the main window ``APP_LOG`` and the
-    login helper ``AUTH_LOG``, since two processes can't safely share one
-    that rotates. ``DOWNLOAD_LOG`` sets up nothing, since the download
-    queue writes that file itself.
-
-    Args:
-        log_file (LogFile): The log file to write to.
-    """
-    if log_file == LogFile.DOWNLOAD_LOG:
-        return
-    file_path = log_file_path(log_file)
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    log_handler = logging.handlers.RotatingFileHandler(
-        str(file_path),
-        maxBytes=2 * 1024 * 1024,
-        backupCount=3,
-        encoding='utf-8'
-    )
-    logging.basicConfig(
-        handlers=[log_handler],
-        format='[%(asctime)s | %(module)s] - %(levelname)s - %(message)s',
-        level=logging.INFO
-    )

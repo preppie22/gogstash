@@ -58,7 +58,8 @@ from gogstash.settings import read_setting, update_setting
 from gogstash.manifest import read_manifest, check_exist_by_downlink
 from gogstash.download_window import DownloadWindow, UserRole, DownloadState
 from gogstash.icon_utils import get_icon, get_logo, status_indicator
-from gogstash import paths
+from gogstash.paths import LogFile, log_file_path
+from gogstash.log_setup import setup_logging, setup_download_log
 
 log = logging.getLogger(__name__)
 
@@ -820,7 +821,8 @@ def main():
     the frozen build.
     """
     app = QApplication(sys.argv)
-    paths.setup_logging(paths.LogFile.APP_LOG)
+    setup_logging(log_file_path(LogFile.APP_LOG))
+    setup_download_log(log_file_path(LogFile.DOWNLOAD_LOG))
     sys.excepthook = _log_unhandled_exception
     log.info(f"Starting GogStash {importlib.metadata.version("gogstash")} on {platform.platform()}, "
         f"Python {platform.python_version()}, "

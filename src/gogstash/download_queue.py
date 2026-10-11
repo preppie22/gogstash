@@ -9,8 +9,8 @@ from gogstash import library_db
 from gogstash import settings
 from gogstash import gog_api
 from gogstash import manifest
-from gogstash import paths
 from gogstash.constants import HTTP_TIMEOUT
+from gogstash.log_setup import DOWNLOAD_LOGGER
 
 import humanize
 from pathlib import Path
@@ -34,6 +34,7 @@ from PySide6.QtCore import (
 
 import logging
 log = logging.getLogger(__name__)
+dl_log = logging.getLogger(DOWNLOAD_LOGGER)
 
 class FreeCheckReturn(NamedTuple):
     """Result of the scheduler's free space check.
@@ -999,49 +1000,40 @@ def _safe_size(path: Path) -> int:
 def _write_log_file(fetched_file: dict) -> None:
     """Append a file result to the download log.
 
+    Goes through the ``DOWNLOAD_LOGGER`` logger, which adds the time, so
+    nothing is written until ``log_setup.setup_download_log`` has run.
+
     Args:
         fetched_file (dict): File result from a worker's ``fetched``
             signal.
     """
     if not fetched_file:
         return
-    log_file = paths.log_file_path(paths.LogFile.DOWNLOAD_LOG)
     error_msg = fetched_file.get('error', "")
     skipped = fetched_file.get('skipped', False)
-    log_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     filepath = str(fetched_file.get('filepath', ""))
     checksum = fetched_file.get('checksum', "")
     if error_msg:
-        log_entry = f"[{log_time}] | {filepath} : {error_msg}"
+        log_entry = f"| {filepath} : {error_msg}"
     elif skipped:
-        log_entry = f"[{log_time}] | {filepath} : Skipped | Already up to date"
+        log_entry = f"| {filepath} : Skipped | Already up to date"
     else:
-        log_entry = f"[{log_time}] | {filepath} : Fetched {humanize.naturalsize(fetched_file.get('size',""))}"
+        log_entry = f"| {filepath} : Fetched {humanize.naturalsize(fetched_file.get('size',""))}"
         if checksum:
             log_entry += f" | md5: {checksum}"
-    try:
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_file, 'a') as wp:
-            wp.write(log_entry + "\n")
-    except Exception as e:
-        print(f"Logging error: {e}\n {log_entry}")
+    dl_log.info(log_entry)
 
 def _write_log_msg(message: str = "") -> None:
     """Append a timestamped message to the download log.
+
+    Goes through the ``DOWNLOAD_LOGGER`` logger, like ``_write_log_file``.
 
     Args:
         message (str): The message to log. Empty messages are ignored.
     """
     if not message:
         return
-    log_file = paths.log_file_path(paths.LogFile.DOWNLOAD_LOG)
-    log_entry = f"[{time.strftime("%Y-%m-%dT%H:%M:%S")}] : {message}\n"
-    try:
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_file, 'a') as wp:
-            wp.write(log_entry)
-    except Exception as e:
-        print(f"Logging error: {e}\n {log_entry}")
+    dl_log.info(f": {message}")
 
 def _discard_partial_downloads(game_dir: Path) -> None:
     """Tidy up a game's download directory after a download is stopped.

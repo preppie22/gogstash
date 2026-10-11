@@ -2,6 +2,8 @@ import copy
 import errno
 import hashlib
 import json
+import logging
+import logging.handlers
 import os
 import time
 from pathlib import Path
@@ -11,7 +13,7 @@ import pytest
 import requests
 from PySide6.QtCore import QObject, Signal
 
-from gogstash import download_queue, library_db, manifest, paths, settings
+from gogstash import download_queue, library_db, log_setup, manifest, paths, settings
 from gogstash.constants import HTTP_TIMEOUT
 from tests.fakes import gog_product
 
@@ -64,6 +66,21 @@ FAKE_PRODUCT = gog_product(111, "Fake Game", "fake-game", downloads={
             }
         ],
 })
+
+
+@pytest.fixture(autouse=True)
+def download_history(isolated_config_dir):
+    """Hooks the download history up to a file, the way main() does at
+    startup. Without it every line goes to a logger with nowhere to write,
+    and the tests that read downloads.log would read a blank page."""
+    log_setup.setup_download_log(paths.log_file_path(paths.LogFile.DOWNLOAD_LOG))
+    logger = logging.getLogger(log_setup.DOWNLOAD_LOGGER)
+    yield logger
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
+    logger.setLevel(logging.NOTSET)
+    logger.propagate = True
 
 
 @pytest.fixture(autouse=True)
@@ -1825,7 +1842,7 @@ def _scheduler_with_game_files(tmp_path, *names):
 
 def _log_lines():
     log_file = paths.log_file_path(paths.LogFile.DOWNLOAD_LOG)
-    return log_file.read_text().splitlines() if log_file.exists() else []
+    return log_file.read_text(encoding="utf-8").splitlines() if log_file.exists() else []
 
 
 @with_fake_workers
@@ -2037,11 +2054,26 @@ def test_write_log_msg_ignores_an_empty_message():
     assert _log_lines() == []
 
 
-def test_write_log_msg_survives_a_log_file_it_cannot_write(capsys):
-    with patch("builtins.open", side_effect=OSError("disk full")):
+def test_write_log_msg_survives_a_log_file_it_cannot_write(download_history, capsys):
+    # A history line that can't be written is a shame. A download queue that
+    # dies over it is a tragedy. logging's own error handler takes the hit.
+    # pytest 9 hangs its own capture handlers on loggers that don't propagate,
+    # so pick ours out of the crowd.
+    [handler] = [h for h in download_history.handlers if isinstance(h, logging.handlers.RotatingFileHandler)]
+    with patch.object(handler.stream, "write", side_effect=OSError("disk full")):
         download_queue._write_log_msg("Downloads paused")  # must not raise
 
-    assert "disk full" in capsys.readouterr().out
+    assert "disk full" in capsys.readouterr().err
+
+
+def test_write_log_file_keeps_a_title_the_windows_code_page_cant_spell():
+    # The old writer opened the file in the system's encoding. On Windows that
+    # turned a Japanese file name into an exception, caught and printed to a
+    # console the Windows build doesn't have.
+    download_queue._write_log_file({"filepath": Path("ゼルダ/setup.exe"), "size": 1, "checksum": ""})
+
+    [line] = _log_lines()
+    assert line.endswith("| ゼルダ/setup.exe : Fetched 1 Byte")
 
 
 @with_fake_workers

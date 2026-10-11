@@ -13,7 +13,10 @@ suffix until the first stable release), not SemVer.
 
 ### Changed
 - Log files have moved into a `logs` folder inside the config directory: `gogstash.log`, `downloads.log`, and a new `login.log` for "Log in through GogStash". The old `gogstash.log` and `downloads.log` in the config directory itself are no longer written to
-- `gogstash.log` and `login.log` no longer grow forever: each starts a new file at 2 MB and keeps the last three
+- Log files no longer grow forever. `gogstash.log` and `login.log` start a new file at 2 MB and keep the last three, and `downloads.log` starts a new file at 5 MB and keeps the last five
+
+### Fixed
+- On Windows, download history lines are no longer lost when the file's path has characters the system's code page can't write, such as a non-Latin user name
 
 ## [2026.10.11-beta] - 2026-10-11
 

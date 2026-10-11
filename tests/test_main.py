@@ -1434,7 +1434,9 @@ class _MainRun:
         monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # put back whatever was there after the test
         self.config = None
         self.hook_during_setup = None
+        self.download_log = MagicMock()
         monkeypatch.setattr(gogstash_main.logging, "basicConfig", self._basic_config)
+        monkeypatch.setattr(gogstash_main, "setup_download_log", self.download_log)
         monkeypatch.setattr(gogstash_main, "QApplication", MagicMock())
         monkeypatch.setattr(gogstash_main, "MainWindow", MagicMock())
         with patch("sys.exit"):
@@ -1479,6 +1481,12 @@ def test_main_logs_to_a_rotating_utf8_file_in_the_logs_folder(main_run, tmp_path
     assert handler.backupCount == 3
     assert handler.encoding == "utf-8"  # Windows' code page meets a Polish game title, loses
     assert "filename" not in main_run.config  # basicConfig refuses filename and handlers together
+
+
+def test_main_sets_up_the_download_history_too(main_run, tmp_path):
+    # Regression bait: forget this line and the history logger has nowhere to
+    # write. Nothing fails, nothing warns, downloads.log just stops growing.
+    main_run.download_log.assert_called_once_with(tmp_path / "logs" / "downloads.log")
 
 
 def test_main_opens_the_log_with_who_is_running_what(monkeypatch, caplog):
