@@ -836,6 +836,7 @@ class _IdleWorker(QObject):
     fetched = Signal(dict)
     disk_full = Signal(dict)
     network_error = Signal(dict)
+    bytes_downloaded = Signal(int)
 
     def __init__(self, product_id, file_queue=None, resume_link=None):
         super().__init__()

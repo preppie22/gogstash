@@ -28,7 +28,7 @@ from typing import NamedTuple
 from PySide6.QtCore import (
     QThread,
     QObject,
-    Signal
+    Signal,
 )
 
 class FreeCheckReturn(NamedTuple):
@@ -120,6 +120,7 @@ class DownloadScheduler(QObject):
 
         self.__free_space_check = True
         self.__unrecorded = []
+        self.__bytes_downloaded = 0
 
     @property
     def free_space_check(self):
@@ -129,6 +130,10 @@ class DownloadScheduler(QObject):
     @free_space_check.setter
     def free_space_check(self, value: bool):
         self.__free_space_check = value
+
+    @property
+    def bytes_downloaded(self):
+        return self.__bytes_downloaded
 
     def set_concurrency(self, value):
         """Change the maximum number of parallel downloads.
@@ -360,6 +365,7 @@ class DownloadScheduler(QObject):
         job['worker'].fetched.connect(self._handle_fetched)
         job['worker'].disk_full.connect(lambda resume_link, t=job: self._handle_disk_full(t, resume_link))
         job['worker'].network_error.connect(lambda resume_link, t=job: self._handle_network_error(t, resume_link))
+        job['worker'].bytes_downloaded.connect(self._handle_bytes_downloaded)
         self.active_queue.append(job)
         self.tokens = self.tokens - 1
         job['worker'].start()
@@ -569,6 +575,9 @@ class DownloadScheduler(QObject):
         self._reap(job)
         self.schedule()
 
+    def _handle_bytes_downloaded(self, size: int) -> None:
+        self.__bytes_downloaded += size
+
     def _handle_failure(self, job: dict, msg: str) -> None:
         """Report a failed game and schedule the next job.
 
@@ -633,6 +642,7 @@ class DownloadWorkerThread(QThread):
     fetched = Signal(dict)
     disk_full = Signal(dict)
     network_error = Signal(dict)
+    bytes_downloaded = Signal(int)
 
     _stop_flag = False
     _pause_flag = False
@@ -802,6 +812,7 @@ class DownloadWorkerThread(QThread):
                         with open(part_path, file_mode) as fp:
                             cleanup = False
                             for chunk in download_response.iter_content(chunk_size=1024*1024):
+                                self.bytes_downloaded.emit(len(chunk))
                                 bytes_written = fp.write(chunk)
                                 current_size = fp.tell()
                                 self.__fetched_size += bytes_written

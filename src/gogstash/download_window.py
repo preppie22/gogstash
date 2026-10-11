@@ -7,6 +7,9 @@ Attributes:
 
 from enum import Enum, IntEnum
 import humanize
+import datetime as dt
+from collections import deque
+import time
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -16,6 +19,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
     QVBoxLayout,
+    QHBoxLayout,
     QPushButton,
     QDialogButtonBox,
     QStyledItemDelegate,
@@ -172,8 +176,15 @@ class DownloadWindow(QDockWidget):
         self.clear_queue = False
         self._disk_space_error = False
         self.__queue_map = {}
+        self.__dl_speed_timer = QTimer()
+        self.__bytes_dled = 0
+        self.__speed_buffer = deque([], 10)
+        self.__time_now = 0
+        self.eta_size = 0
+        self.__eta_buffer = deque([], 30)
 
         self._reset_scheduler()
+        self.__dl_speed_timer.timeout.connect(self._measure_speed)
 
         self.setWindowTitle("Download Queue")
         self.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
@@ -228,9 +239,14 @@ class DownloadWindow(QDockWidget):
         self.remove_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
         self.remove_shortcut.activated.connect(self._onclick_remove_button)
 
+        self.download_stats = QHBoxLayout()
+        self.download_speed = QLabel()
         self.downloads_status = QLabel()
+        self.download_stats.addWidget(self.downloads_status)
+        self.download_stats.addStretch()
+        self.download_stats.addWidget(self.download_speed)
         self._reset_status()
-        self.window_layout.addWidget(self.downloads_status)
+        self.window_layout.addLayout(self.download_stats)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
@@ -260,6 +276,14 @@ class DownloadWindow(QDockWidget):
     @current_state.setter
     def current_state(self, value: DownloadState):
         self.__current_state = value
+        if value != DownloadState.IDLE:
+            self.__dl_speed_timer.start(1000)
+        else:
+            self.__dl_speed_timer.stop()
+            self.__speed_buffer.clear()
+            self.__eta_buffer.clear()
+            self.__time_now = 0
+            self.__bytes_dled = 0
         self.busy_changed.emit(value != DownloadState.IDLE)
 
     def _color_scheme_refresh(self) -> None:
@@ -466,11 +490,14 @@ class DownloadWindow(QDockWidget):
     def _update_progress_bar(self):
         """Recalculate the overall progress bar from all rows."""
         total_size = 0
+        self.eta_size = 0
         fetched_size = 0
         for idx in range(self.game_queue_table.rowCount()):
             current_total_size = self.game_queue_table.item(idx, Column.PROGRESS).data(UserRole.TOTAL_SIZE)
             current_fetched_size = self.game_queue_table.item(idx, Column.PROGRESS).data(UserRole.FETCHED_SIZE)
             total_size = total_size + current_total_size
+            if self.game_queue_table.item(idx, Column.STATUS).data(UserRole.STATUS_ROLE) != 'red':
+                self.eta_size += current_total_size - current_fetched_size
             fetched_size = fetched_size + current_fetched_size
         if total_size == 0:
             self.progress_bar.setValue(0)
@@ -730,10 +757,34 @@ class DownloadWindow(QDockWidget):
                 "before resuming."
         ).exec()
 
+    def _measure_speed(self):
+        if self.__time_now == 0:
+            self.__time_now = time.monotonic()
+            self.__bytes_dled = self.scheduler.bytes_downloaded
+            return
+        current_time = time.monotonic()
+        delta_time = current_time - self.__time_now
+        self.__time_now = current_time
+
+        total_bytes = self.scheduler.bytes_downloaded
+        delta_bytes = total_bytes - self.__bytes_dled
+        self.__bytes_dled = total_bytes
+        self.__speed_buffer.append((delta_time, delta_bytes))
+        self.__eta_buffer.append((delta_time, delta_bytes))
+
+        if len(self.__speed_buffer) < 2:
+            return
+        avg_speed = sum(buffer[1] for buffer in self.__speed_buffer) / sum(buffer[0] for buffer in self.__speed_buffer)
+        avg_eta = self.eta_size / (sum(buffer[1] for buffer in self.__eta_buffer) / sum(buffer[0] for buffer in self.__eta_buffer)) if avg_speed > 0 else 0
+        speed_str = f"{humanize.naturalsize(avg_speed)}/s"
+        speed_str += f" (ETA: {humanize.naturaldelta(dt.timedelta(seconds=avg_eta))})" if avg_speed > 0 else ""
+        self.download_speed.setText(speed_str)
+
     def _reset_status(self):
         """Show the ready message if the queue is idle."""
         if self.current_state == DownloadState.IDLE:
             self.downloads_status.setText("Ready!")
+            self.download_speed.setText(f"{humanize.naturalsize(0)}/s")
 
     def set_progress(self, pid, percent = 0):
         """Store a row's progress for the title cell delegate.
