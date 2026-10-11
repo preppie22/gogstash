@@ -10,9 +10,10 @@ from gogstash.constants import HTTP_TIMEOUT
 FAKE_TOKEN = {"access_token": "mytoken"}
 
 
-def make_response(json_data):
+def make_response(json_data, status_code=200):
     response = MagicMock()
     response.json.return_value = json_data
+    response.status_code = status_code  # a bare MagicMock's status_code is a MagicMock, which is never 200
     # A bare MagicMock is truthy for everything, so it would "redirect" every time
     response.is_redirect = False
     return response
@@ -53,6 +54,26 @@ def test_fetch_owned_ids_treats_login_redirect_as_auth_failure(mock_get_valid_to
 
     mock_clear_token.assert_called_once_with()
     response.json.assert_not_called()
+
+
+@patch("gogstash.gog_api.gog_auth.clear_token")
+@patch("gogstash.gog_api.requests.get")
+@patch("gogstash.gog_api.gog_auth.get_valid_token")
+def test_a_rejected_token_says_so_in_the_log(mock_get_valid_token, mock_get, mock_clear_token, caplog):
+    # Not logged in and logged in with a token GOG has stopped liking raise
+    # the same exception. The log is where the two part ways.
+    mock_get_valid_token.return_value = FAKE_TOKEN
+    response = make_response({})
+    response.is_redirect = True
+    mock_get.return_value = response
+
+    with caplog.at_level("INFO", logger="gogstash.gog_api"):
+        with pytest.raises(gog_api.AuthenticationFailure):
+            gog_api.fetch_owned_ids()
+
+    [record] = caplog.records
+    assert record.levelname == "WARNING"
+    assert "mytoken" not in record.getMessage()
 
 
 @patch("gogstash.gog_api.requests.get")
@@ -139,6 +160,31 @@ def test_get_downloadable_splits_into_chunks_of_50(mock_get_valid_token, mock_ge
         {"id": "from-batch-2"},
         {"id": "from-batch-3"},
     ]
+
+
+@pytest.mark.parametrize("status_code", [302, 500])
+@patch("gogstash.gog_api.requests.get")
+@patch("gogstash.gog_api.gog_auth.get_valid_token")
+def test_a_failed_batch_raises_instead_of_passing_for_a_finished_library(mock_get_valid_token, mock_get, caplog, status_code):
+    # Returning what it had would let a refresh "succeed" with half a library,
+    # or none of it. 302 counts too: raise_for_status() waves redirects through.
+    mock_get_valid_token.return_value = FAKE_TOKEN
+    mock_get.side_effect = [
+        make_response([{"id": "from-batch-1"}]),
+        make_response({"error": "nope"}, status_code=status_code),
+    ]
+
+    with caplog.at_level("INFO", logger="gogstash.gog_api"):
+        with pytest.raises(requests.HTTPError) as raised:
+            gog_api.fetch_downloadables(list(range(1, 121)))
+
+    assert mock_get.call_count == 2  # and not a third, there's no point
+    assert raised.value.response.status_code == status_code
+    assert str(status_code) in str(raised.value)
+    [record] = caplog.records
+    assert str(status_code) in record.getMessage()
+    assert "50" in record.getMessage()  # how big the batch that failed was
+    assert "mytoken" not in record.getMessage()
 
 
 @patch("gogstash.gog_api.requests.get")

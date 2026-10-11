@@ -1,4 +1,6 @@
 import time
+
+import pytest
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
@@ -6,9 +8,10 @@ from gogstash import gog_auth
 from gogstash.constants import HTTP_TIMEOUT
 
 
-def make_response(json_data):
+def make_response(json_data, status_code=200):
     response = MagicMock()
     response.json.return_value = json_data
+    response.status_code = status_code
     return response
 
 
@@ -110,6 +113,62 @@ def test_get_valid_token_refreshes_and_persists_when_expired(mock_get):
     assert gog_auth._load_token()["access_token"] == "refreshed"
     _, kwargs = mock_get.call_args
     assert kwargs["params"]["refresh_token"] == "myrefresh"
+
+
+@patch("gogstash.gog_auth.requests.get")
+def test_a_refreshed_token_leaves_a_line_but_not_itself_in_the_log(mock_get, caplog):
+    gog_auth.save_token(
+        {"access_token": "old-secret-abc", "refresh_token": "refresh-secret-xyz", "expiry": time.time() - 10}
+    )
+    mock_get.return_value = make_response(
+        {"access_token": "new-secret-def", "refresh_token": "refresh-secret-xyz", "expires_in": 3600}
+    )
+
+    with caplog.at_level("INFO", logger="gogstash.gog_auth"):
+        gog_auth.get_valid_token()
+
+    [record] = caplog.records
+    assert record.levelname == "INFO"
+    for secret in ("old-secret-abc", "new-secret-def", "refresh-secret-xyz"):
+        assert secret not in record.getMessage()  # log files get pasted into bug reports
+
+
+@patch("gogstash.gog_auth.requests.get")
+def test_a_failed_refresh_logs_nothing_about_success(mock_get, caplog):
+    # A refresh that blew up has no business announcing itself as done.
+    # Only the warning should be there.
+    gog_auth.save_token(
+        {"access_token": "stale", "refresh_token": "myrefresh", "expiry": time.time() - 10}
+    )
+    mock_get.return_value = make_response({"error": "invalid_grant"}, status_code=400)
+
+    with caplog.at_level("INFO", logger="gogstash.gog_auth"):
+        with pytest.raises(KeyError):
+            gog_auth.get_valid_token()
+
+    assert [r.levelname for r in caplog.records] == ["WARNING"]
+
+
+@patch("gogstash.gog_auth.requests.get")
+def test_gog_refusing_a_token_logs_its_reason_and_status(mock_get, caplog):
+    # Without this the only clue was KeyError: 'expires_in', which is GOG's
+    # way of saying something it didn't get round to saying.
+    mock_get.return_value = make_response(
+        {"error": "invalid_grant", "error_description": "The refresh token is invalid."},
+        status_code=400,
+    )
+
+    with caplog.at_level("INFO", logger="gogstash.gog_auth"):
+        with pytest.raises(KeyError):
+            gog_auth.fetch_token(type=gog_auth.GrantType.REFRESH, refresh_token="myrefresh")
+
+    [record] = caplog.records
+    message = record.getMessage()
+    assert record.levelname == "WARNING"
+    assert "invalid_grant" in message
+    assert "The refresh token is invalid." in message
+    assert "400" in message
+    assert "myrefresh" not in message
 
 
 SUCCESS_URL = "https://embed.gog.com/on_login_success?origin=client&code=thecode"

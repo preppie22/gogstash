@@ -45,6 +45,7 @@ def fetch_owned_ids() -> set:
         timeout=HTTP_TIMEOUT
     )
     if response.is_redirect:
+        log.warning("gog rejected the auth token")
         gog_auth.clear_token()
         raise AuthenticationFailure("Authentication failed. Login again.")
     response.raise_for_status()
@@ -71,6 +72,8 @@ def fetch_downloadables(product_ids: list, progress_callback: Callable[[int], No
 
     Raises:
         AuthenticationFailure: If the user is not logged in.
+        requests.HTTPError: If GOG answers a batch with anything but 200.
+            ``response`` holds GOG's answer.
         FetchInterrupted: If ``should_stop`` returned True. Raised instead
             of returning the batches fetched so far, so a caller can't
             mistake part of the library for all of it.
@@ -94,6 +97,9 @@ def fetch_downloadables(product_ids: list, progress_callback: Callable[[int], No
             allow_redirects=False,
             timeout=HTTP_TIMEOUT
         )
+        if response.status_code != 200:
+            log.error(f"error fetching downloadables | status code: {response.status_code} | chunk length: {len(chunk)}")
+            raise requests.HTTPError(f"gog answered {response.status_code} while fetching downloadables", response=response)
         product_info.extend(response.json())
         if progress_callback:
             progress_callback(len(product_info) * 100 / total)

@@ -88,6 +88,8 @@ def fetch_token(code: str = None, type: GrantType = GrantType.AUTHORIZE, refresh
     start_time = time.time()
     response = requests.get(TOKEN_URL, params=parameters, timeout=HTTP_TIMEOUT)
     token_json = response.json()
+    if token_json.get('expires_in') is None:
+        log.warning(f"{token_json.get('error',"")}: {token_json.get('error_description',"")} | status code: {response.status_code} ")
     token_json["expiry"] = start_time+token_json["expires_in"]
     return token_json
 
@@ -115,6 +117,7 @@ def get_valid_token() -> dict | None:
         return None
     if is_token_expired(token):
         new_token = fetch_token(type=GrantType.REFRESH, refresh_token=token["refresh_token"])
+        log.info("token expired and was refreshed")
         save_token(new_token)
         return new_token
     return token
