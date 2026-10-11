@@ -154,3 +154,70 @@ def test_connection_problem_warns_with_the_real_error_type(mock_fetch, dialog, s
     assert dialog.result() != QDialog.DialogCode.Accepted
     assert dialog.isVisible()
     assert gog_auth._load_token() is None
+
+
+# --- the log hears how it went, never what was pasted ---
+
+LIVE_CODE = "V1yKHtLiveCodeStillGood"
+LIVE_SUCCESS_URL = f"https://embed.gog.com/on_login_success?origin=client&code={LIVE_CODE}"
+
+
+def _login_log(caplog):
+    return [(r.levelname, r.getMessage()) for r in caplog.records if r.name == "gogstash.external_login"]
+
+
+@pytest.mark.parametrize("failure", [
+    requests.ConnectionError("token request to gog failed"),
+    KeyError("expires_in"),
+])
+def test_a_failed_login_logs_why_but_never_the_code(dialog, shown_boxes, caplog, failure):
+    dialog.step2_url.setText(LIVE_SUCCESS_URL)
+
+    with caplog.at_level("INFO", logger="gogstash.external_login"), \
+            patch("gogstash.gog_auth.fetch_token", side_effect=failure):
+        dialog.step2_login_button.click()
+
+    [(level, message)] = _login_log(caplog)
+    assert level == "WARNING"
+    assert LIVE_CODE not in message
+
+
+def test_a_browser_login_that_works_says_so(dialog, shown_boxes, caplog):
+    dialog.step2_url.setText(LIVE_SUCCESS_URL)
+
+    with caplog.at_level("INFO", logger="gogstash.external_login"), \
+            patch("gogstash.gog_auth.fetch_token", return_value=TOKEN):
+        dialog.step2_login_button.click()
+
+    [(level, message)] = _login_log(caplog)
+    assert level == "INFO"
+    assert LIVE_CODE not in message
+
+
+def test_the_wrong_page_is_logged_by_where_it_was(dialog, shown_boxes, caplog):
+    # "They pasted the GOG store page" is the usual answer, and the host
+    # alone gives it away.
+    dialog.step2_url.setText("https://www.gog.com/en/games?sort=popular")
+
+    with caplog.at_level("INFO", logger="gogstash.external_login"):
+        dialog.step2_login_button.click()
+
+    [(level, message)] = _login_log(caplog)
+    assert level == "WARNING"
+    assert "www.gog.com" in message
+    assert "sort=popular" not in message  # the query never goes in, whatever page it's from
+
+
+@pytest.mark.parametrize("pasted", [
+    LIVE_CODE,  # just the code, copied out of the address bar on its own
+    f"https://embed.gog.com/on_login_success&code={LIVE_CODE}",  # the ? got lost on the way
+])
+def test_a_mangled_paste_never_puts_a_live_code_in_the_log(dialog, shown_boxes, caplog, pasted):
+    # extract_code can't find a code in these, but the code is in there and
+    # still good. Echoing the paste, even just its path, would hand it over.
+    dialog.step2_url.setText(pasted)
+
+    with caplog.at_level("INFO", logger="gogstash.external_login"):
+        dialog.step2_login_button.click()
+
+    assert all(LIVE_CODE not in message for _, message in _login_log(caplog))

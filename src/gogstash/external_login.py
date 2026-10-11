@@ -6,9 +6,10 @@ back into GogStash.
 """
 
 import requests
+import urllib.parse
+import logging
 
 from PySide6.QtCore import QUrl
-from gogstash import gog_auth
 from PySide6.QtWidgets import (
     QFormLayout,
     QDialog,
@@ -26,7 +27,8 @@ from PySide6.QtGui import (
     QDesktopServices
 )
 
-import logging
+from gogstash import gog_auth
+
 log = logging.getLogger(__name__)
 
 class ExternalLoginDialog(QDialog):
@@ -119,8 +121,10 @@ class ExternalLoginDialog(QDialog):
         login success page, if GOG can't be reached, or if GOG rejects the
         code because it expired or was already used.
         """
-        code =gog_auth.extract_code(self.step2_url.text().strip())
+        url = self.step2_url.text().strip()
+        code = gog_auth.extract_code(self.step2_url.text().strip())
         if code is None:
+            log.warning(f"invalid address | {urllib.parse.urlsplit(url).hostname} | login_sucess? {urllib.parse.urlsplit(url).path == "/on_login_success"}")
             QMessageBox(
                 QMessageBox.Icon.Warning,
                 "Login Error",
@@ -135,6 +139,7 @@ class ExternalLoginDialog(QDialog):
             token = gog_auth.fetch_token(code)
             gog_auth.save_token(token)
         except requests.RequestException as e:
+            log.warning(f"{type(e).__name__}: {str(e)}")
             QMessageBox(
                 QMessageBox.Icon.Warning,
                 "Login Error",
@@ -150,6 +155,7 @@ class ExternalLoginDialog(QDialog):
             ).show()
             return
         except KeyError as e:
+            log.warning("gog refused code: already used or expired")
             QMessageBox(
                 QMessageBox.Icon.Warning,
                 "Login Error",
@@ -163,4 +169,5 @@ class ExternalLoginDialog(QDialog):
                 textFormat=Qt.TextFormat.RichText
             ).show()
             return
+        log.info("logged in through the browser")
         self.accept()
