@@ -359,6 +359,7 @@ class MainWindow(QMainWindow):
             exit_confirmed = True
 
         if exit_confirmed:
+            log.info("quitting while busy, stopping first")
             self.quit_pending = True
             self.download_window.stop_downloads()
             if self.fetch_thread is not None and self.fetch_thread.isRunning():
@@ -396,6 +397,7 @@ class MainWindow(QMainWindow):
     def logout(self):
         """Delete the saved token and update the login indicator."""
         gog_auth.clear_token()
+        log.info("auth token cleared, logged out")
         self._update_login_status()
 
     def open_login_window(self):
@@ -442,6 +444,7 @@ class MainWindow(QMainWindow):
         try:
             folder_path.mkdir(parents=True, exist_ok=True)
         except OSError as e:
+            log.warning(f"error opening {str(folder_path)}: {e!r}")
             QMessageBox.warning(
                 self,
                 "Path Error",
@@ -450,6 +453,7 @@ class MainWindow(QMainWindow):
             return
         check = QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder_path)))
         if not check:
+            log.warning(f"no folder handler for {str(folder_path)}")
             QMessageBox.critical(
                 self,
                 "No Folder Handler",
@@ -486,6 +490,7 @@ class MainWindow(QMainWindow):
 
     def fetch_games(self):
         """Refresh the library from GOG in a background thread."""
+        log.info("library refresh started")
         self.fetch_thread = library_db.LibraryFetchThread(force=True)
         self.fetch_thread.auth_failure.connect(self.on_auth_failure)
         self.fetch_thread.succeeded.connect(self._on_games_loaded)
@@ -498,6 +503,7 @@ class MainWindow(QMainWindow):
 
     def on_auth_failure(self):
         """Show a login error and re-enable the refresh button."""
+        log.warning("refresh failed, not logged in or token rejected")
         self.error_message.setWindowTitle("Login Error")
         self.error_message.showMessage("You are not logged in to GOG!")
         self._update_login_status()
@@ -518,14 +524,17 @@ class MainWindow(QMainWindow):
         """
         self.login_internal_action.setDisabled(False)
         if exit_status == QProcess.ExitStatus.CrashExit:
+            log.warning("webview login crashed")
             self.open_external_login()
             return
         match exit_code:
             case ExitCode.EXIT_OK:
+                log.info("webview login exit ok")
                 self._update_login_status()
             case ExitCode.EXIT_CANCELLED:
-                pass
+                log.info("webview login cancelled")
             case ExitCode.EXIT_TOKEN_ERROR:
+                log.warning("webview login found invalid token or connection error")
                 QMessageBox.warning(
                     self,
                     "Login Error",
@@ -534,6 +543,7 @@ class MainWindow(QMainWindow):
                     "and try again."
                 )
             case _:
+                log.warning(f"webview exit with code: {exit_code}")
                 self.open_external_login()
 
     def on_webview_error(self, error: QProcess.ProcessError):
@@ -546,6 +556,7 @@ class MainWindow(QMainWindow):
         Args:
             error (QProcess.ProcessError): What went wrong with the helper.
         """
+        log.warning(f"webview error: {self.login_process.errorString()}")
         if error == QProcess.ProcessError.FailedToStart:
             self.login_internal_action.setDisabled(False)
             self.open_external_login()
@@ -602,6 +613,7 @@ class MainWindow(QMainWindow):
         Args:
             error_message (str): The error to show.
         """
+        log.warning(f"library fetch failed: {error_message}")
         self.error_message.setWindowTitle("Library Error")
         self.error_message.showMessage(error_message)
         self._update_login_status()
@@ -634,6 +646,7 @@ class MainWindow(QMainWindow):
             result (list[dict]): Products from
                 ``library_db.get_product_listing``.
         """
+        log.info(f"{len(result)} products loaded")
         self._update_login_status()
         self.status_progress.setVisible(False)
         self.fetch_games_button.setDisabled(False)

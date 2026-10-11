@@ -277,6 +277,53 @@ def test_other_process_errors_leave_login_disabled_while_helper_runs(login_windo
     assert not login_window.login_internal_action.isEnabled()
 
 
+@pytest.mark.parametrize("exit_code, exit_status, level", [
+    (ExitCode.EXIT_OK, QProcess.ExitStatus.NormalExit, "INFO"),
+    (ExitCode.EXIT_CANCELLED, QProcess.ExitStatus.NormalExit, "INFO"),
+    (ExitCode.EXIT_TOKEN_ERROR, QProcess.ExitStatus.NormalExit, "WARNING"),
+    (ExitCode.EXIT_NO_WEBVIEW, QProcess.ExitStatus.NormalExit, "WARNING"),
+    (4, QProcess.ExitStatus.CrashExit, "WARNING"),
+])
+def test_every_way_the_helper_ends_leaves_one_line_in_the_log(login_window, paste_dialog, warning_box, caplog, exit_code, exit_status, level):
+    # "Login didn't work" plus gogstash.log should be enough to tell which
+    # of the five ways it didn't work. Cancelling and succeeding are not
+    # problems, so they don't get to shout.
+    login_window.open_login_window()
+
+    with caplog.at_level("INFO", logger="gogstash.main"):
+        login_window.login_process.finished.emit(exit_code, exit_status)
+
+    [record] = [r for r in caplog.records if r.name == "gogstash.main"]
+    assert record.levelname == level
+
+
+def test_an_exit_code_we_never_handed_out_is_logged_as_is(login_window, paste_dialog, caplog):
+    # GTK's exit(1) without a display isn't one of ours, so the bare number is
+    # the only clue anyone gets.
+    login_window.open_login_window()
+
+    with caplog.at_level("INFO", logger="gogstash.main"):
+        login_window.login_process.finished.emit(1, QProcess.ExitStatus.NormalExit)
+
+    [record] = [r for r in caplog.records if r.name == "gogstash.main"]
+    assert record.levelname == "WARNING"
+    assert record.getMessage().endswith("1")
+
+
+@pytest.mark.parametrize("error", [QProcess.ProcessError.FailedToStart, QProcess.ProcessError.ReadError])
+def test_helper_process_errors_are_logged_even_when_nothing_else_happens(login_window, paste_dialog, caplog, error):
+    # Only FailedToStart changes what the user sees, but a ReadError is still
+    # worth a line in the log for whoever reads it after things go sideways.
+    login_window.open_login_window()
+
+    with caplog.at_level("INFO", logger="gogstash.main"):
+        login_window.login_process.errorOccurred.emit(error)
+
+    [record] = [r for r in caplog.records if r.name == "gogstash.main"]
+    assert record.levelname == "WARNING"
+    assert record.getMessage().endswith(login_window.login_process.errorString())
+
+
 def test_login_button_opens_a_menu_with_both_ways_in():
     # The whole point of the menu: people whose built-in login window breaks
     # need to reach the browser option without going through that window.
