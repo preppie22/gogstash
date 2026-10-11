@@ -3686,3 +3686,116 @@ def test_a_manifest_that_wont_take_a_file_keeps_its_traceback(tmp_path, caplog):
     assert "a.exe" in record.getMessage()
     assert record.exc_info[0] is PermissionError  # EACCES, as Python spells it
     assert sum("Error recording file" in line for line in _log_lines()) == 1  # the user's line is still there
+
+
+# --- what the worker tells gogstash.log, and what it never does ---
+
+SIGNED_CDN = "https://cdn.example.com/setup_fake_game.exe?token=SIGNED-SECRET"
+SIGNED_XML = "https://cdn.example.com/setup_fake_game.exe.xml?token=SIGNED-SECRET"
+
+
+def _everything_logged(caplog):
+    # Messages and tracebacks both, since log.exception leaks through the
+    # traceback just as well as through the message.
+    return "\n".join(f"{r.getMessage()}\n{r.exc_text or ''}" for r in caplog.records if r.name == "gogstash.download_queue")
+
+
+def test_describe_error_keeps_a_requests_error_to_its_type_and_status():
+    response = MagicMock(status_code=404)
+    error = requests.HTTPError(f"404 Client Error: Not Found for url: {SIGNED_CDN}", response=response)
+
+    described = download_queue._describe_error(error)
+
+    assert "HTTPError" in described and "404" in described
+    assert "SIGNED-SECRET" not in described
+
+
+def test_describe_error_copes_with_a_requests_error_that_never_got_a_response():
+    error = requests.ConnectionError(f"Max retries exceeded with url: {SIGNED_CDN}")
+
+    described = download_queue._describe_error(error)
+
+    assert "ConnectionError" in described
+    assert "SIGNED-SECRET" not in described
+
+
+def test_describe_error_tells_the_whole_story_for_everything_else():
+    assert "setup.exe" in download_queue._describe_error(FileNotFoundError(2, "No such file", "setup.exe"))
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_a_cdn_error_names_its_status_but_never_its_signed_link(mock_resolve, mock_get, tmp_path, caplog):
+    # Signed links are a download pass for whoever holds one. gogstash.log
+    # gets pasted into bug reports, so it holds the status code and that's it.
+    single_installer_setup(mock_resolve, tmp_path)
+    mock_resolve.return_value = {"downlink": SIGNED_CDN, "checksum": SIGNED_XML}
+    cdn = make_streamed_response([b"x" * 1000])
+    cdn.raise_for_status.side_effect = requests.HTTPError(
+        f"404 Client Error: Not Found for url: {SIGNED_CDN}", response=MagicMock(status_code=404)
+    )
+    mock_get.side_effect = [make_checksum_response("abc"), cdn]
+
+    with caplog.at_level("DEBUG", logger="gogstash.download_queue"):
+        make_worker().run()
+
+    logged = _everything_logged(caplog)
+    assert "404" in logged
+    assert "SIGNED-SECRET" not in logged
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_a_checksum_file_that_wont_load_never_leaks_its_signed_link(mock_resolve, mock_get, tmp_path, caplog):
+    single_installer_setup(mock_resolve, tmp_path)
+    mock_resolve.return_value = {"downlink": SIGNED_CDN, "checksum": SIGNED_XML}
+    checksum = make_checksum_response("abc")
+    checksum.raise_for_status.side_effect = requests.HTTPError(
+        f"403 Client Error: Forbidden for url: {SIGNED_XML}", response=MagicMock(status_code=403)
+    )
+    mock_get.return_value = checksum
+
+    with caplog.at_level("DEBUG", logger="gogstash.download_queue"):
+        make_worker().run()
+
+    logged = _everything_logged(caplog)
+    assert "403" in logged
+    assert "SIGNED-SECRET" not in logged
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]  # no traceback, it would carry the link
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_a_connection_dropping_mid_file_logs_the_kind_of_drop_and_nothing_else(mock_resolve, mock_get, tmp_path, caplog):
+    single_installer_setup(mock_resolve, tmp_path)
+    mock_resolve.return_value = {"downlink": SIGNED_CDN, "checksum": SIGNED_XML}
+    mock_get.side_effect = [
+        make_checksum_response("abc"),
+        requests.ConnectionError(f"HTTPSConnectionPool(host='cdn.example.com'): Max retries exceeded with url: {SIGNED_CDN}"),
+    ]
+
+    with caplog.at_level("DEBUG", logger="gogstash.download_queue"):
+        make_worker().run()
+
+    [warning] = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert "ConnectionError" in warning
+    assert "SIGNED-SECRET" not in _everything_logged(caplog)
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_a_checksum_mismatch_logs_both_hashes_and_both_sizes(mock_resolve, mock_get, tmp_path, caplog):
+    # "Checksum mismatch" alone can't tell a truncated download from a
+    # corrupted one. Both md5s and both sizes can.
+    single_installer_setup(mock_resolve, tmp_path)
+    body = b"x" * 1000
+    mock_get.side_effect = [make_checksum_response("0" * 32), make_streamed_response([body])]
+
+    with caplog.at_level("INFO", logger="gogstash.download_queue"):
+        make_worker().run()
+
+    [warning] = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert "0" * 32 in warning
+    assert hashlib.md5(body).hexdigest() in warning
+    assert "1000" in warning
+    assert "setup_fake_game.exe" in warning

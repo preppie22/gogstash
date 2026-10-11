@@ -744,6 +744,7 @@ class DownloadWorkerThread(QThread):
             slug = library_db.get_product_listing((self.product_id,))[0]['slug']
             download_path: Path = Path(settings.read_setting('download_path')) / slug
         except Exception as e:
+            log.exception(f"{self.product_id} raised")
             self.failed.emit(str(e))
             return
         
@@ -761,15 +762,18 @@ class DownloadWorkerThread(QThread):
                 filename = urllib.parse.urlparse(cdn_link).path.rsplit('/',-1)[-1]
                 filename = urllib.parse.unquote(filename)
             except gog_api.AuthenticationFailure as e:
+                log.warning(f"{self.product_id} raised auth failure (not logged in)")
                 self.failed.emit(str(e))
                 return
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                log.warning(f"{self.product_id}, {file['file']} could not be resolved (connection error)")
                 self.network_error.emit(self.resume_info if self.resume_link else {
                     'fetched_files': self.fetched_files,
                     'downlink': file['downlink']
                 })
                 return
             except Exception as e:
+                log.warning(f"{file['file']} resolve or checksum failed: {_describe_error(e)}")
                 self.fetched.emit({
                     'game_dir': download_path,
                     'filepath': Path(file['file']), 
@@ -788,6 +792,7 @@ class DownloadWorkerThread(QThread):
                 save_path: Path = download_path / file['directory'] / filename
                 save_path.parent.mkdir(parents=True, exist_ok=True)
             except Exception as e:
+                log.exception(f"{self.product_id}, {file['file']} raised")
                 self.fetched.emit({
                     'game_dir': download_path,
                     'filepath': Path(file['file']),
@@ -814,10 +819,11 @@ class DownloadWorkerThread(QThread):
                                     break
                                 file_hash.update(chunk)
                             fetched_bytes = part_path.stat().st_size
+                            log.info(f"resuming {filename} at {fetched_bytes}")
                             header_params['Range'] = f"bytes={fetched_bytes}-"
                             self.__fetched_size += fetched_bytes
                     except FileNotFoundError:
-                        pass
+                        log.warning(f"{filename} is resuming but its .part is gone, so it starts over")
                     self.resume_link = ""
                 with requests.get(cdn_link, headers=header_params, stream=True, timeout=HTTP_TIMEOUT) as download_response:
                     download_response.raise_for_status()
@@ -847,6 +853,7 @@ class DownloadWorkerThread(QThread):
                                 'version': file['version'],
                                 'skipped': True
                             })
+                            log.debug(f"{filename} already up to date")
                             self.__fetched_size = self.__fetched_size + existing_metadata['size']
                             self.fetched_files.append((file['downlink'], existing_metadata['size']))
                             self.update_progress()
@@ -856,6 +863,8 @@ class DownloadWorkerThread(QThread):
                     if download_response.status_code == 206:
                         file_mode = 'ab'
                     else:
+                        if fetched_bytes > 0:
+                            log.info(f"server ignored the Range header, so {filename} restarts from 0")
                         file_mode = 'wb'
                         self.__fetched_size -= fetched_bytes
                         file_hash = hashlib.md5()
@@ -932,6 +941,7 @@ class DownloadWorkerThread(QThread):
                         'version': file['version'],
                         'error': f"Checksum mismatch | Expected size: {file['size']} | Got size: {actual_size}"
                     })
+                    log.warning(f"{filename} expected {checksum} against {file_hash.hexdigest()}, and {content_length} against {actual_size}")
                     self._failed_flag = True
                 if self._stop_flag:
                     self.stopped.emit()
@@ -941,7 +951,8 @@ class DownloadWorkerThread(QThread):
                         'fetched_files': self.fetched_files
                     })
                     return
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.ChunkedEncodingError):
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.ChunkedEncodingError) as e:
+                log.warning(f"{self.product_id}, {filename}: {type(e).__name__}")
                 self.network_error.emit(self.resume_info if self.resume_link else {
                     'fetched_files': self.fetched_files,
                     'partpath': part_path,
@@ -949,6 +960,7 @@ class DownloadWorkerThread(QThread):
                 })
                 return
             except requests.exceptions.RequestException as e:
+                log.warning(f"{filename}: {_describe_error(e)}")
                 self.fetched.emit({
                     'game_dir': download_path,
                     'filepath': save_path,
@@ -963,6 +975,7 @@ class DownloadWorkerThread(QThread):
                 self._failed_flag = True
                 continue
             except Exception as e:
+                log.exception(f"{self.product_id}, {filename} raised")
                 self.fetched.emit({
                     'game_dir': download_path,
                     'filepath': save_path,
@@ -1007,6 +1020,24 @@ def _safe_size(path: Path) -> int:
         return path.stat().st_size
     except OSError:
         return 0
+
+def _describe_error(e: BaseException) -> str:
+    """Describe an exception in a form that is safe to log.
+
+    The message of a ``requests`` exception can hold the full request URL,
+    and a CDN or checksum URL carries a signed token, so those are reduced
+    to their type and the response's status code. Anything else is
+    described by its ``repr``.
+
+    Args:
+        e (BaseException): The exception to describe.
+
+    Returns:
+        str: The description, for example ``HTTPError: status code 404``.
+    """
+    if isinstance(e, requests.RequestException):
+        return f"{type(e).__name__}: status code {e.response.status_code if e.response is not None else 'N/A'}"
+    return f"{type(e).__name__}: {e}"
 
 def _write_log_file(fetched_file: dict) -> None:
     """Append a file result to the download log.
