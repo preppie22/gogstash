@@ -18,6 +18,7 @@ import shutil
 import errno
 from itertools import chain
 
+
 import urllib
 import requests
 import hashlib
@@ -30,6 +31,9 @@ from PySide6.QtCore import (
     QObject,
     Signal,
 )
+
+import logging
+log = logging.getLogger(__name__)
 
 class FreeCheckReturn(NamedTuple):
     """Result of the scheduler's free space check.
@@ -1001,7 +1005,7 @@ def _write_log_file(fetched_file: dict) -> None:
     """
     if not fetched_file:
         return
-    log_file = paths.config_file_path(paths.ConfigFile.DOWNLOAD_LOG)
+    log_file = paths.log_file_path(paths.LogFile.DOWNLOAD_LOG)
     error_msg = fetched_file.get('error', "")
     skipped = fetched_file.get('skipped', False)
     log_time = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -1030,7 +1034,7 @@ def _write_log_msg(message: str = "") -> None:
     """
     if not message:
         return
-    log_file = paths.config_file_path(paths.ConfigFile.DOWNLOAD_LOG)
+    log_file = paths.log_file_path(paths.LogFile.DOWNLOAD_LOG)
     log_entry = f"[{time.strftime("%Y-%m-%dT%H:%M:%S")}] : {message}\n"
     try:
         log_file.parent.mkdir(parents=True, exist_ok=True)

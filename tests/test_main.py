@@ -1,11 +1,15 @@
 import gc
+import importlib.metadata
+import logging.handlers
+import platform
 import sys
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import humanize
 import pytest
-from PySide6.QtCore import QProcess, Qt, QTimer
+from PySide6.QtCore import QProcess, Qt, QTimer, qVersion
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
@@ -13,6 +17,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 from gogstash import gog_auth, library_db, manifest
 from gogstash.login_window import ExitCode
 from gogstash.download_window import DownloadState
+from gogstash import main as gogstash_main
 from gogstash.main import MainWindow
 from gogstash.settings import update_setting
 from tests.fakes import gog_product
@@ -1385,3 +1390,106 @@ def test_refresh_finishing_waits_for_the_thread_then_closes_if_a_quit_is_pending
     window.fetch_thread.wait.assert_called_once()
     mock_timer.singleShot.assert_called_once_with(0, window.close)
     window.quit_pending = False
+
+
+# --- unhandled exceptions ---
+
+def _caught(exc):
+    # A real traceback, the way Python hands one to sys.excepthook
+    try:
+        raise exc
+    except BaseException as e:
+        return type(e), e, e.__traceback__
+
+
+def test_an_unhandled_exception_lands_in_the_log_with_its_traceback(caplog):
+    # Regression: the Windows build has no console, so a crash used to leave
+    # exactly as much evidence as a ninja. Now it signs the guest book.
+    with caplog.at_level("CRITICAL", logger="gogstash.main"):
+        gogstash_main._log_unhandled_exception(*_caught(KeyError("expires_in")))
+
+    [record] = caplog.records
+    assert record.levelname == "CRITICAL"
+    assert record.exc_info[0] is KeyError
+    assert "KeyError: 'expires_in'" in caplog.text
+    assert "Traceback (most recent call last)" in caplog.text
+
+
+def test_ctrl_c_goes_to_python_as_usual_instead_of_the_log(caplog):
+    # Hitting Ctrl+C in a terminal is a choice, not a crash report.
+    exc_info = _caught(KeyboardInterrupt())
+
+    with patch("sys.__excepthook__") as default_hook, caplog.at_level("DEBUG"):
+        gogstash_main._log_unhandled_exception(*exc_info)
+
+    default_hook.assert_called_once_with(*exc_info)
+    assert caplog.records == []
+
+
+class _MainRun:
+    """Runs main() with the window, the event loop and basicConfig faked out,
+    and keeps what basicConfig was handed and which hook was live by then."""
+
+    def __init__(self, monkeypatch):
+        monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # put back whatever was there after the test
+        self.config = None
+        self.hook_during_setup = None
+        monkeypatch.setattr(gogstash_main.logging, "basicConfig", self._basic_config)
+        monkeypatch.setattr(gogstash_main, "QApplication", MagicMock())
+        monkeypatch.setattr(gogstash_main, "MainWindow", MagicMock())
+        with patch("sys.exit"):
+            gogstash_main.main()
+
+    def _basic_config(self, **kwargs):
+        self.config = kwargs
+        self.hook_during_setup = sys.excepthook
+
+    @property
+    def handlers(self):
+        return list(self.config["handlers"])  # basicConfig loops over these, so must we
+
+    def close(self):
+        handlers = self.config.get("handlers") if self.config else None
+        for handler in handlers if isinstance(handlers, list) else [handlers] if handlers else []:
+            handler.close()
+
+
+@pytest.fixture
+def main_run(monkeypatch):
+    run = _MainRun(monkeypatch)
+    yield run
+    run.close()
+
+
+def test_main_installs_the_hook_once_logging_is_set_up(main_run):
+    assert sys.excepthook is gogstash_main._log_unhandled_exception
+    assert main_run.hook_during_setup is not gogstash_main._log_unhandled_exception  # logging first, hook after
+
+
+def test_main_logs_to_a_rotating_utf8_file_in_the_logs_folder(main_run, tmp_path):
+    # Regression: a lone handler instead of a list of them. basicConfig tried
+    # to loop over it and GogStash died before it had a window, or a log to
+    # say so in. The excepthook was installed one line too late to notice.
+    [handler] = main_run.handlers
+
+    assert isinstance(handler, logging.handlers.RotatingFileHandler)
+    assert Path(handler.baseFilename) == tmp_path / "logs" / "gogstash.log"
+    assert (tmp_path / "logs").is_dir()  # made on the spot, or the handler has nowhere to open the file
+    assert handler.maxBytes == 2 * 1024 * 1024
+    assert handler.backupCount == 3
+    assert handler.encoding == "utf-8"  # Windows' code page meets a Polish game title, loses
+    assert "filename" not in main_run.config  # basicConfig refuses filename and handlers together
+
+
+def test_main_opens_the_log_with_who_is_running_what(monkeypatch, caplog):
+    # The first thing anyone asks on a bug report, answered before they ask.
+    with caplog.at_level("INFO", logger="gogstash.main"):
+        run = _MainRun(monkeypatch)
+    run.close()
+
+    [startup] = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Starting GogStash")]
+    assert importlib.metadata.version("gogstash") in startup
+    assert platform.platform() in startup
+    assert f"Python {platform.python_version()}" in startup
+    assert f"Qt {qVersion()}" in startup
+    assert "frozen=False" in startup

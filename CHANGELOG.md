@@ -8,6 +8,13 @@ suffix until the first stable release), not SemVer.
 
 ## [Unreleased]
 
+### Added
+- Unexpected errors are now written to `gogstash.log` with their full details, so they can be attached to bug reports. Each run also starts the log with the GogStash, OS, Python and Qt versions
+
+### Changed
+- Log files have moved into a `logs` folder inside the config directory: `gogstash.log`, `downloads.log`, and a new `login.log` for "Log in through GogStash". The old `gogstash.log` and `downloads.log` in the config directory itself are no longer written to
+- `gogstash.log` and `login.log` no longer grow forever: each starts a new file at 2 MB and keeps the last three
+
 ## [2026.10.11-beta] - 2026-10-11
 
 ### Added

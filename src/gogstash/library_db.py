@@ -15,6 +15,9 @@ from gogstash import settings
 
 from PySide6.QtCore import QThread, Signal
 
+import logging
+log = logging.getLogger(__name__)
+
 SCHEMA_VERSION = 1
 
 class DownloadValues(NamedTuple):

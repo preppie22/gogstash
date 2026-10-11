@@ -17,7 +17,7 @@ import logging
 from enum import IntEnum
 
 from gogstash import gog_auth
-from gogstash.paths import ConfigFile, config_file_path
+from gogstash.paths import LogFile, setup_logging
 
 class ExitCode(IntEnum):
     """How the login helper ended, reported through its exit code.
@@ -78,24 +78,14 @@ BASE_PAGE = """
 </html>
 """
 
+log = logging.getLogger(__name__)
+
 class LoginWindow():
     """The login window and everything the helper process does around it."""
     def __init__(self):
-        """Set up logging to the app log file.
-
-        The helper is its own process, so it doesn't share the main
-        window's logging setup.
-        """
+        """Start with no code caught and no failed page load."""
         self.__code = None
         self.__load_failed = False
-        log_file = config_file_path(ConfigFile.APP_LOG)
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        logging.basicConfig(
-        filename=str(log_file),
-        format='[%(asctime)s | %(module)s] - %(levelname)s - %(message)s',
-        level=logging.INFO
-        )
-        self.log = logging.getLogger(__name__)
 
     @property
     def code(self):
@@ -126,11 +116,11 @@ class LoginWindow():
         if getattr(sys, "frozen", False) and sys.platform.startswith("linux"):
             found = [d for d in TYPELIB_DIRS if Path(d).is_dir()]
             os.environ["GI_TYPELIB_PATH"] = os.pathsep.join(found)
-            self.log.info(f"typelib dirs: {found}")
+            log.info(f"typelib dirs: {found}")
         try:
             import webview
         except Exception as e:
-            self.log.warning(f"pywebview import failed: {e!r}")
+            log.warning(f"pywebview import failed: {e!r}")
             return ExitCode.EXIT_NO_WEBVIEW
 
         done = threading.Event()
@@ -142,7 +132,7 @@ class LoginWindow():
                 window.load_url(gog_auth.build_auth_uri())
             except Exception as e:
                 if not done.is_set():
-                    self.log.warning(f"unable to load login page: {e!r}")
+                    log.warning(f"unable to load login page: {e!r}")
                     self.__load_failed = True
                     done.set()
                     window.destroy()
@@ -165,17 +155,17 @@ class LoginWindow():
         try:
             webview.start(gui=gui, private_mode=True)
         except Exception as e:
-            self.log.warning(f"webview.start failed with gui={gui}: {e!r}")
+            log.warning(f"webview.start failed with gui={gui}: {e!r}")
             return ExitCode.EXIT_NO_WEBVIEW
         if self.__load_failed:
             return ExitCode.EXIT_NO_WEBVIEW
         if self.__code:
-            self.log.info("code fetched successfully")
+            log.info("code fetched successfully")
             if self._create_token():
                 return ExitCode.EXIT_OK
             return ExitCode.EXIT_TOKEN_ERROR
 
-        self.log.info("window closed without a code")
+        log.info("window closed without a code")
         return ExitCode.EXIT_CANCELLED
 
     def _create_token(self) -> bool:
@@ -189,15 +179,25 @@ class LoginWindow():
             token = gog_auth.fetch_token(self.code)
             gog_auth.save_token(token)
         except requests.RequestException as e:
-            self.log.warning(f"connection to gog api failed: {e!r}")            
+            log.warning(f"connection to gog api failed: {e!r}")            
             return False
         except KeyError as e:
-            self.log.warning(f"expired or invalid address: {e!r}")
+            log.warning(f"expired or invalid address: {e!r}")
             return False
         return True
 
-if __name__ == "__main__":
+def main():
+    """Run the login helper and exit with its ``ExitCode``.
+
+    Both ``python -m gogstash.login_window`` and the frozen build's
+    ``--login-helper`` start here. The helper is its own process, so it
+    sets up its own logging, to ``login.log`` rather than the main
+    window's ``gogstash.log``.
+    """
     login_window = LoginWindow()
+    setup_logging(LogFile.AUTH_LOG)
     sys.exit(login_window.start_helper())
 
+if __name__ == "__main__":
+    main()
     

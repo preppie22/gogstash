@@ -26,6 +26,9 @@ from PySide6.QtGui import (
     QDesktopServices
 )
 
+import logging
+log = logging.getLogger(__name__)
+
 class ExternalLoginDialog(QDialog):
     """Two-step dialog that logs in to GOG through the user's browser.
 

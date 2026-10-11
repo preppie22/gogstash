@@ -1824,7 +1824,7 @@ def _scheduler_with_game_files(tmp_path, *names):
 
 
 def _log_lines():
-    log_file = paths.config_file_path(paths.ConfigFile.DOWNLOAD_LOG)
+    log_file = paths.log_file_path(paths.LogFile.DOWNLOAD_LOG)
     return log_file.read_text().splitlines() if log_file.exists() else []
 
 

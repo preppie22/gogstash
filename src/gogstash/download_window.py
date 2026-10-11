@@ -47,6 +47,8 @@ from gogstash.icon_utils import get_icon, status_indicator
 from gogstash.download_queue import DownloadScheduler
 from gogstash.settings import read_setting
 
+import logging
+log = logging.getLogger(__name__)
 
 LIGHT_FILL_COLOR = QColor("#4CAF50")
 DARK_FILL_COLOR = QColor("#1B5E20")

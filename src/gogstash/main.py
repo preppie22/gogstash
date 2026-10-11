@@ -6,6 +6,9 @@ from pathlib import Path
 import importlib.metadata
 from enum import IntEnum
 import logging
+import logging.handlers
+from types import TracebackType
+import platform
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -42,7 +45,8 @@ from PySide6.QtCore import (
     QUrl,
     QProcess,
     QProcessEnvironment,
-    QTimer
+    QTimer,
+    qVersion
 )
 
 from gogstash import gog_auth
@@ -55,6 +59,8 @@ from gogstash.manifest import read_manifest, check_exist_by_downlink
 from gogstash.download_window import DownloadWindow, UserRole, DownloadState
 from gogstash.icon_utils import get_icon, get_logo, status_indicator
 from gogstash import paths
+
+log = logging.getLogger(__name__)
 
 class Column(IntEnum):
     """Column indices of the library tree."""
@@ -128,7 +134,6 @@ class MainWindow(QMainWindow):
 
         # Variables
         self._games_list_map = {}
-        self.log = logging.getLogger(__name__)
         self.quit_pending = False
         self.fetch_thread = None
 
@@ -784,16 +789,43 @@ class MainWindow(QMainWindow):
                 fetched[game['product_id']] = True
         return fetched
 
+def _log_unhandled_exception(exc_type: type[BaseException], exc_value: BaseException, exc_tb: TracebackType | None) -> None:
+    """Write an uncaught exception and its traceback to the app log.
+
+    ``main`` installs this as ``sys.excepthook``. Python calls it for
+    any exception nothing caught, and PySide6 does too for exceptions
+    raised in slots, timer callbacks and ``QThread.run``. The app keeps
+    running after those. The Windows build has no console, so without
+    this hook their tracebacks would be lost. ``KeyboardInterrupt`` goes
+    to Python's default hook instead, so Ctrl+C in a terminal behaves as
+    usual.
+
+    Args:
+        exc_type (type[BaseException]): The exception's class.
+        exc_value (BaseException): The exception that was raised.
+        exc_tb (TracebackType | None): Its traceback.
+    """
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+        return
+    log.critical("Unhandled exception", exc_info=(exc_type, exc_value, exc_tb))
+
 def main():
-    """Start the application and show the main window."""
+    """Start the application and show the main window.
+
+    Logging goes to ``gogstash.log`` in the ``logs`` folder of the config
+    directory, which rolls over at 2 MB and keeps three old files. The
+    excepthook is installed once logging is set up, then the first entry
+    records the GogStash, OS, Python and Qt versions and whether this is
+    the frozen build.
+    """
     app = QApplication(sys.argv)
-    log_file = paths.config_file_path(paths.ConfigFile.APP_LOG)
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        filename=str(log_file),
-        format='[%(asctime)s | %(module)s] - %(levelname)s - %(message)s',
-        level=logging.INFO
-    )
+    paths.setup_logging(paths.LogFile.APP_LOG)
+    sys.excepthook = _log_unhandled_exception
+    log.info(f"Starting GogStash {importlib.metadata.version("gogstash")} on {platform.platform()}, "
+        f"Python {platform.python_version()}, "
+        f"Qt {qVersion()}, "
+        f"frozen={getattr(sys, "frozen", False)}")
     app.setStyle('Fusion')
     window = MainWindow()
     window.show()

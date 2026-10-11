@@ -12,6 +12,9 @@ import json
 from typing import NamedTuple
 from pathlib import Path
 
+import logging
+log = logging.getLogger(__name__)
+
 MANIFEST_FILE = ".gogstash.manifest"
 FILE_ATTRIBUTE_HIDDEN = 0x2
 

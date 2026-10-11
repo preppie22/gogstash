@@ -6,6 +6,9 @@ from typing import Callable
 from gogstash import gog_auth
 from gogstash.constants import HTTP_TIMEOUT
 
+import logging
+log = logging.getLogger(__name__)
+
 PRODUCT_URL = "https://api.gog.com/products"
 USER_GAMES = "https://embed.gog.com/user/data/games"
 

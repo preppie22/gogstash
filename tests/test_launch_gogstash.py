@@ -40,8 +40,9 @@ def run_launcher(monkeypatch, *args):
 
 
 @patch("gogstash.main.main")
+@patch("gogstash.login_window.setup_logging")
 @patch("gogstash.login_window.LoginWindow")
-def test_login_helper_flag_runs_helper_and_exits_with_its_code(mock_login_cls, mock_main, monkeypatch, clean_env):
+def test_login_helper_flag_runs_helper_and_exits_with_its_code(mock_login_cls, mock_setup, mock_main, monkeypatch, clean_env):
     mock_login_cls.return_value.start_helper.return_value = 75
 
     with pytest.raises(SystemExit) as exited:
@@ -49,6 +50,9 @@ def test_login_helper_flag_runs_helper_and_exits_with_its_code(mock_login_cls, m
 
     # The exit code is the helper's only way of talking to the main window.
     assert exited.value.code == 75
+    # Regression: the launcher went straight to start_helper and skipped the
+    # logging setup, so in the release builds the helper's diary stayed blank.
+    mock_setup.assert_called_once()
     # Regression: an instance, not the class. Calling start_helper on the
     # class itself died wanting a `self`.
     mock_login_cls.assert_called_once_with()

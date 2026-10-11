@@ -10,6 +10,9 @@ from typing import Any
 
 from gogstash import paths
 
+import logging
+log = logging.getLogger(__name__)
+
 GOG_LANGUAGES = {
     'en': 'English',                   # English
     'ar': 'العربية',                   # Arabic

@@ -17,6 +17,9 @@ from gogstash.constants import (
     CLIENT_SECRET
 )
 
+import logging
+log = logging.getLogger(__name__)
+
 REDIRECT_URI = "https://embed.gog.com/on_login_success?origin=client"
 AUTH_URL = "https://auth.gog.com/auth"
 TOKEN_URL = "https://auth.gog.com/token"

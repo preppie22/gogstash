@@ -36,7 +36,9 @@ from PySide6.QtGui import (
 )
 from gogstash import settings
 from gogstash import library_db
-from gogstash import gog_auth
+
+import logging
+log = logging.getLogger(__name__)
 
 class SettingsDialog(QDialog):
     """Dialog for editing user settings and clearing the library cache.

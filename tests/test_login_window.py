@@ -265,3 +265,20 @@ def test_from_source_leaves_gi_typelib_path_alone(monkeypatch, not_frozen):
     LoginWindow().start_helper()
 
     assert login_window.os.environ["GI_TYPELIB_PATH"] == "/whatever/the/user/had"
+
+
+@patch("gogstash.login_window.setup_logging")
+@patch("gogstash.login_window.LoginWindow")
+def test_main_logs_to_its_own_file_then_exits_with_the_helpers_code(mock_login_cls, mock_setup):
+    order = []
+    mock_setup.side_effect = lambda log_file: order.append("logging")
+    mock_login_cls.return_value.start_helper.side_effect = lambda: order.append("helper") or ExitCode.EXIT_CANCELLED
+
+    with pytest.raises(SystemExit) as exited:
+        login_window.main()
+
+    # Its own file: sharing gogstash.log meant the main window rotating it
+    # while the helper still held it open, which Windows takes personally.
+    mock_setup.assert_called_once_with(login_window.LogFile.AUTH_LOG)
+    assert order == ["logging", "helper"]  # set up before the first line worth keeping
+    assert exited.value.code == ExitCode.EXIT_CANCELLED
