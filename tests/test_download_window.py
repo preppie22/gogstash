@@ -838,7 +838,7 @@ class _IdleWorker(QObject):
     network_error = Signal(dict)
     bytes_downloaded = Signal(int)
 
-    def __init__(self, product_id, file_queue=None, resume_link=None):
+    def __init__(self, product_id, file_queue=None, resume_info=None):
         super().__init__()
         self.total_size = sum(f["size"] for f in file_queue or [])
         self.fetched_size = 0
@@ -1616,3 +1616,79 @@ def test_resuming_after_removing_the_only_paused_game_finishes_instead_of_hangin
     assert window.downloads_status.text() == "Downloads complete"
     assert window.start_button.text() == "Start Downloads"
     assert _titles(window) == ["G0"]
+
+
+class _Ticker:
+    """Drives _measure_speed by hand: one tick per call, one second apart,
+    with however many bytes the workers 'received' since the last one. The
+    real timer never gets a word in edgewise during a test run."""
+
+    def __init__(self, window):
+        self.window = window
+        self.now = 1000.0
+
+    def tick(self, mb=0):
+        self.window.scheduler._handle_bytes_downloaded(mb * 1_000_000)
+        self.now += 1
+        with patch("gogstash.download_window.time.monotonic", return_value=self.now):
+            self.window._measure_speed()
+
+
+def test_speed_and_eta_come_from_bytes_per_second():
+    window = DownloadWindow()
+    window.eta_size = 600_000_000
+    ticker = _Ticker(window)
+
+    for _ in range(3):  # one tick to set the baseline, two to measure
+        ticker.tick(mb=10)
+
+    assert window.download_speed.text() == "10.0 MB/s (ETA: a minute)"
+
+
+def test_the_eta_uses_the_slower_30_second_average_and_the_label_the_last_10():
+    # 20 s at 10 MB/s, then 10 s at 20 MB/s. The label shows what's
+    # happening now, the ETA doesn't get excited about one good stretch.
+    window = DownloadWindow()
+    window.eta_size = 800_000_000
+    ticker = _Ticker(window)
+    ticker.tick()  # baseline
+    for _ in range(20):
+        ticker.tick(mb=10)
+    for _ in range(10):
+        ticker.tick(mb=20)
+
+    # 30 s average: (20 * 10 + 10 * 20) / 30 = 13.3 MB/s, so 800 MB is a minute
+    assert window.download_speed.text() == "20.0 MB/s (ETA: a minute)"
+
+
+def test_a_stalled_download_drops_to_zero_and_hides_the_eta():
+    # Regression: the very first speed only changed when a chunk arrived,
+    # so a dead connection kept bragging about its last good second forever.
+    window = DownloadWindow()
+    window.eta_size = 600_000_000
+    ticker = _Ticker(window)
+    ticker.tick()
+    for _ in range(5):
+        ticker.tick(mb=10)
+    for _ in range(10):
+        ticker.tick()
+
+    assert window.download_speed.text() == "0 Bytes/s"
+
+
+def test_going_idle_forgets_the_last_runs_speed():
+    window = DownloadWindow()
+    window.eta_size = 600_000_000
+    ticker = _Ticker(window)
+    ticker.tick()
+    for _ in range(10):
+        ticker.tick(mb=50)
+
+    window.current_state = DownloadState.RUNNING
+    window.current_state = DownloadState.IDLE
+    window._reset_scheduler()  # what _reset_all does next: a fresh counter at 0
+    for _ in range(3):
+        ticker.tick(mb=10)
+
+    # Leftover 50 MB/s ticks would pull this way up
+    assert window.download_speed.text() == "10.0 MB/s (ETA: a minute)"

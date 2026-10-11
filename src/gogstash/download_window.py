@@ -178,10 +178,9 @@ class DownloadWindow(QDockWidget):
         self.__queue_map = {}
         self.__dl_speed_timer = QTimer()
         self.__bytes_dled = 0
-        self.__speed_buffer = deque([], 10)
+        self.__speed_buffer = deque([], 30)
         self.__time_now = 0
         self.eta_size = 0
-        self.__eta_buffer = deque([], 30)
 
         self._reset_scheduler()
         self.__dl_speed_timer.timeout.connect(self._measure_speed)
@@ -281,7 +280,6 @@ class DownloadWindow(QDockWidget):
         else:
             self.__dl_speed_timer.stop()
             self.__speed_buffer.clear()
-            self.__eta_buffer.clear()
             self.__time_now = 0
             self.__bytes_dled = 0
         self.busy_changed.emit(value != DownloadState.IDLE)
@@ -758,6 +756,16 @@ class DownloadWindow(QDockWidget):
         ).exec()
 
     def _measure_speed(self):
+        """Update the speed and ETA label, once a second while not idle.
+
+        Each tick stores the bytes the scheduler received since the last
+        tick and the time that took, keeping the last 30. The speed shown
+        is the total bytes over the total time of the last 10 ticks. The
+        ETA divides what is left by the same average over all 30, so the
+        gaps between files don't make it jump. The first tick after going
+        idle only sets the starting point. With no bytes in the last 10
+        ticks, the speed shows 0 and the ETA is hidden.
+        """
         if self.__time_now == 0:
             self.__time_now = time.monotonic()
             self.__bytes_dled = self.scheduler.bytes_downloaded
@@ -770,12 +778,12 @@ class DownloadWindow(QDockWidget):
         delta_bytes = total_bytes - self.__bytes_dled
         self.__bytes_dled = total_bytes
         self.__speed_buffer.append((delta_time, delta_bytes))
-        self.__eta_buffer.append((delta_time, delta_bytes))
 
         if len(self.__speed_buffer) < 2:
             return
-        avg_speed = sum(buffer[1] for buffer in self.__speed_buffer) / sum(buffer[0] for buffer in self.__speed_buffer)
-        avg_eta = self.eta_size / (sum(buffer[1] for buffer in self.__eta_buffer) / sum(buffer[0] for buffer in self.__eta_buffer)) if avg_speed > 0 else 0
+        speed_buffer = tuple(self.__speed_buffer)
+        avg_speed = sum(buffer[1] for buffer in speed_buffer[-10:]) / sum(buffer[0] for buffer in speed_buffer[-10:])
+        avg_eta = self.eta_size / (sum(buffer[1] for buffer in speed_buffer) / sum(buffer[0] for buffer in speed_buffer)) if avg_speed > 0 else 0
         speed_str = f"{humanize.naturalsize(avg_speed)}/s"
         speed_str += f" (ETA: {humanize.naturaldelta(dt.timedelta(seconds=avg_eta))})" if avg_speed > 0 else ""
         self.download_speed.setText(speed_str)

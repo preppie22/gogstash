@@ -133,6 +133,9 @@ class DownloadScheduler(QObject):
 
     @property
     def bytes_downloaded(self):
+        """int: Bytes received by all workers since this scheduler was
+        created. Only ever goes up, the download window turns it into a
+        speed."""
         return self.__bytes_downloaded
 
     def set_concurrency(self, value):
@@ -179,7 +182,7 @@ class DownloadScheduler(QObject):
             'worker': None,
             'file_queue': file_queue,
             'stopped': False,
-            'resume_link': {}
+            'resume_info': {}
         }
         self.idle_queue.append(queue_item)
         download_size = sum(file['size'] for file in file_queue)
@@ -205,7 +208,7 @@ class DownloadScheduler(QObject):
         to_remove = None
         for job in chain(self.idle_queue, self.paused_queue):
             if job.get('product_id') == pid:
-                part_path: Path = job['resume_link'].get('partpath', None)
+                part_path: Path = job['resume_info'].get('partpath', None)
                 if part_path:
                     _discard_partial_downloads(part_path.parent.parent)
                 to_remove = job
@@ -236,7 +239,7 @@ class DownloadScheduler(QObject):
         while self.paused_queue:
             job = self.paused_queue.pop()
             self.game_stopped.emit(job['product_id'])
-            part_path : Path = job['resume_link'].get('partpath', None)
+            part_path : Path = job['resume_info'].get('partpath', None)
             if part_path: 
                 _discard_partial_downloads(part_path.parent.parent)
         self.schedule()
@@ -356,15 +359,15 @@ class DownloadScheduler(QObject):
         Args:
             job (dict): The job to start.
         """
-        job['worker'] = DownloadWorkerThread(job['product_id'], job.get('file_queue'), job.get('resume_link'))
+        job['worker'] = DownloadWorkerThread(job['product_id'], job.get('file_queue'), job.get('resume_info'))
         job['worker'].succeeded.connect(lambda t=job: self._handle_success(t))
         job['worker'].failed.connect(lambda msg, t=job: self._handle_failure(t, msg))
         job['worker'].progress.connect(lambda fetched_size, total_size, t=job: self._report_progress(t, fetched_size, total_size))
         job['worker'].stopped.connect(lambda t=job: self._handle_stopped(t))
-        job['worker'].paused.connect(lambda resume_link, t=job: self._handle_paused(t, resume_link))
+        job['worker'].paused.connect(lambda resume_info, t=job: self._handle_paused(t, resume_info))
         job['worker'].fetched.connect(self._handle_fetched)
-        job['worker'].disk_full.connect(lambda resume_link, t=job: self._handle_disk_full(t, resume_link))
-        job['worker'].network_error.connect(lambda resume_link, t=job: self._handle_network_error(t, resume_link))
+        job['worker'].disk_full.connect(lambda resume_info, t=job: self._handle_disk_full(t, resume_info))
+        job['worker'].network_error.connect(lambda resume_info, t=job: self._handle_network_error(t, resume_info))
         job['worker'].bytes_downloaded.connect(self._handle_bytes_downloaded)
         self.active_queue.append(job)
         self.tokens = self.tokens - 1
@@ -484,25 +487,25 @@ class DownloadScheduler(QObject):
         self._reap(job)
         self.schedule()
 
-    def _handle_paused(self, job: dict, resume_link: dict) -> None:
+    def _handle_paused(self, job: dict, resume_info: dict) -> None:
         """Move a paused job to the paused queue.
 
         Args:
             job (dict): The paused job.
-            resume_link (dict): Resume information from the worker, with
-                ``partpath`` and ``downlink`` of the partial file. Empty if
-                the worker paused between files.
+            resume_info (dict): Resume information from the worker, with
+                ``fetched_files`` and, if it paused mid-file, ``partpath``
+                and ``downlink`` of the partial file.
         """
         self.game_paused.emit(job['product_id'])
         if job in self.active_queue:
             paused_job = job.copy()
-            paused_job['resume_link'] = resume_link
+            paused_job['resume_info'] = resume_info
             paused_job['remaining_size'] = job['worker'].total_size - job['worker'].fetched_size
             self.paused_queue.append(paused_job)
         self._reap(job)
         self.schedule()
 
-    def _handle_disk_full(self, job: dict, resume_link: dict) -> None:
+    def _handle_disk_full(self, job: dict, resume_info: dict) -> None:
         """Pause all downloads after a worker ran out of disk space.
 
         The job goes to the paused queue with its resume information, so
@@ -515,14 +518,15 @@ class DownloadScheduler(QObject):
 
         Args:
             job (dict): The job whose worker ran out of space.
-            resume_link (dict): Resume information from the worker, with
-                ``partpath`` and ``downlink`` of the partial file.
+            resume_info (dict): Resume information from the worker, with
+                ``fetched_files``, and ``partpath`` and ``downlink`` of the
+                partial file.
         """
         if self._stopped_flag:
             _write_log_msg("Download folder ran out of space while stopping")
             if job in self.active_queue:
                 self.game_stopped.emit(job['product_id'])
-                part_path : Path = resume_link.get('partpath', None)
+                part_path : Path = resume_info.get('partpath', None)
                 if part_path: 
                     _discard_partial_downloads(part_path.parent.parent)
         else:
@@ -533,13 +537,13 @@ class DownloadScheduler(QObject):
             self.game_paused.emit(job['product_id'])
             if job in self.active_queue:
                 paused_job = job.copy()
-                paused_job['resume_link'] = resume_link
+                paused_job['resume_info'] = resume_info
                 paused_job['remaining_size'] = job['worker'].total_size - job['worker'].fetched_size
                 self.paused_queue.append(paused_job)
         self._reap(job)
         self.schedule()
 
-    def _handle_network_error(self, job: dict, resume_link: dict) -> None:
+    def _handle_network_error(self, job: dict, resume_info: dict) -> None:
         """Pause all downloads after a worker lost its connection.
 
         Works like ``_handle_disk_full``: the job goes to the paused queue
@@ -551,14 +555,15 @@ class DownloadScheduler(QObject):
 
         Args:
             job (dict): The job whose worker lost its connection.
-            resume_link (dict): Resume information from the worker, with
-                ``downlink`` and, once the file had started, ``partpath``.
+            resume_info (dict): Resume information from the worker, with
+                ``fetched_files``, ``downlink`` and, once the file had
+                started, ``partpath``.
         """
         if self._stopped_flag:
             _write_log_msg("Connection error while stopping")
             if job in self.active_queue:
                 self.game_stopped.emit(job['product_id'])
-                part_path : Path = resume_link.get('partpath', None)
+                part_path : Path = resume_info.get('partpath', None)
                 if part_path: 
                     _discard_partial_downloads(part_path.parent.parent)
         else:
@@ -569,13 +574,18 @@ class DownloadScheduler(QObject):
             self.game_paused.emit(job['product_id'])
             if job in self.active_queue:
                 paused_job = job.copy()
-                paused_job['resume_link'] = resume_link
+                paused_job['resume_info'] = resume_info
                 paused_job['remaining_size'] = job['worker'].total_size - job['worker'].fetched_size
                 self.paused_queue.append(paused_job)
         self._reap(job)
         self.schedule()
 
     def _handle_bytes_downloaded(self, size: int) -> None:
+        """Add a worker's chunk to ``bytes_downloaded``.
+
+        Args:
+            size (int): Bytes in the chunk.
+        """
         self.__bytes_downloaded += size
 
     def _handle_failure(self, job: dict, msg: str) -> None:
@@ -608,19 +618,23 @@ class DownloadWorkerThread(QThread):
     are skipped. A paused file is resumed from its ``.part`` file with an
     HTTP range request. Running out of disk space or losing the
     connection mid-file keeps the ``.part`` file so the download can be
-    resumed the same way.
+    resumed the same way. Files finished before a pause are left out of
+    the resumed worker's queue, and their bytes count as already fetched.
 
     Attributes:
         succeeded (Signal): All files were downloaded or skipped.
         failed (Signal(str)): The game could not be fully downloaded.
         progress (Signal(float, float)): Bytes fetched and total bytes.
         stopped (Signal): The worker stopped after ``stop_worker``.
-        paused (Signal(dict)): The worker paused, with resume information.
+        paused (Signal(dict)): The worker paused, with resume information:
+            ``fetched_files``, and ``partpath`` and ``downlink`` if it
+            paused mid-file.
         fetched (Signal(dict)): A file was downloaded, skipped or failed.
         disk_full (Signal(dict)): The disk filled up while writing a file.
             Carries the same resume information as ``paused``.
         network_error (Signal(dict)): The connection to GOG dropped or
             timed out. Carries the same resume information as ``paused``.
+        bytes_downloaded (Signal(int)): A chunk arrived, with its size.
         resume_info (dict): The resume information the worker was created
             with, empty if none. Passed on unchanged if the connection
             drops before the worker reaches the file it describes.
@@ -628,7 +642,12 @@ class DownloadWorkerThread(QThread):
             once the worker reaches that file.
         product_id (int): GOG product ID of the game.
         file_queue (list[dict]): Files to download, from
-            ``generate_download_list``.
+            ``generate_download_list``, minus those finished before a
+            pause.
+        fetched_files (list[tuple[str, int]]): Downlink and size of every
+            file finished or skipped, including those from before a
+            pause. Sent along with every resume information. Failed files
+            are not in it, so a resume tries them again.
         total_size (int): Total bytes to download. Known from the moment
             the worker is created, and corrected as the real file sizes
             arrive.
@@ -648,24 +667,31 @@ class DownloadWorkerThread(QThread):
     _pause_flag = False
     _failed_flag = False
 
-    def __init__(self, product_id: int, file_queue: list[dict] | None = None, resume_link: dict | None = None, parent=None):
+    def __init__(self, product_id: int, file_queue: list[dict] | None = None, resume_info: dict | None = None, parent=None):
         """Create the worker.
 
         Args:
             product_id (int): GOG product ID of the game.
             file_queue (list[dict] | None): Files to download, from
                 ``generate_download_list``.
-            resume_link (dict | None): Resume information from an earlier
-                pause, with the ``downlink`` of the file to resume.
+            resume_info (dict | None): Resume information from an earlier
+                pause, with ``fetched_files`` and the ``downlink`` of the
+                file to resume.
             parent (QObject): Optional parent object.
         """
         super().__init__(parent)
-        self.resume_info = resume_link or {}
-        self.resume_link = resume_link.get('downlink', "") if resume_link else ""
+        self.resume_info = resume_info or {}
+        self.resume_link = resume_info.get('downlink', "") if resume_info else ""
         self.product_id = product_id
-        self.file_queue = file_queue or []
-        self.__total_size = sum(file.get('size', 0) for file in self.file_queue)
-        self.__fetched_size = 0
+        self.file_queue = []
+        if file_queue:
+            downloaded_links = set([file[0] for file in self.resume_info.get('fetched_files', [])])
+            for file in file_queue:
+                if file['downlink'] not in downloaded_links:
+                    self.file_queue.append(file)
+        self.fetched_files = self.resume_info.get('fetched_files') or []
+        self.__fetched_size = sum(file[1] for file in self.fetched_files)
+        self.__total_size = sum(file.get('size', 0) for file in self.file_queue) + self.__fetched_size
         self.__last_emitted = 0
 
     @property
@@ -717,7 +743,10 @@ class DownloadWorkerThread(QThread):
                 self.failed.emit(str(e))
                 return
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-                self.network_error.emit(self.resume_info if self.resume_link else {'downlink': file['downlink']})
+                self.network_error.emit(self.resume_info if self.resume_link else {
+                    'fetched_files': self.fetched_files,
+                    'downlink': file['downlink']
+                })
                 return
             except Exception as e:
                 self.fetched.emit({
@@ -798,6 +827,7 @@ class DownloadWorkerThread(QThread):
                                 'skipped': True
                             })
                             self.__fetched_size = self.__fetched_size + existing_metadata['size']
+                            self.fetched_files.append((file['downlink'], existing_metadata['size']))
                             self.update_progress()
                             continue
                     self.__total_size += (content_length - file['size'])
@@ -828,6 +858,7 @@ class DownloadWorkerThread(QThread):
                                         break
                                     if self._pause_flag:
                                         self.paused.emit({
+                                            'fetched_files': self.fetched_files,
                                             'partpath': part_path,
                                             'downlink': file['downlink']
                                         })
@@ -835,6 +866,7 @@ class DownloadWorkerThread(QThread):
                     except OSError as e:
                         if e.errno == errno.ENOSPC or e.errno == errno.EDQUOT:
                             self.disk_full.emit({
+                                'fetched_files': self.fetched_files,
                                 'partpath': part_path,
                                 'downlink': file['downlink']                                
                             })
@@ -854,6 +886,7 @@ class DownloadWorkerThread(QThread):
                         verified = True
                 if verified:
                     part_path.replace(save_path)
+                    self.fetched_files.append((file['downlink'], save_path.stat().st_size))
                     self.fetched.emit({
                         'game_dir': download_path,
                         'filepath': save_path,
@@ -883,10 +916,13 @@ class DownloadWorkerThread(QThread):
                     self.stopped.emit()
                     return
                 if self._pause_flag:
-                    self.paused.emit({})
+                    self.paused.emit({
+                        'fetched_files': self.fetched_files
+                    })
                     return
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.ChunkedEncodingError):
                 self.network_error.emit(self.resume_info if self.resume_link else {
+                    'fetched_files': self.fetched_files,
                     'partpath': part_path,
                     'downlink': file['downlink']
                 })

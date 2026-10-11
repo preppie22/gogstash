@@ -350,12 +350,12 @@ class Watcher:
         self.progress = []
         self.disk_full = []
         self.network_error = []
-        thread.disk_full.connect(lambda resume_link: self.disk_full.append(resume_link))
-        thread.network_error.connect(lambda resume_link: self.network_error.append(resume_link))
+        thread.disk_full.connect(lambda resume_info: self.disk_full.append(resume_info))
+        thread.network_error.connect(lambda resume_info: self.network_error.append(resume_info))
         thread.succeeded.connect(lambda: setattr(self, "succeeded", self.succeeded + 1))
         thread.stopped.connect(lambda: setattr(self, "stopped", self.stopped + 1))
         thread.failed.connect(lambda msg: self.failed.append(msg))
-        thread.paused.connect(lambda resume_link: self.paused.append(resume_link))
+        thread.paused.connect(lambda resume_info: self.paused.append(resume_info))
         thread.fetched.connect(lambda entry: self.fetched.append(entry))
         thread.progress.connect(lambda fetched, total: self.progress.append((fetched, total)))
 
@@ -371,12 +371,12 @@ def single_installer_setup(mock_resolve, tmp_path):
     return tmp_path / "fake-game" / "installer_windows_en"
 
 
-def make_worker(resume_link=None, file_queue=None):
+def make_worker(resume_info=None, file_queue=None):
     # Workers are handed their file list by the scheduler now. Build it the
     # same way the scheduler does, off whatever the test's settings say.
     if file_queue is None:
         file_queue = download_queue.generate_download_list((111,))
-    return download_queue.DownloadWorkerThread(111, file_queue, resume_link)
+    return download_queue.DownloadWorkerThread(111, file_queue, resume_info)
 
 
 @patch("gogstash.download_queue.requests.get")
@@ -480,7 +480,7 @@ def test_download_worker_resumes_a_part_file_with_a_range_request(mock_resolve, 
         make_streamed_response([new_bytes], status_code=206),
     ]
 
-    thread = make_worker({"partpath": part_path, "downlink": "https://example.com/file1"})
+    thread = make_worker({"fetched_files": [], "partpath": part_path, "downlink": "https://example.com/file1"})
     events = Watcher(thread)
 
     thread.run()
@@ -513,7 +513,7 @@ def test_download_worker_starts_over_when_the_cdn_ignores_the_range_request(mock
         make_streamed_response([full_bytes], status_code=200),
     ]
 
-    thread = make_worker({"partpath": part_path, "downlink": "https://example.com/file1"})
+    thread = make_worker({"fetched_files": [], "partpath": part_path, "downlink": "https://example.com/file1"})
     events = Watcher(thread)
 
     thread.run()
@@ -1012,7 +1012,7 @@ def test_a_full_disk_mid_file_reports_disk_full_and_keeps_the_part_file(mock_res
         thread.run()
 
     part_path = game_dir / "setup_fake_game.exe.part"
-    assert events.disk_full == [{"partpath": part_path, "downlink": "https://example.com/file1"}]
+    assert events.disk_full == [{"fetched_files": [], "partpath": part_path, "downlink": "https://example.com/file1"}]
     assert events.failed == []
     assert events.paused == []
     assert events.succeeded == 0
@@ -1066,7 +1066,7 @@ def test_a_connection_dropping_mid_file_reports_network_error_and_keeps_the_part
     thread.run()
 
     part_path = game_dir / "setup_fake_game.exe.part"
-    assert events.network_error == [{"partpath": part_path, "downlink": "https://example.com/file1"}]
+    assert events.network_error == [{"fetched_files": [], "partpath": part_path, "downlink": "https://example.com/file1"}]
     assert events.failed == []
     assert events.fetched == []  # not a failure, just a pause with extra steps
     assert events.succeeded == 0
@@ -1092,7 +1092,7 @@ def test_a_connection_reset_mid_file_is_a_network_error_too(mock_resolve, mock_g
     thread.run()
 
     assert events.network_error == [
-        {"partpath": game_dir / "setup_fake_game.exe.part", "downlink": "https://example.com/file1"}
+        {"fetched_files": [], "partpath": game_dir / "setup_fake_game.exe.part", "downlink": "https://example.com/file1"}
     ]
     assert events.fetched == []
 
@@ -1110,7 +1110,7 @@ def test_a_server_that_never_answers_the_download_request_is_a_network_error(moc
     thread.run()
 
     assert events.network_error == [
-        {"partpath": game_dir / "setup_fake_game.exe.part", "downlink": "https://example.com/file1"}
+        {"fetched_files": [], "partpath": game_dir / "setup_fake_game.exe.part", "downlink": "https://example.com/file1"}
     ]
     assert events.fetched == []
 
@@ -1127,7 +1127,7 @@ def test_a_connection_dropping_while_resolving_the_link_is_a_network_error(mock_
 
     # No .part path yet, the filename comes from the link we never got.
     # The downlink alone is enough for the next worker to pick it back up.
-    assert events.network_error == [{"downlink": "https://example.com/file1"}]
+    assert events.network_error == [{"fetched_files": [], "downlink": "https://example.com/file1"}]
     assert events.fetched == []
     assert events.failed == []
     mock_get.assert_not_called()
@@ -1143,7 +1143,7 @@ def test_a_checksum_fetch_that_times_out_is_a_network_error(mock_resolve, mock_g
 
     thread.run()
 
-    assert events.network_error == [{"downlink": "https://example.com/file1"}]
+    assert events.network_error == [{"fetched_files": [], "downlink": "https://example.com/file1"}]
     assert events.fetched == []
 
 
@@ -1189,6 +1189,137 @@ def test_a_drop_before_reaching_the_resumed_file_keeps_its_resume_link(mock_reso
 
     [payload] = events.network_error
     assert payload["downlink"] == resumed
+
+
+def _installer_then_bonus(mock_resolve, tmp_path):
+    # Both files of the fake game, in an order the tests can count on
+    single_installer_setup(mock_resolve, tmp_path)
+    settings.update_setting("bonus_content", True)
+    file_queue = download_queue.generate_download_list((111,))
+    installer = next(f for f in file_queue if f["directory"] != "bonus_content")
+    bonus = next(f for f in file_queue if f["directory"] == "bonus_content")
+    return [installer, bonus]
+
+
+def test_a_resumed_worker_skips_its_finished_files_and_picks_up_the_byte_count():
+    # Regression: a resumed worker started from 0 with every file queued,
+    # so the bar sank back to the start and climbed out again one finished
+    # file at a time, three GOG round trips per file. Groundhog Day, with
+    # a progress bar.
+    file_queue = [
+        {"downlink": "https://example.com/a", "size": 100},
+        {"downlink": "https://example.com/b", "size": 200},
+        {"downlink": "https://example.com/c", "size": 300},
+    ]
+    resume_info = {
+        "fetched_files": [("https://example.com/a", 100), ("https://example.com/b", 200)],
+        "partpath": Path("c.part"),
+        "downlink": "https://example.com/c",
+    }
+
+    thread = download_queue.DownloadWorkerThread(111, file_queue, resume_info)
+
+    assert [f["downlink"] for f in thread.file_queue] == ["https://example.com/c"]
+    assert thread.fetched_size == 300
+    assert thread.total_size == 600  # same total as before the pause, or the bar jumps the other way
+
+
+def test_a_fresh_worker_keeps_its_whole_queue_and_starts_from_zero():
+    # Regression from the first draft of the fix: no resume info meant no
+    # files copied over, and every new game failed with "No files to
+    # download". Very efficient. Downloads nothing, finishes instantly.
+    file_queue = [
+        {"downlink": "https://example.com/a", "size": 100},
+        {"downlink": "https://example.com/b", "size": 200},
+    ]
+
+    thread = download_queue.DownloadWorkerThread(111, file_queue, None)
+
+    assert thread.file_queue == file_queue
+    assert thread.fetched_size == 0
+    assert thread.total_size == 300
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_resuming_never_asks_gog_about_the_files_it_already_finished(mock_resolve, mock_get, tmp_path):
+    # The installer finished before the pause. Resume goes straight to the
+    # bonus file and the bar starts where it was, not at zero.
+    installer, bonus = _installer_then_bonus(mock_resolve, tmp_path)
+    mock_get.side_effect = [make_streamed_response([b"m" * 500])]
+    resume_info = {
+        "fetched_files": [(installer["downlink"], 1000)],
+        "partpath": tmp_path / "fake-game" / "bonus_content" / "never-started.part",
+        "downlink": bonus["downlink"],
+    }
+    thread = make_worker(resume_info, [installer, bonus])
+    events = Watcher(thread)
+
+    thread.run()
+
+    assert [c.args[0] for c in mock_resolve.call_args_list] == [bonus["downlink"]]
+    assert events.progress[0][0] >= 1000  # never dips below what was already done
+    assert events.progress[-1] == (1500, 1500)
+    assert events.succeeded == 1
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_pausing_a_second_time_still_remembers_the_first_pauses_finished_files(mock_resolve, mock_get, tmp_path):
+    # Pause, resume, pause again. Forget the installer here and the second
+    # resume downloads it all over again.
+    installer, bonus = _installer_then_bonus(mock_resolve, tmp_path)
+    thread = make_worker({"fetched_files": [(installer["downlink"], 1000)], "downlink": bonus["downlink"]},
+                         [installer, bonus])
+
+    def pause_after_the_first_chunk():
+        thread.pause_worker()
+        yield b"m" * 200
+        yield b"m" * 300
+
+    response = make_streamed_response([])
+    response.iter_content.return_value = pause_after_the_first_chunk()
+    response.headers = {"Content-Length": "500"}
+    mock_get.side_effect = [response]
+    events = Watcher(thread)
+
+    thread.run()
+
+    [payload] = events.paused
+    assert payload["fetched_files"] == [(installer["downlink"], 1000)]
+    assert payload["downlink"] == bonus["downlink"]
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_a_file_that_failed_before_the_pause_gets_another_go_after_it(mock_resolve, mock_get, tmp_path):
+    # A failed file is not a finished file. Count it as done and the resumed
+    # worker skips it, never sets its failed flag, and reports the game a
+    # success with a hole in it.
+    installer, bonus = _installer_then_bonus(mock_resolve, tmp_path)
+    mock_resolve.side_effect = [
+        Exception("404 Not Found"),
+        {"downlink": "https://cdn.example.com/manual.pdf", "checksum": ""},
+    ]
+    thread = make_worker(None, [installer, bonus])
+
+    def pause_after_the_first_chunk():
+        thread.pause_worker()
+        yield b"m" * 200
+        yield b"m" * 300
+
+    response = make_streamed_response([])
+    response.iter_content.return_value = pause_after_the_first_chunk()
+    response.headers = {"Content-Length": "500"}
+    mock_get.side_effect = [response]
+    events = Watcher(thread)
+
+    thread.run()
+
+    [payload] = events.paused
+    assert payload["fetched_files"] == []
+    resumed = make_worker(payload, [installer, bonus])
+    assert [f["downlink"] for f in resumed.file_queue] == [installer["downlink"], bonus["downlink"]]
 
 
 @patch("gogstash.download_queue.requests.get")
@@ -1305,7 +1436,7 @@ def test_download_worker_pause_mid_chunk_keeps_part_file_and_reports_where_it_is
     assert events.stopped == 0
     assert events.fetched == []
     part_path = game_dir / "setup_fake_game.exe.part"
-    assert events.paused == [{"partpath": part_path, "downlink": "https://example.com/file1"}]
+    assert events.paused == [{"fetched_files": [], "partpath": part_path, "downlink": "https://example.com/file1"}]
     assert part_path.read_bytes() == b"a" * 400
     assert not (game_dir / "setup_fake_game.exe").exists()
 
@@ -1339,7 +1470,7 @@ def test_download_worker_pause_after_full_download_saves_the_file_and_only_pause
 
     assert events.succeeded == 0
     assert events.failed == []
-    assert events.paused == [{}]  # nothing half-downloaded to resume from
+    assert events.paused == [{"fetched_files": [("https://example.com/file1", 1000)]}]  # nothing half-downloaded, just the finished file
     written = tmp_path / "fake-game" / "installer_windows_en" / "setup_fake_game.exe"
     assert [entry["filepath"] for entry in events.fetched] == [written]
     assert written.read_bytes() == chunk_a + chunk_b
@@ -1369,7 +1500,7 @@ def test_download_worker_pause_landing_on_the_last_chunk_finishes_the_file_inste
 
     assert events.failed == []
     assert events.succeeded == 0
-    assert events.paused == [{}]  # paused between files, nothing to resume mid-way
+    assert events.paused == [{"fetched_files": [("https://example.com/file1", 1000)]}]  # paused between files, nothing to resume mid-way
     written = game_dir / "setup_fake_game.exe"
     assert written.read_bytes() == chunk_a + chunk_b
     assert not (game_dir / "setup_fake_game.exe.part").exists()
@@ -1422,7 +1553,7 @@ def test_download_worker_can_still_pause_mid_file_when_the_server_wont_say_how_b
     thread.run()
 
     part_path = game_dir / "setup_fake_game.exe.part"
-    assert events.paused == [{"partpath": part_path, "downlink": "https://example.com/file1"}]
+    assert events.paused == [{"fetched_files": [], "partpath": part_path, "downlink": "https://example.com/file1"}]
     assert part_path.read_bytes() == b"a" * 400
 
 
@@ -1494,11 +1625,11 @@ class FakeWorker(QObject):
     network_error = Signal(dict)
     bytes_downloaded = Signal(int)
 
-    def __init__(self, product_id, file_queue=None, resume_link=None):
+    def __init__(self, product_id, file_queue=None, resume_info=None):
         super().__init__()
         self.product_id = product_id
         self.file_queue = file_queue
-        self.resume_link = resume_link
+        self.resume_info = resume_info
         # The free-space check peeks at these on every active job.
         self.total_size = sum(f["size"] for f in file_queue or [])
         self.fetched_size = 0
@@ -1537,8 +1668,8 @@ def make_scheduler(concurrency, count):
     return scheduler
 
 
-def _pause_active_worker(job, resume_link=None):
-    job["worker"].paused.emit({} if resume_link is None else resume_link)
+def _pause_active_worker(job, resume_info=None):
+    job["worker"].paused.emit({} if resume_info is None else resume_info)
 
 
 @with_fake_workers
@@ -1928,19 +2059,19 @@ def test_paused_worker_moves_to_paused_queue_and_frees_its_token(tmp_path):
     scheduler = make_scheduler(concurrency=1, count=1)
     scheduler.schedule()
     job = scheduler.active_queue[0]
-    resume_link = {"partpath": tmp_path / "game.exe.part", "downlink": "https://example.com/f"}
+    resume_info = {"partpath": tmp_path / "game.exe.part", "downlink": "https://example.com/f"}
     game_paused_events = []
     scheduler.game_paused.connect(lambda row_idx: game_paused_events.append(row_idx))
 
     scheduler.pause_all()
-    _pause_active_worker(job, resume_link)
+    _pause_active_worker(job, resume_info)
 
     assert game_paused_events == [0]
     assert scheduler.active_queue == []
     assert scheduler.tokens == 1
     [paused_job] = scheduler.paused_queue
     assert paused_job["priority"] == 0
-    assert paused_job["resume_link"] == resume_link
+    assert paused_job["resume_info"] == resume_info
 
 
 @with_fake_workers
@@ -1978,14 +2109,14 @@ def test_pausing_does_not_dispatch_pending_jobs_or_announce_finished():
 
 
 @with_fake_workers
-def test_resume_all_redispatches_paused_jobs_with_a_fresh_worker_and_their_resume_link(tmp_path):
+def test_resume_all_redispatches_paused_jobs_with_a_fresh_worker_and_their_resume_info(tmp_path):
     scheduler = make_scheduler(concurrency=1, count=2)
     scheduler.schedule()
     job = scheduler.active_queue[0]
     old_worker = job["worker"]
-    resume_link = {"partpath": tmp_path / "game.exe.part", "downlink": "https://example.com/f"}
+    resume_info = {"partpath": tmp_path / "game.exe.part", "downlink": "https://example.com/f"}
     scheduler.pause_all()
-    _pause_active_worker(job, resume_link)
+    _pause_active_worker(job, resume_info)
     assert scheduler.active_queue == []
 
     scheduler.resume_all()
@@ -1993,7 +2124,7 @@ def test_resume_all_redispatches_paused_jobs_with_a_fresh_worker_and_their_resum
     [resumed] = scheduler.active_queue
     assert resumed["priority"] == 0
     assert resumed["worker"] is not old_worker  # a finished QThread with its pause flag still set is no use to anyone
-    assert resumed["worker"].resume_link == resume_link
+    assert resumed["worker"].resume_info == resume_info
     assert [j["priority"] for j in scheduler.idle_queue] == [1]
     assert scheduler.paused_queue == []
 
@@ -2861,7 +2992,7 @@ def test_a_full_disk_pauses_the_queue_and_keeps_the_game_resumable(tmp_path):
     assert paused_rows == [0]
     assert paused_events == [True]
     assert failed_rows == []
-    assert [(j["priority"], j["resume_link"]) for j in scheduler.paused_queue] == [(0, payload)]
+    assert [(j["priority"], j["resume_info"]) for j in scheduler.paused_queue] == [(0, payload)]
     assert [j["priority"] for j in scheduler.idle_queue] == [1]  # not thrown into the fire
     assert scheduler.active_queue == []
     assert scheduler.tokens == 1
@@ -2898,7 +3029,7 @@ def test_resuming_after_a_full_disk_picks_the_part_file_back_up(tmp_path):
         scheduler.resume_all()
 
     [resumed] = scheduler.active_queue
-    assert resumed["worker"].resume_link == payload
+    assert resumed["worker"].resume_info == payload
 
 
 @with_fake_workers
@@ -3025,7 +3156,7 @@ def test_a_lost_connection_pauses_the_queue_and_keeps_the_game_resumable(tmp_pat
     # Says why before saying paused, and the why is not "your disk is full"
     assert events == ["connection_lost", "paused"]
     assert failed_rows == []
-    assert [(j["priority"], j["resume_link"]) for j in scheduler.paused_queue] == [(0, payload)]
+    assert [(j["priority"], j["resume_info"]) for j in scheduler.paused_queue] == [(0, payload)]
     assert [j["priority"] for j in scheduler.idle_queue] == [1]
     assert scheduler.active_queue == []
     assert part_path.exists()
@@ -3058,7 +3189,7 @@ def test_resuming_after_a_lost_connection_picks_the_part_file_back_up(tmp_path):
         scheduler.resume_all()
 
     [resumed] = scheduler.active_queue
-    assert resumed["worker"].resume_link == payload
+    assert resumed["worker"].resume_info == payload
 
 
 @with_fake_workers

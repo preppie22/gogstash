@@ -8,6 +8,12 @@ suffix until the first stable release), not SemVer.
 
 ## [Unreleased]
 
+### Added
+- The download queue shows the download speed and the time left for the whole queue ([#17](https://github.com/preppie22/gogstash/issues/17))
+
+### Fixed
+- Resuming a paused game no longer sends its progress bar back to the start, and no longer checks every file it had already finished with GOG again before carrying on
+
 ## [2026.10.9-beta] - 2026-10-09
 
 ### Changed
