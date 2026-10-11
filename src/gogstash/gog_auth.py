@@ -73,6 +73,13 @@ def fetch_token(code: str = None, type: GrantType = GrantType.AUTHORIZE, refresh
 
     Returns:
         dict: The token response with an added ``expiry`` Unix timestamp.
+
+    Raises:
+        requests.RequestException: If the request fails. It is the same
+            class ``requests`` raised, with a message that leaves out the
+            URL, whose query holds the code or refresh token.
+        KeyError: If GOG's answer has no ``expires_in``, for example when
+            it refuses the code or refresh token.
     """
     parameters = {
         'client_id': CLIENT_ID,
@@ -86,7 +93,10 @@ def fetch_token(code: str = None, type: GrantType = GrantType.AUTHORIZE, refresh
         parameters['refresh_token'] = refresh_token
 
     start_time = time.time()
-    response = requests.get(TOKEN_URL, params=parameters, timeout=HTTP_TIMEOUT)
+    try:
+        response = requests.get(TOKEN_URL, params=parameters, timeout=HTTP_TIMEOUT)
+    except requests.RequestException as e:
+        raise e.__class__("token request to gog failed") from None
     token_json = response.json()
     if token_json.get('expires_in') is None:
         log.warning(f"{token_json.get('error',"")}: {token_json.get('error_description',"")} | status code: {response.status_code} ")

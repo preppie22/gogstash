@@ -783,7 +783,7 @@ class DownloadWorkerThread(QThread):
                     'db_size': file['size'],
                     'checksum': "",
                     'version': file['version'],
-                    'error': str(e)
+                    'error': _describe_error(e)
                 })
                 self._failed_flag = True
                 continue
@@ -970,7 +970,7 @@ class DownloadWorkerThread(QThread):
                     'db_size': file['size'],
                     'checksum': "",
                     'version': file['version'],
-                    'error': f"{str(e)} | Expected size: {file['size']} | Got size: {_safe_size(part_path)}"
+                    'error': f"{_describe_error(e)} | Expected size: {file['size']} | Got size: {_safe_size(part_path)}"
                 })
                 self._failed_flag = True
                 continue

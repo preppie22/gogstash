@@ -1172,7 +1172,9 @@ def test_a_server_error_still_fails_just_that_file(mock_resolve, mock_get, tmp_p
     # connection is fine, so this stays a plain per-file failure.
     single_installer_setup(mock_resolve, tmp_path)
     broken = make_streamed_response([b"a" * 1000])
-    broken.raise_for_status.side_effect = requests.exceptions.HTTPError("404 Client Error")
+    broken.raise_for_status.side_effect = requests.exceptions.HTTPError(
+        "404 Client Error", response=MagicMock(status_code=404)  # raise_for_status always hands over the response
+    )
     mock_get.side_effect = [make_checksum_response("irrelevant"), broken]
     thread = make_worker()
     events = Watcher(thread)
@@ -3799,3 +3801,46 @@ def test_a_checksum_mismatch_logs_both_hashes_and_both_sizes(mock_resolve, mock_
     assert hashlib.md5(body).hexdigest() in warning
     assert "1000" in warning
     assert "setup_fake_game.exe" in warning
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_the_download_history_names_the_status_but_never_the_signed_cdn_link(mock_resolve, mock_get, tmp_path):
+    # downloads.log is the user's own history, but it's still a file on disk
+    # that gets shared. A link that downloads the game for anyone holding it
+    # has no business being in there.
+    single_installer_setup(mock_resolve, tmp_path)
+    mock_resolve.return_value = {"downlink": SIGNED_CDN, "checksum": SIGNED_XML}
+    cdn = make_streamed_response([b"x" * 1000])
+    cdn.raise_for_status.side_effect = requests.HTTPError(
+        f"404 Client Error: Not Found for url: {SIGNED_CDN}", response=MagicMock(status_code=404)
+    )
+    mock_get.side_effect = [make_checksum_response("abc"), cdn]
+    worker = make_worker()
+    worker.fetched.connect(download_queue._write_log_file)
+
+    worker.run()
+
+    [line] = _log_lines()
+    assert "404" in line
+    assert "SIGNED-SECRET" not in line
+
+
+@patch("gogstash.download_queue.requests.get")
+@patch("gogstash.gog_api.resolve_downlink")
+def test_the_download_history_never_gets_the_signed_checksum_link_either(mock_resolve, mock_get, tmp_path):
+    single_installer_setup(mock_resolve, tmp_path)
+    mock_resolve.return_value = {"downlink": SIGNED_CDN, "checksum": SIGNED_XML}
+    checksum = make_checksum_response("abc")
+    checksum.raise_for_status.side_effect = requests.HTTPError(
+        f"403 Client Error: Forbidden for url: {SIGNED_XML}", response=MagicMock(status_code=403)
+    )
+    mock_get.return_value = checksum
+    worker = make_worker()
+    worker.fetched.connect(download_queue._write_log_file)
+
+    worker.run()
+
+    [line] = _log_lines()
+    assert "403" in line
+    assert "SIGNED-SECRET" not in line

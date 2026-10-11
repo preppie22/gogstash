@@ -125,3 +125,19 @@ def test_download_log_stays_out_of_the_app_log(download_logger, tmp_path):
     # Every fetched file in gogstash.log too would bury the one traceback
     # someone actually came looking for.
     assert app_log.records == []
+
+
+def test_urllib3_keeps_its_request_lines_to_itself_even_at_debug(basic_config, request):
+    # urllib3 logs every request's full path and query at DEBUG: refresh
+    # tokens, login codes, signed CDN links, the lot. Turning gogstash.log
+    # down to DEBUG one day must not turn it into a keyring.
+    root, urllib3_logger = logging.getLogger(), logging.getLogger("urllib3")
+    old_levels = root.level, urllib3_logger.level
+    # setLevel, not a monkeypatched attribute, so logging's level cache is cleared on the way back too
+    request.addfinalizer(lambda: (root.setLevel(old_levels[0]), urllib3_logger.setLevel(old_levels[1])))
+
+    log_setup.setup_logging(paths.log_file_path(paths.LogFile.APP_LOG))
+    root.setLevel(logging.DEBUG)  # what "turning it down" looks like
+
+    assert not logging.getLogger("urllib3.connectionpool").isEnabledFor(logging.DEBUG)
+    assert logging.getLogger("urllib3.connectionpool").isEnabledFor(logging.WARNING)

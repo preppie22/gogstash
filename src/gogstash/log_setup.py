@@ -41,8 +41,10 @@ def setup_logging(log_file: Path):
 
     Sets up the root logger with ``logging.basicConfig``, so the logger of
     every module writes to the file. The file rolls over at 2 MB and keeps
-    three old files. ``basicConfig`` only works once per process, so this
-    is called once, at startup. Each process gets its own file, the main
+    three old files. ``urllib3`` is held at WARNING, since its DEBUG lines
+    hold each request's full URL, with tokens and signed links in the
+    query. ``basicConfig`` only works once per process, so this is called
+    once, at startup. Each process gets its own file, the main
     window ``APP_LOG`` and the login helper ``AUTH_LOG``, since two
     processes can't safely share one that rotates.
 
@@ -55,6 +57,7 @@ def setup_logging(log_file: Path):
         format='[%(asctime)s | %(module)s] - %(levelname)s - %(message)s',
         level=logging.INFO
     )
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 def setup_download_log(log_file: Path):
     """Send the ``DOWNLOAD_LOGGER`` logger to the download history file.

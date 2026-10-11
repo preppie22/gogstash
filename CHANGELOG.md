@@ -16,6 +16,8 @@ suffix until the first stable release), not SemVer.
 - Log files no longer grow forever. `gogstash.log` and `login.log` start a new file at 2 MB and keep the last three, and `downloads.log` starts a new file at 5 MB and keeps the last five
 
 ### Fixed
+- A sign-in that can't reach GOG no longer writes the one-time login code into the log
+- The download history no longer includes a file's temporary download link when GOG's servers refuse the file
 - A library refresh that fails because a file can't be accessed now shows that error, instead of saying you're not logged in to GOG
 - A library refresh that GOG answers with an error now says so, with GOG's status code, instead of showing a confusing internal error
 - On Windows, download history lines are no longer lost when the file's path has characters the system's code page can't write, such as a non-Latin user name

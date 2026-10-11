@@ -1,6 +1,7 @@
 import time
 
 import pytest
+import requests
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
@@ -205,3 +206,53 @@ def test_extract_code_rejects_other_pages_and_hosts():
 def test_extract_code_rejects_lookalike_hosts():
     # Starts with the right name, ends somewhere else entirely.
     assert gog_auth.extract_code("https://embed.gog.com.example.net/on_login_success?code=thecode") is None
+
+
+LEAKY_URL = "Max retries exceeded with url: /token?grant_type=refresh_token&refresh_token=REFRESH-SECRET&code=CODE-SECRET"
+
+
+def _full_story(error):
+    # Everything a traceback would show, chained exceptions included, which
+    # is exactly what log.exception and the excepthook write out.
+    import traceback
+    return "".join(traceback.format_exception(error))
+
+
+@pytest.mark.parametrize("error_class", [requests.ConnectionError, requests.Timeout, requests.exceptions.SSLError])
+@patch("gogstash.gog_auth.requests.get")
+def test_a_failed_token_request_keeps_its_class_but_drops_the_secrets(mock_get, error_class):
+    # requests puts the whole query string in its message, and the query is
+    # where the refresh token rides. The class stays, so the download worker
+    # still knows a dropped connection when it sees one.
+    mock_get.side_effect = error_class(LEAKY_URL)
+    secret = "REFRESH-" + "SECRET"  # spelled apart, or the traceback quotes this test's own source back at us
+
+    with pytest.raises(error_class) as raised:
+        gog_auth.fetch_token(type=gog_auth.GrantType.REFRESH, refresh_token=secret)
+
+    story = _full_story(raised.value)
+    assert "REFRESH-SECRET" not in story
+    assert "CODE-SECRET" not in story
+    assert "During handling" not in story  # the leaky original isn't hitching a ride
+
+
+@patch("gogstash.gog_auth.requests.get")
+def test_an_offline_refresh_during_a_library_refresh_keeps_the_token_out_of_the_log(mock_get, caplog):
+    # The way it actually happens: expired token, no network, someone clicks
+    # Refresh. library_db logs the traceback, and the traceback used to be
+    # carrying a long-lived refresh token to whoever reads the bug report.
+    from gogstash import library_db
+    gog_auth.save_token({"access_token": "a", "refresh_token": "REFRESH-SECRET", "expiry": time.time() - 10})
+    mock_get.side_effect = requests.ConnectionError(LEAKY_URL)
+    library_db._create_db(force=True)
+    thread = library_db.LibraryFetchThread(force=True)
+    failed = []
+    thread.failed.connect(failed.append)
+
+    with caplog.at_level("INFO"):
+        thread.run()
+
+    logged = "\n".join(f"{r.getMessage()}\n{r.exc_text or ''}" for r in caplog.records)
+    assert failed  # it still fails, it just keeps its mouth shut about why
+    assert "REFRESH-SECRET" not in logged
+    assert "REFRESH-SECRET" not in failed[0]
