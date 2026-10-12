@@ -357,6 +357,11 @@ def get_product_listing(product_id: tuple[int] = ()) -> list[dict]:
 def get_downloadables(product_id: tuple[int] = (), filtered: bool = False) -> list[dict]:
     """Return cached downloadable files.
 
+    Files listed with a size of 0 are left out. GOG rounds listed sizes
+    up to whole MiB, so a 0 is a placeholder with no file behind it
+    (some games list one under extras), and resolving its downlink
+    fails with a 403.
+
     Args:
         product_id (tuple[int]): Product IDs to filter by. Empty returns
             files for all products.
@@ -408,7 +413,7 @@ def get_downloadables(product_id: tuple[int] = (), filtered: bool = False) -> li
         'language': p[6],
         'downlink': p[7],
         'version': p[8]
-    } for p in query_result]
+    } for p in query_result if p[4] > 0]
 
     if not filtered:
         return downloadables

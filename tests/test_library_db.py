@@ -542,6 +542,41 @@ def test_get_downloadables_filters_by_product_id():
     assert downloadables[0]["file_id"] == "file3"
 
 
+def _with_placeholder_extra(product):
+    # Modeled on Venba: an extra named after the game, 0 bytes, and an
+    # unclickable entry on gog.com. Its downlink answers with a 403.
+    product = copy.deepcopy(product)
+    product["downloads"]["bonus_content"].append({
+        "id": 100171,
+        "name": "Fake Game",
+        "type": "game add-ons",
+        "total_size": 0,
+        "files": [
+            {"id": "100171", "size": 0, "downlink": "https://example.com/nothing_here"},
+        ],
+    })
+    return product
+
+
+def test_get_downloadables_leaves_out_zero_byte_placeholders():
+    library_db.update_cache([_with_placeholder_extra(FAKE_PRODUCT)])
+
+    file_ids = {d["file_id"] for d in library_db.get_downloadables()}
+
+    assert file_ids == {"file1", "file2", "bonus1"}
+
+
+def test_a_placeholder_extra_never_reaches_the_queue_even_with_extras_on():
+    # Asking for the extras means the manual, not a 403 that marks a
+    # perfectly good installer as "completed with failures".
+    settings.update_setting("bonus_content", True)
+    library_db.update_cache([_with_placeholder_extra(FAKE_PRODUCT)])
+
+    file_ids = {d["file_id"] for d in library_db.get_downloadables((111,), filtered=True)}
+
+    assert file_ids == {"file1", "file2", "bonus1"}
+
+
 def test_get_cache_size_returns_zero_when_db_missing():
     paths.config_file_path(paths.ConfigFile.DB_CACHE).unlink()
     assert library_db.get_cache_size() == 0
