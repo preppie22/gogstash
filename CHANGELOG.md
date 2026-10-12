@@ -8,6 +8,8 @@ suffix until the first stable release), not SemVer.
 
 ## [Unreleased]
 
+## [2026.10.12-beta] - 2026-10-12
+
 ### Added
 - Unexpected errors are now written to `gogstash.log` with their full details, so they can be attached to bug reports. Each run also starts the log with the GogStash, OS, Python and Qt versions
 
