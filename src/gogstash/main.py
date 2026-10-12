@@ -6,7 +6,7 @@ from pathlib import Path
 import importlib.metadata
 from enum import IntEnum
 import logging
-import logging.handlers
+import requests
 from types import TracebackType
 import platform
 
@@ -155,6 +155,7 @@ class MainWindow(QMainWindow):
         self.logged_in_indicator.setFixedSize(QSize(10,10))
         self.logged_in_indicator.setStyleSheet("background-color: red; border-radius: 5")
         self.status_text = QLabel()
+        self.status_text.linkActivated.connect(self._update_login_status)
         self.status_progress = QProgressBar()
         self.status_progress.setVisible(False)
         self.statusBar()
@@ -384,9 +385,18 @@ class MainWindow(QMainWindow):
     def _update_login_status(self):
         """Update the login indicator in the status bar.
 
-        Refreshes the saved token if it has expired.
+        Refreshes the saved token if it has expired. If GOG can't be
+        reached for that, the saved login is kept and the status bar shows
+        "Offline" with a yellow indicator and a "Try again" link, which
+        runs this check again.
         """
-        token = gog_auth.get_valid_token()
+        try:
+            token = gog_auth.get_valid_token()
+        except requests.RequestException:
+            log.warning("could not reach gog to refresh the token, existing token kept")
+            self.status_text.setText('Offline. <a href="retry">Try again</a>')
+            self.logged_in_indicator.setStyleSheet("background-color: yellow; border-radius: 5")
+            return
         if token:
             self.status_text.setText("Logged in")
             self.logged_in_indicator.setStyleSheet("background-color: green; border-radius: 5")

@@ -6,12 +6,17 @@ Attributes:
         each piece of data, not the whole response, so a slow download
         that keeps receiving data never hits it. ``requests`` has no
         timeout by default and would wait forever on a silent server.
+    HTTP_TIMEOUT_SHORT (tuple[int, int]): Connect and read timeouts in
+        seconds for token requests. These run on the UI thread, so an
+        unreachable GOG shows up as offline quickly instead of freezing
+        the window.
     CLIENT_ID (str): GOG Galaxy's public OAuth client ID, which GogStash
         logs in as.
     CLIENT_SECRET (str): The matching client secret. Public as well, so
         it is fine to ship.
 """
 HTTP_TIMEOUT = (5,15)
+HTTP_TIMEOUT_SHORT = (3,5)
 
 # These are public and obtained from https://gogapidocs.readthedocs.io/en/latest/auth.html
 CLIENT_ID = "46899977096215655"

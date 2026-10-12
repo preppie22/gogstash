@@ -4,6 +4,7 @@ import requests
 from typing import Callable
 
 from gogstash import gog_auth
+from gogstash.gog_auth import AuthenticationFailure
 from gogstash.constants import HTTP_TIMEOUT
 
 import logging
@@ -14,9 +15,6 @@ USER_GAMES = "https://embed.gog.com/user/data/games"
 
 class FetchInterrupted(Exception):
     """Raised by ``fetch_downloadables`` when its caller asks it to stop."""
-
-class AuthenticationFailure(Exception):
-    """Raised when the user isn't logged in or GOG rejects the token."""
 
 def fetch_owned_ids() -> set:
     """Fetch the IDs of every product the user owns on GOG.

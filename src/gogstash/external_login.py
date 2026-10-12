@@ -154,7 +154,7 @@ class ExternalLoginDialog(QDialog):
                 textFormat=Qt.TextFormat.RichText
             ).show()
             return
-        except KeyError as e:
+        except gog_auth.AuthenticationFailure as e:
             log.warning("gog refused code: already used or expired")
             QMessageBox(
                 QMessageBox.Icon.Warning,

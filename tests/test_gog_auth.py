@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
 from gogstash import gog_auth
-from gogstash.constants import HTTP_TIMEOUT
+from gogstash.constants import HTTP_TIMEOUT_SHORT
 
 
 def make_response(json_data, status_code=200):
@@ -45,7 +45,8 @@ def test_fetch_token_authorize_sends_code_and_redirect_uri(mock_get):
     assert params["redirect_uri"] == gog_auth.REDIRECT_URI
     assert "refresh_token" not in params
     # A token request that hangs would freeze login or a refresh (#29)
-    assert kwargs["timeout"] == HTTP_TIMEOUT
+    # Token requests block the window while they wait, so they give up fast.
+    assert kwargs["timeout"] == HTTP_TIMEOUT_SHORT
 
     assert token["access_token"] == "abc"
     assert before + 3600 <= token["expiry"] <= after + 3600
@@ -135,32 +136,48 @@ def test_a_refreshed_token_leaves_a_line_but_not_itself_in_the_log(mock_get, cap
 
 
 @patch("gogstash.gog_auth.requests.get")
-def test_a_failed_refresh_logs_nothing_about_success(mock_get, caplog):
-    # A refresh that blew up has no business announcing itself as done.
-    # Only the warning should be there.
+def test_a_refused_refresh_logs_you_out_instead_of_blowing_up(mock_get, caplog):
+    # Regression (#31): GOG's "no" came back as KeyError: 'expires_in', and
+    # at startup that took the whole app down before it had a window. A
+    # refused login is just a logged out one, and a dead token gets binned
+    # instead of being refused all over again on every check.
     gog_auth.save_token(
         {"access_token": "stale", "refresh_token": "myrefresh", "expiry": time.time() - 10}
     )
     mock_get.return_value = make_response({"error": "invalid_grant"}, status_code=400)
 
     with caplog.at_level("INFO", logger="gogstash.gog_auth"):
-        with pytest.raises(KeyError):
-            gog_auth.get_valid_token()
+        assert gog_auth.get_valid_token() is None
 
-    assert [r.levelname for r in caplog.records] == ["WARNING"]
+    assert gog_auth._load_token() is None
+    assert [r.levelname for r in caplog.records] == ["WARNING", "WARNING"]  # GOG's reason, then what came of it
+
+
+@patch("gogstash.gog_auth.requests.get")
+def test_an_offline_refresh_keeps_the_saved_login(mock_get):
+    # Can't reach GOG is not the same as GOG said no. The refresh token is
+    # fine, it just can't be cashed in right now, so it stays for next time.
+    saved = {"access_token": "stale", "refresh_token": "myrefresh", "expiry": time.time() - 10}
+    gog_auth.save_token(saved)
+    mock_get.side_effect = requests.ConnectionError("no network")
+
+    with pytest.raises(requests.ConnectionError):
+        gog_auth.get_valid_token()
+
+    assert gog_auth._load_token() == saved
 
 
 @patch("gogstash.gog_auth.requests.get")
 def test_gog_refusing_a_token_logs_its_reason_and_status(mock_get, caplog):
-    # Without this the only clue was KeyError: 'expires_in', which is GOG's
-    # way of saying something it didn't get round to saying.
+    # GOG says why in its answer, and the status code says how loudly. Both
+    # go in the log, the refresh token stays out.
     mock_get.return_value = make_response(
         {"error": "invalid_grant", "error_description": "The refresh token is invalid."},
         status_code=400,
     )
 
     with caplog.at_level("INFO", logger="gogstash.gog_auth"):
-        with pytest.raises(KeyError):
+        with pytest.raises(gog_auth.AuthenticationFailure):
             gog_auth.fetch_token(type=gog_auth.GrantType.REFRESH, refresh_token="myrefresh")
 
     [record] = caplog.records
@@ -256,3 +273,23 @@ def test_an_offline_refresh_during_a_library_refresh_keeps_the_token_out_of_the_
     assert failed  # it still fails, it just keeps its mouth shut about why
     assert "REFRESH-SECRET" not in logged
     assert "REFRESH-SECRET" not in failed[0]
+
+
+@patch("gogstash.gog_auth.requests.get")
+def test_gog_refusing_a_token_is_an_auth_failure_not_a_key_error(mock_get):
+    # A KeyError would be caught by anything catching KeyError, bugs included.
+    # Refused is its own thing, and callers need to catch exactly that.
+    mock_get.return_value = make_response(
+        {"error": "invalid_grant", "error_description": "The refresh token is invalid."},
+        status_code=400,
+    )
+
+    with pytest.raises(gog_auth.AuthenticationFailure, match="The refresh token is invalid."):
+        gog_auth.fetch_token(type=gog_auth.GrantType.REFRESH, refresh_token="whatever")
+
+
+def test_gog_api_still_answers_to_the_old_name():
+    # library_db and the download worker catch gog_api.AuthenticationFailure.
+    # One class, two addresses.
+    from gogstash import gog_api
+    assert gog_api.AuthenticationFailure is gog_auth.AuthenticationFailure

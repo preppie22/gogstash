@@ -217,7 +217,7 @@ def test_missing_pywebview_means_no_webview(monkeypatch, not_frozen):
 
 @pytest.mark.parametrize("failure", [
     requests.ConnectionError("GOG is having a lie down"),
-    KeyError("expires_in"),  # GOG's error reply for a used or expired code
+    gog_auth.AuthenticationFailure("Invalid authorization code"),  # GOG's answer for a used or expired code
 ])
 def test_token_exchange_failure_is_its_own_exit_code(install_webview, not_frozen, caplog, failure):
     caplog.set_level(logging.INFO)

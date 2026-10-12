@@ -12,13 +12,17 @@ from urllib.parse import urlsplit, parse_qs
 
 from gogstash import paths
 from gogstash.constants import (
-    HTTP_TIMEOUT,
+    HTTP_TIMEOUT_SHORT,
     CLIENT_ID,
     CLIENT_SECRET
 )
 
 import logging
 log = logging.getLogger(__name__)
+
+class AuthenticationFailure(Exception):
+    """Raised when the user isn't logged in, or GOG refuses the token, the
+    login code or the refresh token."""
 
 REDIRECT_URI = "https://embed.gog.com/on_login_success?origin=client"
 AUTH_URL = "https://auth.gog.com/auth"
@@ -78,8 +82,8 @@ def fetch_token(code: str = None, type: GrantType = GrantType.AUTHORIZE, refresh
         requests.RequestException: If the request fails. It is the same
             class ``requests`` raised, with a message that leaves out the
             URL, whose query holds the code or refresh token.
-        KeyError: If GOG's answer has no ``expires_in``, for example when
-            it refuses the code or refresh token.
+        AuthenticationFailure: If GOG refuses the code or refresh token.
+            The message is GOG's ``error_description``.
     """
     parameters = {
         'client_id': CLIENT_ID,
@@ -94,12 +98,13 @@ def fetch_token(code: str = None, type: GrantType = GrantType.AUTHORIZE, refresh
 
     start_time = time.time()
     try:
-        response = requests.get(TOKEN_URL, params=parameters, timeout=HTTP_TIMEOUT)
+        response = requests.get(TOKEN_URL, params=parameters, timeout=HTTP_TIMEOUT_SHORT)
     except requests.RequestException as e:
         raise e.__class__("token request to gog failed") from None
     token_json = response.json()
     if token_json.get('expires_in') is None:
         log.warning(f"{token_json.get('error',"")}: {token_json.get('error_description',"")} | status code: {response.status_code} ")
+        raise AuthenticationFailure(token_json.get('error_description',""))
     token_json["expiry"] = start_time+token_json["expires_in"]
     return token_json
 
@@ -117,16 +122,27 @@ def is_token_expired(token: dict) -> bool:
 def get_valid_token() -> dict | None:
     """Load the saved token, refreshing it if it has expired.
 
-    A refreshed token is saved to disk before it is returned.
+    A refreshed token is saved to disk before it is returned. If GOG
+    refuses the refresh, the saved token is deleted, since it will never
+    work again, and the user is logged out.
 
     Returns:
         dict | None: A valid token, or None if the user is not logged in.
+
+    Raises:
+        requests.RequestException: If GOG can't be reached to refresh an
+            expired token. The saved token is kept.
     """
     token = _load_token()
     if not token:
         return None
     if is_token_expired(token):
-        new_token = fetch_token(type=GrantType.REFRESH, refresh_token=token["refresh_token"])
+        try:
+            new_token = fetch_token(type=GrantType.REFRESH, refresh_token=token["refresh_token"])
+        except AuthenticationFailure:
+            log.warning("logged out because saved login was refused")
+            clear_token()
+            return None
         log.info("token expired and was refreshed")
         save_token(new_token)
         return new_token

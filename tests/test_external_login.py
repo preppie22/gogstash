@@ -123,7 +123,7 @@ def test_wrong_address_warns_without_asking_gog(mock_fetch, dialog, shown_boxes)
     assert dialog.isVisible()
 
 
-@patch("gogstash.gog_auth.fetch_token", side_effect=KeyError("expires_in"))
+@patch("gogstash.gog_auth.fetch_token", side_effect=gog_auth.AuthenticationFailure("Invalid authorization code"))
 def test_used_code_warns_and_keeps_dialog_open(mock_fetch, dialog, shown_boxes):
     # Regression: accept() used to run after the except blocks too, so the
     # dialog told people to start again from Step 1 and then vanished,
@@ -168,7 +168,7 @@ def _login_log(caplog):
 
 @pytest.mark.parametrize("failure", [
     requests.ConnectionError("token request to gog failed"),
-    KeyError("expires_in"),
+    gog_auth.AuthenticationFailure("Invalid authorization code"),
 ])
 def test_a_failed_login_logs_why_but_never_the_code(dialog, shown_boxes, caplog, failure):
     dialog.step2_url.setText(LIVE_SUCCESS_URL)

@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import humanize
 import pytest
 from PySide6.QtCore import QProcess, Qt, QTimer, qVersion
-from PySide6.QtGui import QColor, QIcon, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPixmap, QTextDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
@@ -1548,3 +1548,117 @@ def test_main_opens_the_log_with_who_is_running_what(monkeypatch, caplog):
     assert f"Python {platform.python_version()}" in startup
     assert f"Qt {qVersion()}" in startup
     assert "frozen=False" in startup
+
+
+# --- #31: opening offline with a login more than an hour old ---
+
+import requests  # noqa: E402  (kept with the tests that need it)
+
+EXPIRED_LOGIN = {"access_token": "old", "refresh_token": "still-good", "expiry": 0}
+
+
+def _gog_answers_with_a_fresh_token():
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"access_token": "new", "refresh_token": "still-good", "expires_in": 3600}
+    return response
+
+
+@pytest.fixture
+def offline():
+    """No network for token refreshes. _back_online() brings it back."""
+    with patch("gogstash.gog_auth.requests.get", side_effect=requests.ConnectionError("no network")) as mock_get:
+        yield mock_get
+
+
+def _back_online(mock_get):
+    mock_get.side_effect = None
+    mock_get.return_value = _gog_answers_with_a_fresh_token()
+
+
+def test_the_app_opens_offline_with_an_expired_login(offline, caplog):
+    # Regression (#31): the token refresh's ConnectionError escaped
+    # MainWindow.__init__, and GogStash quit before it had a window to quit
+    # from. On Windows, without a word to anyone.
+    gog_auth.save_token(EXPIRED_LOGIN)
+
+    with caplog.at_level("INFO", logger="gogstash.main"):
+        window = MainWindow()
+
+    assert window.status_text.text().startswith("Offline")
+    assert "yellow" in window.logged_in_indicator.styleSheet()
+    assert gog_auth._load_token() == EXPIRED_LOGIN  # offline isn't logged out, the login waits
+    assert any(r.levelname == "WARNING" for r in caplog.records if r.name == "gogstash.main")
+
+
+def test_a_revoked_login_opens_logged_out_instead_of_crashing():
+    # The other half of #31: GOG says no, which used to arrive as
+    # KeyError: 'expires_in'. Now it's just a logged out user.
+    gog_auth.save_token(EXPIRED_LOGIN)
+    refused = MagicMock(status_code=400)
+    refused.json.return_value = {"error": "invalid_grant", "error_description": "The refresh token is invalid."}
+
+    with patch("gogstash.gog_auth.requests.get", return_value=refused):
+        window = MainWindow()
+
+    assert window.status_text.text() == "Not logged in"
+    assert gog_auth._load_token() is None
+
+
+def test_the_offline_message_has_a_link_that_actually_is_one(offline):
+    # Regression: href="" inside a double-quoted Python string is three
+    # strings glued together, and Qt drew <a href=> as plain old text.
+    gog_auth.save_token(EXPIRED_LOGIN)
+    window = MainWindow()
+
+    document = QTextDocument()
+    document.setHtml(window.status_text.text())
+    fragment = next(
+        it.fragment() for it in _fragments(document) if it.fragment().text() == "Try again"
+    )
+    assert fragment.charFormat().isAnchor()
+    assert fragment.charFormat().anchorHref()  # an empty href isn't a link as far as QLabel is concerned
+
+
+def _fragments(document):
+    it = document.begin().begin()
+    while not it.atEnd():
+        yield it
+        it += 1
+
+
+def test_try_again_while_still_offline_stays_offline_and_keeps_the_login(offline):
+    gog_auth.save_token(EXPIRED_LOGIN)
+    window = MainWindow()
+    calls_before = offline.call_count
+
+    window.status_text.linkActivated.emit("retry")
+
+    assert offline.call_count == calls_before + 1  # it did ask, GOG just still isn't there
+    assert window.status_text.text().startswith("Offline")
+    assert gog_auth._load_token() == EXPIRED_LOGIN
+
+
+def test_try_again_once_back_online_logs_in(offline):
+    gog_auth.save_token(EXPIRED_LOGIN)
+    window = MainWindow()
+
+    _back_online(offline)
+    window.status_text.linkActivated.emit("retry")
+
+    assert window.status_text.text() == "Logged in"
+    assert "green" in window.logged_in_indicator.styleSheet()
+    assert gog_auth._load_token()["access_token"] == "new"
+
+
+def test_a_manual_refresh_once_back_online_clears_the_offline_state_too(offline):
+    # Refresh doesn't go through the link, but it lands in the same place:
+    # the fetch thread refreshes the token, and the library arriving runs
+    # the login check again.
+    gog_auth.save_token(EXPIRED_LOGIN)
+    window = MainWindow()
+
+    _back_online(offline)
+    gog_auth.get_valid_token()  # what the fetch thread does first
+    window._on_games_loaded(library_db.get_product_listing())  # what its succeeded signal does last
+
+    assert window.status_text.text() == "Logged in"

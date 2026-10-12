@@ -182,7 +182,7 @@ class LoginWindow():
         except requests.RequestException as e:
             log.warning(f"connection to gog api failed: {e!r}")            
             return False
-        except KeyError as e:
+        except gog_auth.AuthenticationFailure as e:
             log.warning(f"expired or invalid address: {e!r}")
             return False
         return True
