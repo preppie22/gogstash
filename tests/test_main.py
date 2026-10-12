@@ -1662,3 +1662,17 @@ def test_a_manual_refresh_once_back_online_clears_the_offline_state_too(offline)
     window._on_games_loaded(library_db.get_product_listing())  # what its succeeded signal does last
 
     assert window.status_text.text() == "Logged in"
+
+
+def test_a_mangled_token_file_opens_logged_out_instead_of_crashing():
+    # Same family as #31: something under the window's first login check
+    # raised, and the window never got built.
+    from gogstash import paths
+    token_file = paths.config_file_path(paths.ConfigFile.TOKEN)
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    token_file.write_text('{"access_tok')
+
+    window = MainWindow()
+
+    assert window.status_text.text() == "Not logged in"
+    assert "red" in window.logged_in_indicator.styleSheet()

@@ -17,6 +17,7 @@ suffix until the first stable release), not SemVer.
 
 ### Fixed
 - GogStash no longer fails to start when it can't reach GOG and your login is more than an hour old. It opens with your library, shows "Offline" with a "Try again" link in the status bar, and keeps your login for when you're back online. A login GOG no longer accepts now opens as logged out instead ([#31](https://github.com/preppie22/gogstash/issues/31))
+- A damaged saved login no longer stops GogStash from starting. It opens logged out, and logging in again replaces it
 - A sign-in that can't reach GOG no longer writes the one-time login code into the log
 - The download history no longer includes a file's temporary download link when GOG's servers refuse the file
 - A library refresh that fails because a file can't be accessed now shows that error, instead of saying you're not logged in to GOG

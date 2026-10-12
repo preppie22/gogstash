@@ -6,9 +6,12 @@ JSON in the config directory with an added ``expiry`` Unix timestamp.
 
 import json
 import requests
+import threading
 import time
+from pathlib import Path
 from enum import StrEnum
 from urllib.parse import urlsplit, parse_qs
+import logging
 
 from gogstash import paths
 from gogstash.constants import (
@@ -17,8 +20,8 @@ from gogstash.constants import (
     CLIENT_SECRET
 )
 
-import logging
 log = logging.getLogger(__name__)
+_token_lock = threading.Lock()
 
 class AuthenticationFailure(Exception):
     """Raised when the user isn't logged in, or GOG refuses the token, the
@@ -124,7 +127,9 @@ def get_valid_token() -> dict | None:
 
     A refreshed token is saved to disk before it is returned. If GOG
     refuses the refresh, the saved token is deleted, since it will never
-    work again, and the user is logged out.
+    work again, and the user is logged out. The whole check runs under a
+    lock, so threads that find the same expired token refresh it once:
+    the first one refreshes it and the rest load the new one.
 
     Returns:
         dict | None: A valid token, or None if the user is not logged in.
@@ -133,42 +138,62 @@ def get_valid_token() -> dict | None:
         requests.RequestException: If GOG can't be reached to refresh an
             expired token. The saved token is kept.
     """
-    token = _load_token()
-    if not token:
-        return None
-    if is_token_expired(token):
-        try:
-            new_token = fetch_token(type=GrantType.REFRESH, refresh_token=token["refresh_token"])
-        except AuthenticationFailure:
-            log.warning("logged out because saved login was refused")
-            clear_token()
+    with _token_lock:
+        token = _load_token()
+        if not token:
             return None
-        log.info("token expired and was refreshed")
-        save_token(new_token)
-        return new_token
+        if is_token_expired(token):
+            try:
+                new_token = fetch_token(type=GrantType.REFRESH, refresh_token=token["refresh_token"])
+            except AuthenticationFailure:
+                log.warning("logged out because saved login was refused")
+                clear_token()
+                return None
+            log.info("token expired and was refreshed")
+            save_token(new_token)
+            return new_token
     return token
 
 def save_token(token: dict) -> None:
     """Save a token to the config directory.
+
+    The token is written to a temporary file first, which then replaces
+    the saved one, so a reader never sees a half-written file. If the
+    write fails, the temporary file is removed and the saved token is
+    left as it was.
 
     Args:
         token (dict): The token to save.
     """
     save_file = paths.config_file_path(paths.ConfigFile.TOKEN)
     save_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(save_file, 'w') as f:
-        json.dump(token, f)
+
+    temp_filename = save_file.name + "~"
+    temp_file: Path = save_file.parent / temp_filename
+
+    try:
+        with open(temp_file, 'w') as f:
+            json.dump(token, f)
+    except Exception:
+        log.exception(f"failed to save token")
+        temp_file.unlink(missing_ok=True)
+        raise
+    temp_file.replace(save_file)
 
 def clear_token() -> None:
     """Delete the saved token, which logs the user out."""
     token_file = paths.config_file_path(paths.ConfigFile.TOKEN)
     token_file.unlink(missing_ok=True)
 
-def _load_token() -> dict:
+def _load_token() -> dict | None:
     """Load the saved token from disk.
 
+    A file that isn't valid JSON, or doesn't hold a JSON object, can never
+    be used to log in, so it is deleted and the user is logged out.
+
     Returns:
-        dict | None: The saved token, or None if no token file exists.
+        dict | None: The saved token, or None if there is no usable token
+        file.
     """
     save_file = paths.config_file_path(paths.ConfigFile.TOKEN)
     token_dict = None
@@ -177,7 +202,15 @@ def _load_token() -> dict:
             token_dict = json.load(f)
     except FileNotFoundError:
         return None
-    return token_dict
+    except ValueError:
+        clear_token()
+        log.warning("logged out because token on disk was malformed or invalid")
+        return None
+    if isinstance(token_dict, dict):
+        return token_dict
+    clear_token()
+    log.warning("logged out because token on disk was malformed or invalid")
+    return None
 
 if __name__ == "__main__":
     print(build_auth_uri())

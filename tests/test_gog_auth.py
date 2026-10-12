@@ -5,7 +5,7 @@ import requests
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
-from gogstash import gog_auth
+from gogstash import gog_auth, paths
 from gogstash.constants import HTTP_TIMEOUT_SHORT
 
 
@@ -293,3 +293,104 @@ def test_gog_api_still_answers_to_the_old_name():
     # One class, two addresses.
     from gogstash import gog_api
     assert gog_api.AuthenticationFailure is gog_auth.AuthenticationFailure
+
+
+# --- many threads, one token ---
+
+def test_threads_that_find_the_same_expired_token_refresh_it_once():
+    # Download workers, the library fetch and the window all check the token
+    # on their own. When it expires mid-run, two of them would cash in the
+    # same refresh token at once, and if GOG only honours it once, the loser
+    # gets "refused" and logs everybody out mid-download.
+    import threading
+    gog_auth.save_token({"access_token": "old", "refresh_token": "once-only", "expiry": 0})
+    refreshes = []
+
+    def slow_refresh(**kwargs):
+        refreshes.append(kwargs["refresh_token"])
+        time.sleep(0.2)  # long enough for every other thread to pile up behind it
+        return {"access_token": "new", "refresh_token": "next", "expires_in": 3600, "expiry": time.time() + 3600}
+
+    start = threading.Barrier(5)
+    results = []
+
+    def worker():
+        start.wait()
+        results.append(gog_auth.get_valid_token())
+
+    with patch("gogstash.gog_auth.fetch_token", side_effect=slow_refresh):
+        threads = [threading.Thread(target=worker) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+
+    assert refreshes == ["once-only"]
+    assert [r["access_token"] for r in results] == ["new"] * 5
+
+
+def test_saving_a_token_leaves_no_temp_file_behind():
+    gog_auth.save_token({"access_token": "abc", "expiry": 1})
+
+    token_file = paths.config_file_path(paths.ConfigFile.TOKEN)
+    assert sorted(p.name for p in token_file.parent.iterdir() if p.name.startswith(token_file.name)) == [token_file.name]
+    assert gog_auth._load_token() == {"access_token": "abc", "expiry": 1}
+
+
+def test_a_save_that_fails_halfway_keeps_the_old_token_intact():
+    # Writing straight into token.json emptied it first, so a full disk
+    # mid-write left neither the old login nor the new one.
+    gog_auth.save_token({"access_token": "old", "expiry": 1})
+
+    def half_a_write(data, fp):
+        fp.write('{"access_tok')
+        raise OSError(28, "No space left on device")
+
+    with patch("gogstash.gog_auth.json.dump", half_a_write):
+        with pytest.raises(OSError):
+            gog_auth.save_token({"access_token": "new", "expiry": 2})
+
+    token_file = paths.config_file_path(paths.ConfigFile.TOKEN)
+    assert gog_auth._load_token() == {"access_token": "old", "expiry": 1}
+    assert not (token_file.parent / (token_file.name + "~")).exists()
+
+
+# --- a token.json nobody can read ---
+
+@pytest.mark.parametrize("contents", [
+    '{"access_tok',          # cut off mid-write by an older version, or a crash
+    b"\xff\xfe\x00garbage",  # not even text
+    '["a", "list"]',         # valid JSON, wrong shape, would die on token["expiry"]
+])
+def test_an_unreadable_token_file_logs_you_out_and_gets_out_of_the_way(contents, caplog):
+    token_file = paths.config_file_path(paths.ConfigFile.TOKEN)
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(contents, bytes):
+        token_file.write_bytes(contents)
+    else:
+        token_file.write_text(contents)
+
+    with caplog.at_level("INFO", logger="gogstash.gog_auth"):
+        assert gog_auth.get_valid_token() is None
+
+    assert not token_file.exists()  # binned, not re-read and re-warned about on every check
+    [record] = caplog.records
+    assert record.levelname == "WARNING"
+    assert "access_tok" not in record.getMessage() and "list" not in record.getMessage()  # contents stay out of the log
+
+
+@patch("gogstash.gog_auth.requests.get")
+def test_gog_answering_with_an_html_page_keeps_the_login(mock_get):
+    # During an outage GOG can answer with an error page instead of JSON.
+    # requests' JSONDecodeError is a ValueError too, so catching ValueError
+    # around the refresh would have deleted a perfectly good login over it.
+    saved = {"access_token": "old", "refresh_token": "fine", "expiry": 0}
+    gog_auth.save_token(saved)
+    outage = make_response(None, status_code=503)
+    outage.json.side_effect = requests.exceptions.JSONDecodeError("Expecting value", "<html>Service Unavailable</html>", 0)
+    mock_get.return_value = outage
+
+    with pytest.raises(requests.RequestException):
+        gog_auth.get_valid_token()
+
+    assert gog_auth._load_token() == saved
