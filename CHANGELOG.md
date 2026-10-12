@@ -8,6 +8,8 @@ suffix until the first stable release), not SemVer.
 
 ## [Unreleased]
 
+## [2026.10.12.1-beta] - 2026-10-12
+
 ### Fixed
 - Games that list an empty extra on GOG no longer finish as "Downloads completed with failures" with an HTTP 403 error. GogStash now skips that extra
 
